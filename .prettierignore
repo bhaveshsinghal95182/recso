@@ -1,0 +1,6 @@
+node_modules
+dist-react
+build
+out
+coverage
+pnpm-lock.yaml
