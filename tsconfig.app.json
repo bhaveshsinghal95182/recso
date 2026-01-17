@@ -29,5 +29,6 @@
       "@/*": ["./src/ui/*"]
     }
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/electron"]
 }
