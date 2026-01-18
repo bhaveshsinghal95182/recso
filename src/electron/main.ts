@@ -2,9 +2,8 @@ import { app, BrowserWindow } from 'electron';
 
 import path from 'path';
 
+import { pollResources } from './resource-manager.js';
 import { isDevelopment } from './util.js';
-
-type test = string;
 
 app.on('ready', () => {
   const mainWindow = new BrowserWindow({});
@@ -15,5 +14,5 @@ app.on('ready', () => {
     mainWindow.loadFile(path.join(app.getAppPath(), 'dist-react/index.html'));
   }
 
-  mainWindow.loadFile(path.join(app.getAppPath(), 'dist-react/index.html'));
+  pollResources();
 });
