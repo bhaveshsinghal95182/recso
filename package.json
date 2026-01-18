@@ -1,9 +1,12 @@
 {
+  "author": {
+    "name": "Bhavesh Singhal"
+  },
   "name": "recso",
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "main": "dist-electron/main",
+  "main": "dist-electron/main.js",
   "scripts": {
     "dev:react": "vite",
     "dev:electron": "electron .",
@@ -13,7 +16,10 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier . --write",
-    "transpile:electron": "tsc -p src/electron/tsconfig.json"
+    "transpile:electron": "tsc -p src/electron/tsconfig.json",
+    "dist:mac": "pnpm run transpile:electron && pnpm run build && electron-builder --mac --arm64",
+    "dist:win": "pnpm run transpile:electron && pnpm run build && electron-builder --win --x64",
+    "dist:linux": "pnpm run transpile:electron && pnpm run build && electron-builder --linux --x64"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.4",
@@ -37,6 +43,7 @@
     "@typescript-eslint/parser": "^8.53.0",
     "@vitejs/plugin-react": "^5.1.1",
     "electron": "^40.0.0",
+    "electron-builder": "^26.4.0",
     "eslint": "^9.39.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-import": "^2.32.0",

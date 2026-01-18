@@ -1,0 +1,15 @@
+{
+  "appId": "com.recso.app",
+  "files": ["dist-electron/**/**", "dist-react/**/**", "package.json"],
+  "icon": "./public/R.png",
+  "mac": {
+    "target": "dmg"
+  },
+  "linux": {
+    "target": ["AppImage", "deb"],
+    "category": "Utility"
+  },
+  "win": {
+    "target": ["portable", "msi"]
+  }
+}
