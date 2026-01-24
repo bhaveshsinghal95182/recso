@@ -1,6 +1,7 @@
 {
   "appId": "com.recso.app",
   "files": ["dist-electron/**/**", "dist-react/**/**", "package.json"],
+  "extraResources": ["dist-electron/preload.cjs"],
   "icon": "./public/R.png",
   "mac": {
     "target": "dmg"

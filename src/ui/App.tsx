@@ -7,6 +7,9 @@ import viteLogo from '/vite.svg';
 function App() {
   const [count, setCount] = useState(0);
 
+  //@ts-ignore @es-lint-ignore-next-line
+  window.electron.getStaticData();
+
   return (
     <>
       <div>
