@@ -70,6 +70,16 @@ electron.contextBridge.exposeInMainWorld('electron', {
 
     deleteOrphan: (id: string): Promise<boolean> =>
       electron.ipcRenderer.invoke('recorder:delete-orphan', id),
+
+    // Settings methods
+    showSaveDialog: (defaultName: string): Promise<string | null> =>
+      electron.ipcRenderer.invoke('recorder:show-save-dialog', defaultName),
+
+    getDefaultOutputDir: (): Promise<string> =>
+      electron.ipcRenderer.invoke('recorder:get-default-output-dir'),
+
+    validateOutputPath: (outputPath: string): Promise<{ valid: boolean; error?: string }> =>
+      electron.ipcRenderer.invoke('recorder:validate-output-path', outputPath),
   },
 });
 

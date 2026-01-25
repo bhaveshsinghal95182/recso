@@ -1,8 +1,15 @@
 /**
- * IPC handlers for recording functionality
+ * RecorderIPC — quick overview:
+ * - Handles all recording-related IPC: sources, start/stop/pause/resume, chunk appending.
+ * - Provides settings dialogs: save dialog, default output dir, path validation.
+ * - Manages recovery: get orphans, recover, delete.
+ * - Pushes real-time state updates to renderer.
  */
 
-import { type BrowserWindow, ipcMain } from 'electron';
+import { app, type BrowserWindow, dialog, ipcMain } from 'electron';
+
+import fs from 'fs';
+import path from 'path';
 
 import * as RecorderService from '../services/recorder.service.js';
 import * as RecoveryService from '../services/recovery.service.js';
@@ -83,6 +90,50 @@ export function registerRecorderHandlers(): void {
   ipcMain.handle('recorder:delete-orphan', async (_event, id: string) => {
     return RecoveryService.deleteOrphanedRecording(id);
   });
+
+  // Settings handlers
+  ipcMain.handle('recorder:show-save-dialog', async (_event, defaultName: string) => {
+    const result = await dialog.showSaveDialog({
+      title: 'Save Recording',
+      defaultPath: path.join(app.getPath('videos'), defaultName),
+      filters: [{ name: 'WebM Video', extensions: ['webm'] }],
+    });
+
+    if (result.canceled || !result.filePath) {
+      return null;
+    }
+
+    return result.filePath;
+  });
+
+  ipcMain.handle('recorder:get-default-output-dir', async () => {
+    return app.getPath('videos');
+  });
+
+  ipcMain.handle(
+    'recorder:validate-output-path',
+    async (_event, outputPath: string): Promise<{ valid: boolean; error?: string }> => {
+      try {
+        // Check if path exists
+        if (!fs.existsSync(outputPath)) {
+          // Try to create it
+          fs.mkdirSync(outputPath, { recursive: true });
+        }
+
+        // Check write permissions by attempting to write a temp file
+        const testFile = path.join(outputPath, `.recso_write_test_${Date.now()}`);
+        fs.writeFileSync(testFile, '');
+        fs.unlinkSync(testFile);
+
+        return { valid: true };
+      } catch (error) {
+        return {
+          valid: false,
+          error: error instanceof Error ? error.message : 'Cannot write to directory',
+        };
+      }
+    },
+  );
 
   console.log('[RecorderIPC] Handlers registered');
 }

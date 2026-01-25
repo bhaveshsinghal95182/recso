@@ -115,6 +115,15 @@ interface ElectronAPI {
 
     /** Delete an orphaned recording */
     deleteOrphan: (id: string) => Promise<boolean>;
+
+    /** Open native save dialog for recording */
+    showSaveDialog: (defaultName: string) => Promise<string | null>;
+
+    /** Get default output directory (Videos folder) */
+    getDefaultOutputDir: () => Promise<string>;
+
+    /** Validate if output path is writable */
+    validateOutputPath: (outputPath: string) => Promise<{ valid: boolean; error?: string }>;
   };
 }
 
