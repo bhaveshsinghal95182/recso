@@ -1,7 +1,16 @@
+/**
+ * StatsService — quick overview:
+ * - Provides real-time system statistics (CPU, RAM, storage usage).
+ * - Used for the dashboard/monitoring UI.
+ *
+ * Key exports:
+ *   getStatistics()  → Returns { cpu, ram, storage } percentages (async for CPU)
+ *   getStaticData()  → Returns { totalStorage, cpuModel, totalRAM } (one-time info)
+ */
+
 import fs from 'fs';
 import os from 'os';
 import osUtils from 'os-utils';
-
 export interface Statistics {
   cpu: number;
   ram: number;

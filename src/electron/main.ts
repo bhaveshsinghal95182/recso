@@ -3,11 +3,15 @@ import { app, BrowserWindow } from 'electron';
 import path from 'path';
 
 import { initializeWithWindow, registerAllIpcHandlers } from './ipc/index.js';
+import { initializeDatabase } from './services/database.service.js';
 import { createTray } from './services/tray.service.js';
 import { getPreloadPath } from './path-resolver.js';
 import { isDevelopment } from './util.js';
 
 app.on('ready', () => {
+  // Initialize database first (for crash-safe recording metadata)
+  initializeDatabase();
+
   // Register all IPC handlers before creating window
   registerAllIpcHandlers();
 

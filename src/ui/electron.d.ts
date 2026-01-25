@@ -15,6 +15,56 @@ interface StaticData {
   totalRAM: number;
 }
 
+// Recording types
+interface DesktopSource {
+  id: string;
+  name: string;
+  thumbnailDataUrl: string;
+  isScreen: boolean;
+}
+
+interface RecordingConfig {
+  sourceId: string;
+  outputDir: string;
+  fileName: string;
+  options?: {
+    frameRate?: number;
+    videoBitrate?: number;
+    audioBitrate?: number;
+  };
+}
+
+interface RecordingStateEvent {
+  state: 'IDLE' | 'RECORDING' | 'PAUSED';
+  recordingId: string | null;
+  duration: number;
+  bytesWritten: number;
+}
+
+interface StartRecordingResult {
+  success: boolean;
+  recordingId?: string;
+  tempPath?: string;
+  error?: string;
+}
+
+interface StopRecordingResult {
+  success: boolean;
+  filePath?: string;
+  error?: string;
+}
+
+interface OrphanedRecording {
+  id: string;
+  tempPath: string;
+  fileName: string;
+  startedAt: number;
+  fileExists: boolean;
+  fileSize: number;
+  /** Warning message if file couldn't be accessed (locked, corrupted, etc.) */
+  warning: string | null;
+}
+
 interface ElectronAPI {
   window: {
     close: () => void;
@@ -27,6 +77,44 @@ interface ElectronAPI {
     /** Subscribe to live statistics. Returns an unsubscribe function. */
     subscribe: (callback: (stats: Statistics) => void) => () => void;
     getStatic: () => Promise<StaticData>;
+  };
+
+  recorder: {
+    /** Get available screens and windows for recording */
+    getSources: () => Promise<DesktopSource[]>;
+
+    /** Start a new recording session */
+    start: (config: RecordingConfig) => Promise<StartRecordingResult>;
+
+    /** Append a video chunk to the active recording */
+    appendChunk: (recordingId: string, chunk: ArrayBuffer) => Promise<boolean>;
+
+    /** Stop the recording and save the file */
+    stop: (recordingId: string) => Promise<StopRecordingResult>;
+
+    /** Pause the active recording */
+    pause: (recordingId: string) => void;
+
+    /** Resume a paused recording */
+    resume: (recordingId: string) => void;
+
+    /** Get current recording state */
+    getState: () => Promise<RecordingStateEvent>;
+
+    /** Subscribe to recording state changes */
+    onStateChange: (callback: (state: RecordingStateEvent) => void) => () => void;
+
+    /** Get list of orphaned recordings from crashes */
+    getOrphans: () => Promise<OrphanedRecording[]>;
+
+    /** Recover an orphaned recording */
+    recoverOrphan: (
+      id: string,
+      outputPath: string,
+    ) => Promise<{ success: boolean; error?: string }>;
+
+    /** Delete an orphaned recording */
+    deleteOrphan: (id: string) => Promise<boolean>;
   };
 }
 

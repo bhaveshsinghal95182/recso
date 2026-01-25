@@ -1,3 +1,14 @@
+/**
+ * TrayService — quick overview:
+ * - Creates and manages the system tray icon with context menu.
+ * - Handles show/hide app from tray, click interactions, and clean icon loading.
+ *
+ * Key exports:
+ *   createTray(mainWindow)    → Initialize tray with icon and context menu
+ *   hideToTray(mainWindow)    → Hide window to tray
+ *   getTray()                 → Get current Tray instance
+ */
+
 import { app, type BrowserWindow, Menu, nativeImage, Tray } from 'electron';
 
 import path from 'path';
