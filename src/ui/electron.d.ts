@@ -1,68 +1,19 @@
-/**
- * Type declarations for Electron IPC bridge
- * These types mirror what's exposed in preload.cts
- */
+import type {
+  DesktopSource,
+  OrphanedRecording,
+  RecordingConfig,
+  StartRecordingResult,
+  StaticData,
+  Statistics,
+  StopRecordingResult,
+} from './types';
 
-interface Statistics {
-  cpu: number;
-  ram: number;
-  storage: number;
-}
-
-interface StaticData {
-  totalStorage: number;
-  cpuModel: string;
-  totalRAM: number;
-}
-
-// Recording types
-interface DesktopSource {
-  id: string;
-  name: string;
-  thumbnailDataUrl: string;
-  isScreen: boolean;
-}
-
-interface RecordingConfig {
-  sourceId: string;
-  outputDir: string;
-  fileName: string;
-  options?: {
-    frameRate?: number;
-    videoBitrate?: number;
-    audioBitrate?: number;
-  };
-}
-
-interface RecordingStateEvent {
+// State event specific to IPC (contains uppercase State status)
+export interface RecordingStateEvent {
   state: 'IDLE' | 'RECORDING' | 'PAUSED';
   recordingId: string | null;
   duration: number;
   bytesWritten: number;
-}
-
-interface StartRecordingResult {
-  success: boolean;
-  recordingId?: string;
-  tempPath?: string;
-  error?: string;
-}
-
-interface StopRecordingResult {
-  success: boolean;
-  filePath?: string;
-  error?: string;
-}
-
-interface OrphanedRecording {
-  id: string;
-  tempPath: string;
-  fileName: string;
-  startedAt: number;
-  fileExists: boolean;
-  fileSize: number;
-  /** Warning message if file couldn't be accessed (locked, corrupted, etc.) */
-  warning: string | null;
 }
 
 interface ElectronAPI {
@@ -118,6 +69,9 @@ interface ElectronAPI {
 
     /** Open native save dialog for recording */
     showSaveDialog: (defaultName: string) => Promise<string | null>;
+
+    /** Open native directory picker */
+    showOpenDialog: () => Promise<string | null>;
 
     /** Get default output directory (Videos folder) */
     getDefaultOutputDir: () => Promise<string>;

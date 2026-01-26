@@ -106,6 +106,19 @@ export function registerRecorderHandlers(): void {
     return result.filePath;
   });
 
+  ipcMain.handle('recorder:show-open-dialog', async () => {
+    const result = await dialog.showOpenDialog(mainWindowRef!, {
+      title: 'Select Output Folder',
+      properties: ['openDirectory', 'createDirectory'],
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return null;
+    }
+
+    return result.filePaths[0];
+  });
+
   ipcMain.handle('recorder:get-default-output-dir', async () => {
     return app.getPath('videos');
   });

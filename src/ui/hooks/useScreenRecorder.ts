@@ -10,28 +10,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-interface RecorderState {
-  status: 'idle' | 'recording' | 'paused';
-  recordingId: string | null;
-  duration: number;
-  bytesWritten: number;
-}
-
-interface DesktopSource {
-  id: string;
-  name: string;
-  thumbnailDataUrl: string;
-  isScreen: boolean;
-}
-
-interface UseScreenRecorderOptions {
-  /** Chunk interval in ms (default: 1000) */
-  timeslice?: number;
-  /** Video frame rate (default: 30) */
-  frameRate?: number;
-  /** Include system audio */
-  audio?: boolean;
-}
+import type { DesktopSource, RecorderState, UseScreenRecorderOptions } from '@/types';
 
 export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
   const { timeslice = 1000, frameRate = 30, audio = false } = options;
@@ -85,7 +64,12 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
 
   // Start recording
   const startRecording = useCallback(
-    async (sourceId: string, outputDir: string, fileName: string) => {
+    async (
+      sourceId: string,
+      outputDir: string,
+      fileName: string,
+      recordingOptions?: { videoBitrate?: number },
+    ) => {
       try {
         setError(null);
 
@@ -116,6 +100,7 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
           sourceId,
           outputDir,
           fileName,
+          options: recordingOptions, // Pass options to backend for metadata
         });
 
         if (!result.success || !result.recordingId) {
@@ -127,7 +112,7 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
         // Create MediaRecorder
         const mediaRecorder = new MediaRecorder(stream, {
           mimeType: 'video/webm;codecs=vp9',
-          videoBitsPerSecond: 2500000, // 2.5 Mbps
+          videoBitsPerSecond: recordingOptions?.videoBitrate || 5000000, // Default 5 Mbps
         });
 
         mediaRecorderRef.current = mediaRecorder;
