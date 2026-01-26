@@ -75,6 +75,9 @@ electron.contextBridge.exposeInMainWorld('electron', {
     showSaveDialog: (defaultName: string): Promise<string | null> =>
       electron.ipcRenderer.invoke('recorder:show-save-dialog', defaultName),
 
+    showOpenDialog: (): Promise<string | null> =>
+      electron.ipcRenderer.invoke('recorder:show-open-dialog'),
+
     getDefaultOutputDir: (): Promise<string> =>
       electron.ipcRenderer.invoke('recorder:get-default-output-dir'),
 

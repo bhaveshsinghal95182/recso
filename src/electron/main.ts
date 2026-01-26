@@ -16,9 +16,14 @@ app.on('ready', () => {
   registerAllIpcHandlers();
 
   const mainWindow = new BrowserWindow({
+    width: 800,
+    height: 800,
+    minWidth: 400,
+    minHeight: 400,
     webPreferences: { preload: getPreloadPath() },
     frame: false,
     transparent: true,
+    resizable: true,
   });
 
   if (isDevelopment()) {
