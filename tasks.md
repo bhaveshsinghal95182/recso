@@ -272,6 +272,7 @@
 
 - [x] **12.1 Pre-Recording UI**
   - [x] Source selection with thumbnails
+  - [x] Add "Refresh Sources" button
   - [x] Settings panel (name, path, quality, background)
 
 - [x] **12.2 Recording Controls**

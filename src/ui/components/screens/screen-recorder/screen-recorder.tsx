@@ -145,6 +145,7 @@ export function ScreenRecorderBody() {
                   selectedSourceId={selectedSourceId}
                   onSelect={handleSourceSelect}
                   isLoading={sources.length === 0}
+                  onRefresh={refreshSources}
                 />
               </div>
             </div>
