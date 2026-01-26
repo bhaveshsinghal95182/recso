@@ -22,6 +22,8 @@ interface ElectronAPI {
     minimize: () => void;
     maximize: () => void;
     hideToTray: () => void;
+    isMaximized: () => Promise<boolean>;
+    onMaximizeChange: (callback: (isMaximized: boolean) => void) => () => void;
   };
 
   stats: {

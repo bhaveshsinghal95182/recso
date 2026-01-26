@@ -27,6 +27,21 @@ export function registerWindowHandlers() {
       hideToTray(mainWindowRef);
     }
   });
+
+  ipcMain.handle('is-window-maximized', () => {
+    const win = BrowserWindow.getFocusedWindow();
+    return win?.isMaximized() ?? false;
+  });
+}
+
+export function registerWindowEvents(win: BrowserWindow) {
+  win.on('maximize', () => {
+    win.webContents.send('window-maximized', true);
+  });
+
+  win.on('unmaximize', () => {
+    win.webContents.send('window-maximized', false);
+  });
 }
 
 export function setMainWindowRef(win: BrowserWindow) {

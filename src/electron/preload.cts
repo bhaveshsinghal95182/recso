@@ -26,6 +26,9 @@ electron.contextBridge.exposeInMainWorld('electron', {
     minimize: () => electron.ipcRenderer.send('minimize-window'),
     maximize: () => electron.ipcRenderer.send('maximize-window'),
     hideToTray: () => electron.ipcRenderer.send('hide-to-tray'),
+    isMaximized: (): Promise<boolean> => electron.ipcRenderer.invoke('is-window-maximized'),
+    onMaximizeChange: (callback: (isMaximized: boolean) => void) =>
+      createSubscription('window-maximized', callback),
   },
 
   // Statistics

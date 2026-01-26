@@ -2,6 +2,7 @@ import { AppWindow, Monitor, RefreshCw } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import type { DesktopSource } from '@/types';
 
@@ -27,10 +28,18 @@ export function SourceSelector({
   return (
     <div className="flex flex-col h-full">
       <div className="flex justify-end p-2 border-b bg-muted/20">
-        <Button variant="ghost" size="sm" onClick={onRefresh} className="gap-2">
-          <RefreshCw size={14} />
-          Refresh Sources
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="ghost" size="sm" onClick={onRefresh} className="gap-2">
+              <RefreshCw size={14} />
+              Refresh Sources
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            If you don't see any screens or windows, just bring Recso to that specific virtual
+            screen where there is the source to record and refresh sources.
+          </TooltipContent>
+        </Tooltip>
       </div>
 
       {sources.length === 0 ? (

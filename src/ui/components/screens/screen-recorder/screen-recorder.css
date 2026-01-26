@@ -1,47 +1,13 @@
-body {
-  overflow: hidden;
-}
 .naavbar {
   -webkit-app-region: drag;
-  cursor: grab;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 12px;
 }
 
 .nav-buttons {
   -webkit-app-region: no-drag;
-  display: flex;
-  gap: 8px;
 }
 
 .close-btn,
-.tray-btn {
+.tray-btn,
+.max-btn {
   -webkit-app-region: no-drag;
-  background: transparent;
-  border: none;
-  color: white;
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background-color 0.2s;
-}
-
-.close-btn:hover {
-  background-color: rgba(239, 68, 68, 0.8);
-}
-
-.tray-btn:hover {
-  background-color: rgba(59, 130, 246, 0.8);
-}
-
-@layer base {
-  html,
-  body {
-    background: transparent !important;
-  }
 }

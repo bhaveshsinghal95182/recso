@@ -78,7 +78,7 @@ export function ScreenRecorderBody() {
 
   return (
     <div className="flex flex-col h-full bg-background animate-in fade-in duration-300">
-      <div className="flex-1 flex flex-col p-6 gap-6 overflow-hidden">
+      <div className="flex-1 flex flex-col p-6 gap-6 overflow-y-auto">
         {/* Top Header Area */}
         <div className="flex items-center justify-between min-h-[40px]">
           {view === 'ready' && !isRecording && !isPaused && (
