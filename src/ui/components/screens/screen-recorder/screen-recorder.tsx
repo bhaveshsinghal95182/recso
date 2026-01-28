@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { useScreenRecorder } from '@/hooks/useScreenRecorder';
 
+import Header from './header';
 import { RecordingControls } from './recording-controls';
 import { SettingsPanel } from './settings-panel';
 import { SourceSelector } from './source-selector';
@@ -97,22 +98,12 @@ export function ScreenRecorderBody() {
         </div>
 
         {/* Header Text */}
-        <div className="text-center space-y-2 mb-4">
-          <h2 className="text-3xl font-bold tracking-tight text-foreground/90">
-            {isRecording
-              ? 'Recording in Progress'
-              : view === 'ready'
-                ? 'Ready to Record'
-                : 'New Recording'}
-          </h2>
-          {!isRecording && !isPaused && (
-            <p className="text-muted-foreground text-lg">
-              {view === 'ready'
-                ? `Selected: ${selectedSource?.name || 'Unknown Source'}`
-                : 'Select a screen or window to start'}
-            </p>
-          )}
-        </div>
+        <Header
+          isRecording={isRecording}
+          view={view}
+          selectedSource={selectedSource}
+          isPaused={isPaused}
+        />
 
         {/* Error Banner */}
         {error && (

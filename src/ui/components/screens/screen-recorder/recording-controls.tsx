@@ -36,7 +36,7 @@ export function RecordingControls({
           {isStarting ? (
             <Loader2 className="h-6 w-6 animate-spin text-white" />
           ) : (
-            <div className="h-6 w-6 rounded-sm bg-white" /> // Standard record icon styling
+            <div className="h-4 w-6 rounded-full bg-white" /> // Standard record icon styling
           )}
         </Button>
         <div className="text-sm font-medium text-muted-foreground">
