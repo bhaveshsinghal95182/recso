@@ -1,5 +1,6 @@
 import { type BrowserWindow } from 'electron';
 
+import { registerCompositorHandlers } from './compositor.ipc.js';
 import { registerRecorderHandlers, setRecorderMainWindow } from './recorder.ipc.js';
 import { registerStatisticsHandlers, startStatisticsPolling } from './statistics.ipc.js';
 import { registerWindowEvents, registerWindowHandlers, setMainWindowRef } from './window.ipc.js';
@@ -8,6 +9,7 @@ export function registerAllIpcHandlers() {
   registerWindowHandlers();
   registerStatisticsHandlers();
   registerRecorderHandlers();
+  registerCompositorHandlers();
 }
 
 export function initializeWithWindow(mainWindow: BrowserWindow) {

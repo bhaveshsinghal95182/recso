@@ -81,6 +81,67 @@ interface ElectronAPI {
     /** Validate if output path is writable */
     validateOutputPath: (outputPath: string) => Promise<{ valid: boolean; error?: string }>;
   };
+
+  compositor: {
+    /** Get full compositor configuration */
+    getConfig: () => Promise<{
+      backgroundPath: string | null;
+      backgroundColor: string;
+      canvasSize: { width: number; height: number };
+      layout: { padding: number; maxScale: number; scaleUp: boolean };
+    }>;
+
+    /** Update compositor configuration (partial) */
+    updateConfig: (updates: Record<string, unknown>) => Promise<{
+      backgroundPath: string | null;
+      backgroundColor: string;
+      canvasSize: { width: number; height: number };
+      layout: { padding: number; maxScale: number; scaleUp: boolean };
+    }>;
+
+    /** Set background image path */
+    setBackground: (imagePath: string | null) => Promise<boolean>;
+
+    /** Get current background image path */
+    getBackground: () => Promise<string | null>;
+
+    /** Set background color (used when no image) */
+    setBackgroundColor: (color: string) => Promise<boolean>;
+
+    /** Get background color */
+    getBackgroundColor: () => Promise<string>;
+
+    /** Set target canvas size */
+    setCanvasSize: (size: { width: number; height: number }) => Promise<boolean>;
+
+    /** Get target canvas size */
+    getCanvasSize: () => Promise<{ width: number; height: number }>;
+
+    /** Set layout configuration */
+    setLayoutConfig: (
+      config: Partial<{ padding: number; maxScale: number; scaleUp: boolean }>,
+    ) => Promise<boolean>;
+
+    /** Get layout configuration */
+    getLayoutConfig: () => Promise<{ padding: number; maxScale: number; scaleUp: boolean }>;
+
+    /** Calculate layout for video on canvas */
+    calculateLayout: (
+      videoBounds: { x?: number; y?: number; width: number; height: number },
+      canvasSize?: { width: number; height: number },
+    ) => Promise<{ x: number; y: number; width: number; height: number; scale: number }>;
+
+    /** Reset configuration to defaults */
+    resetConfig: () => Promise<{
+      backgroundPath: string | null;
+      backgroundColor: string;
+      canvasSize: { width: number; height: number };
+      layout: { padding: number; maxScale: number; scaleUp: boolean };
+    }>;
+
+    /** Open file picker for background image */
+    showBackgroundPicker: () => Promise<string | null>;
+  };
 }
 
 declare global {

@@ -87,6 +87,49 @@ electron.contextBridge.exposeInMainWorld('electron', {
     validateOutputPath: (outputPath: string): Promise<{ valid: boolean; error?: string }> =>
       electron.ipcRenderer.invoke('recorder:validate-output-path', outputPath),
   },
+
+  // Compositor
+  compositor: {
+    getConfig: () => electron.ipcRenderer.invoke('compositor:get-config'),
+
+    updateConfig: (updates: Record<string, unknown>) =>
+      electron.ipcRenderer.invoke('compositor:update-config', updates),
+
+    setBackground: (imagePath: string | null): Promise<boolean> =>
+      electron.ipcRenderer.invoke('compositor:set-background', imagePath),
+
+    getBackground: (): Promise<string | null> =>
+      electron.ipcRenderer.invoke('compositor:get-background'),
+
+    setBackgroundColor: (color: string): Promise<boolean> =>
+      electron.ipcRenderer.invoke('compositor:set-background-color', color),
+
+    getBackgroundColor: (): Promise<string> =>
+      electron.ipcRenderer.invoke('compositor:get-background-color'),
+
+    setCanvasSize: (size: { width: number; height: number }): Promise<boolean> =>
+      electron.ipcRenderer.invoke('compositor:set-canvas-size', size),
+
+    getCanvasSize: (): Promise<{ width: number; height: number }> =>
+      electron.ipcRenderer.invoke('compositor:get-canvas-size'),
+
+    setLayoutConfig: (config: Record<string, unknown>): Promise<boolean> =>
+      electron.ipcRenderer.invoke('compositor:set-layout-config', config),
+
+    getLayoutConfig: (): Promise<{ padding: number; maxScale: number; scaleUp: boolean }> =>
+      electron.ipcRenderer.invoke('compositor:get-layout-config'),
+
+    calculateLayout: (
+      videoBounds: { x?: number; y?: number; width: number; height: number },
+      canvasSize?: { width: number; height: number },
+    ): Promise<{ x: number; y: number; width: number; height: number; scale: number }> =>
+      electron.ipcRenderer.invoke('compositor:calculate-layout', videoBounds, canvasSize),
+
+    resetConfig: () => electron.ipcRenderer.invoke('compositor:reset-config'),
+
+    showBackgroundPicker: (): Promise<string | null> =>
+      electron.ipcRenderer.invoke('compositor:show-background-picker'),
+  },
 });
 
 // Helper to create a subscription that returns an unsubscribe function
