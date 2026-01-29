@@ -52,6 +52,26 @@ export function initializeDatabase(): void {
     )
   `);
 
+  // Create mouse_events table for mouse path tracking
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS mouse_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      recording_id TEXT NOT NULL,
+      timestamp_ms INTEGER NOT NULL,
+      x INTEGER NOT NULL,
+      y INTEGER NOT NULL,
+      event_type TEXT NOT NULL,
+      button TEXT,
+      meta TEXT,
+      FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
+    )
+  `);
+
+  // Create index for efficient querying by recording and time
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_mouse_recording ON mouse_events(recording_id, timestamp_ms)
+  `);
+
   console.log('[DatabaseService] Initialized at:', dbPath);
 }
 

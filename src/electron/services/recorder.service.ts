@@ -25,6 +25,7 @@ import {
   getRecording,
   updateRecordingStatus,
 } from './database.service.js';
+import { mouseTrackerService } from './mouse-tracker.service.js';
 
 /** Active recording session state */
 interface ActiveRecording {
@@ -107,6 +108,9 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
 
     console.log('[RecorderService] Started recording:', recordingId);
 
+    // Start mouse tracking for this recording
+    mouseTrackerService.startTracking(recordingId);
+
     return {
       success: true,
       recordingId,
@@ -153,6 +157,10 @@ export async function stopRecording(recordingId: string): Promise<StopRecordingR
   if (!activeRecording || activeRecording.id !== recordingId) {
     return { success: false, error: 'No active recording with this ID' };
   }
+
+  // Stop mouse tracking and get event count
+  const mouseEventCount = mouseTrackerService.stopTracking();
+  console.log('[RecorderService] Mouse events recorded:', mouseEventCount);
 
   try {
     // Close the write stream
