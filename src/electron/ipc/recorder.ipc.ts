@@ -7,6 +7,7 @@ import { app, type BrowserWindow, dialog, ipcMain } from 'electron';
 import fs from 'fs';
 import path from 'path';
 
+import { mouseTrackerService } from '../services/mouse-tracker.service.js';
 import * as RecorderService from '../services/recorder.service.js';
 import * as RecoveryService from '../services/recovery.service.js';
 import type { RecordingConfig } from '../types/recorder.types.js';
@@ -34,7 +35,11 @@ export function registerRecorderHandlers(): void {
   ipcMain.handle('recorder:start', async (_event, config: RecordingConfig) => {
     const result = RecorderService.startRecording(config);
 
-    if (result.success) {
+    if (result.success && result.recordingId) {
+      // Start mouse tracking for this recording
+      mouseTrackerService.startTracking(result.recordingId);
+      console.log('[RecorderIPC] Mouse tracking started for recording:', result.recordingId);
+
       // Start pushing state updates
       startStatePolling();
     }
@@ -54,6 +59,11 @@ export function registerRecorderHandlers(): void {
   // Stop recording
   ipcMain.handle('recorder:stop', async (_event, recordingId: string) => {
     stopStatePolling();
+
+    // Stop mouse tracking
+    const clickCount = mouseTrackerService.stopTracking();
+    console.log('[RecorderIPC] Mouse tracking stopped. Total clicks:', clickCount);
+
     return RecorderService.stopRecording(recordingId);
   });
 

@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { formats } from '@/constants';
 import { useScreenRecorder } from '@/hooks/useScreenRecorder';
 
 import Header from './header';
@@ -32,6 +33,7 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
   const [outputDir, setOutputDir] = useState('');
   const [fileName, setFileName] = useState('');
   const [videoBitrate, setVideoBitrate] = useState(5000000);
+  const [format, setFormat] = useState<string>(formats[0].value);
   const [isStarting, setIsStarting] = useState(false);
 
   // 'selection' = source grid, 'ready' = settings & record button
@@ -62,7 +64,13 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
     if (!selectedSourceId || !outputDir || !fileName) return;
 
     setIsStarting(true);
-    const result = await startRecording(selectedSourceId, outputDir, fileName);
+    const result = await startRecording(
+      selectedSourceId,
+      outputDir,
+      fileName,
+      videoBitrate,
+      format,
+    );
     setIsStarting(false);
 
     if (!result.success) {
@@ -203,9 +211,11 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
                     outputDir={outputDir}
                     fileName={fileName}
                     videoBitrate={videoBitrate}
+                    format={format}
                     onOutputDirChange={setOutputDir}
                     onFileNameChange={setFileName}
                     onVideoBitrateChange={setVideoBitrate}
+                    onFormatChange={setFormat}
                   />
                 </Card>
 

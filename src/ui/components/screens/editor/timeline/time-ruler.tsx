@@ -22,6 +22,8 @@ export function TimeRuler({ duration, onSeek }: TimeRulerProps) {
 
   // Generate time marks based on duration
   const marks = useMemo(() => {
+    if (!Number.isFinite(duration) || duration < 0) return [];
+
     const durationSec = Math.ceil(duration / 1000);
     const interval = durationSec <= 60 ? 5 : durationSec <= 300 ? 15 : 30;
     const result: number[] = [];

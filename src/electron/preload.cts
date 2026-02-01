@@ -156,6 +156,10 @@ electron.contextBridge.exposeInMainWorld('electron', {
     updateZoomConfig: (config: Record<string, unknown>) =>
       electron.ipcRenderer.invoke('editor:update-zoom-config', config),
 
+    /** Update project duration */
+    updateProjectDuration: (durationMs: number) =>
+      electron.ipcRenderer.invoke('editor:update-project-duration', durationMs),
+
     projectExists: (recordingDir: string): Promise<boolean> =>
       electron.ipcRenderer.invoke('editor:project-exists', recordingDir),
 

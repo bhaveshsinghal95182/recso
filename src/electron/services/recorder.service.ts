@@ -25,6 +25,7 @@ import {
   getRecording,
   updateRecordingStatus,
 } from './database.service.js';
+import { initProjectFolder } from './project-storage.service.js';
 
 /** Active recording session state */
 interface ActiveRecording {
@@ -32,6 +33,7 @@ interface ActiveRecording {
   tempPath: string;
   outputDir: string;
   fileName: string;
+  fileExtension: 'mp4' | 'webm';
   writeStream: fs.WriteStream;
   state: RecordingState;
   startedAt: number;
@@ -69,8 +71,9 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
 
   try {
     const recordingId = randomUUID();
+    const fileExt = config.fileExtension || 'webm';
     const tempDir = path.join(app.getPath('temp'), 'recso');
-    const tempPath = path.join(tempDir, `rec_${recordingId}.webm`);
+    const tempPath = path.join(tempDir, `rec_${recordingId}.${fileExt}`);
 
     // Ensure temp directory exists
     if (!fs.existsSync(tempDir)) {
@@ -99,6 +102,7 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
       tempPath,
       outputDir: config.outputDir,
       fileName: config.fileName,
+      fileExtension: fileExt,
       writeStream,
       state: 'RECORDING' as RecordingState,
       startedAt: Date.now(),
@@ -163,24 +167,33 @@ export async function stopRecording(recordingId: string): Promise<StopRecordingR
       });
     });
 
-    // Determine final path
-    const ext = '.webm';
-    let finalPath = path.join(activeRecording.outputDir, `${activeRecording.fileName}${ext}`);
-
-    // Handle duplicate file names
-    let counter = 1;
-    while (fs.existsSync(finalPath)) {
-      finalPath = path.join(
-        activeRecording.outputDir,
-        `${activeRecording.fileName}_${counter}${ext}`,
-      );
-      counter++;
-    }
-
-    // Ensure output directory exists
+    // Ensure root output directory exists
     if (!fs.existsSync(activeRecording.outputDir)) {
       fs.mkdirSync(activeRecording.outputDir, { recursive: true });
     }
+
+    // Determine recording folder name (handling duplicates)
+    // We want a dedicated folder for each recording: outputDir/RecordingName/
+    let folderName = activeRecording.fileName;
+    let recordingFolderPath = path.join(activeRecording.outputDir, folderName);
+    let counter = 1;
+
+    while (fs.existsSync(recordingFolderPath)) {
+      folderName = `${activeRecording.fileName}_${counter}`;
+      recordingFolderPath = path.join(activeRecording.outputDir, folderName);
+      counter++;
+    }
+
+    // Create the dedicated recording folder
+    fs.mkdirSync(recordingFolderPath, { recursive: true });
+
+    // Initialize project structure (.recso, exports) inside the recording folder
+    initProjectFolder(recordingFolderPath);
+
+    // Determine final video path inside the recording folder
+    // Format: outputDir/RecordingName/RecordingName.{ext}
+    const ext = `.${activeRecording.fileExtension}`;
+    const finalPath = path.join(recordingFolderPath, `${folderName}${ext}`);
 
     // Move temp file to final location
     fs.renameSync(activeRecording.tempPath, finalPath);

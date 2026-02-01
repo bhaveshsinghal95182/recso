@@ -7,24 +7,29 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
 
+import { FormatSelector } from './format-selector';
 import { QualitySelector } from './quality-selector';
 
 interface SettingsPanelProps {
   outputDir: string;
   fileName: string;
   videoBitrate: number;
+  format: string;
   onOutputDirChange: (path: string) => void;
   onFileNameChange: (name: string) => void;
   onVideoBitrateChange: (bitrate: number) => void;
+  onFormatChange: (format: string) => void;
 }
 
 export function SettingsPanel({
   outputDir,
   fileName,
   videoBitrate,
+  format,
   onOutputDirChange,
   onFileNameChange,
   onVideoBitrateChange,
+  onFormatChange,
 }: SettingsPanelProps) {
   const [isValid, setIsValid] = useState(true);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -105,8 +110,9 @@ export function SettingsPanel({
         >
           <div className="space-y-4 pt-2 border-t border-border/50">
             {/* Quality/Bitrate Selector */}
-            <div className="space-y-2">
+            <div className="space-y-4">
               <QualitySelector value={videoBitrate} onChange={onVideoBitrateChange} />
+              <FormatSelector value={format} onChange={onFormatChange} />
             </div>
             <p className="text-xs text-muted-foreground">
               Note: Browser recording uses WebM format (VP8/VP9 codec).

@@ -73,12 +73,17 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
 
   // Start recording
   const startRecording = useCallback(
-    async (sourceId: string, outputDir: string, fileName: string) => {
+    async (
+      sourceId: string,
+      outputDir: string,
+      fileName: string,
+      videoBitrate: number = 8000000,
+      mimeType: string = 'video/mp4;codecs=avc1',
+    ) => {
       try {
         setError(null);
 
         // Get media stream from the source
-
         const constraints: any = {
           audio: audio
             ? {
@@ -99,11 +104,20 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         streamRef.current = stream;
 
+        // Determine extension based on mimeType
+        let extension: 'mp4' | 'webm' = 'webm';
+        if (mimeType.includes('mp4')) {
+          extension = 'mp4';
+        }
+
+        console.log(`[Recorder] Starting with mimeType: ${mimeType}, extension: ${extension}`);
+
         // Start recording in main process
         const result = await window.electron.recorder.start({
           sourceId,
           outputDir,
           fileName,
+          fileExtension: extension,
         });
 
         if (!result.success || !result.recordingId) {
@@ -114,8 +128,8 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
 
         // Create MediaRecorder
         const mediaRecorder = new MediaRecorder(stream, {
-          mimeType: 'video/webm;codecs=vp9',
-          videoBitsPerSecond: 2500000, // 2.5 Mbps
+          mimeType,
+          videoBitsPerSecond: videoBitrate,
         });
 
         mediaRecorderRef.current = mediaRecorder;
