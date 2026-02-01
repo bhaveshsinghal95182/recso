@@ -109,28 +109,28 @@
 
 ---
 
-## Phase 6: Compositor Service
+## Phase 6: Compositor Service ✅
 
-- [ ] **6.1 CompositorService Setup**
-  - [ ] Create `src/electron/services/compositor.service.ts`
-  - [ ] Define `CompositorConfig` (background, padding, scale)
+- [x] **6.1 CompositorService Setup**
+  - [x] Create `src/electron/services/compositor.service.ts`
+  - [x] Define `CompositorConfig` (background, padding, scale)
 
-- [ ] **6.2 setBackground(imagePath)** → Load and validate
-- [ ] **6.3 setWindowLayout(bounds, screenDims)** → Calculate scale/offset
-- [ ] **6.4 createPreviewStream(rawStream)** → Canvas composite
-- [ ] **6.5 exportWithBackground(rawPath, outputPath, config)** → FFmpeg overlay
+- [x] **6.2 setBackground(imagePath)** → Load and validate
+- [x] **6.3 setWindowLayout(bounds, screenDims)** → Calculate scale/offset
+- [x] **6.4 createPreviewStream(rawStream)** → Canvas composite
+- [x] **6.5 exportWithBackground(rawPath, outputPath, config)** → FFmpeg overlay
 
 ---
 
-## Phase 7: Full Mouse Path Tracking (30 FPS)
+## Phase 7: Full Mouse Path Tracking (30 FPS) ✅
 
-- [ ] **7.1 SQLite Setup**
-  - [ ] Install `better-sqlite3`
-  - [ ] Create `src/electron/services/database.service.ts`
-  - [ ] Enable WAL mode for crash safety: `PRAGMA journal_mode=WAL;`
-  - [ ] Tables: `recordings`, `mouse_events` (not just clicks)
+- [x] **7.1 SQLite Setup**
+  - [x] Install `better-sqlite3` (already installed)
+  - [x] Updated `src/electron/services/database.service.ts`
+  - [x] Enable WAL mode for crash safety: `PRAGMA journal_mode=WAL;`
+  - [x] Tables: `recordings`, `mouse_events` (not just clicks)
 
-- [ ] **7.2 MouseEvent Schema**
+- [x] **7.2 MouseEvent Schema**
 
   ```sql
   CREATE TABLE mouse_events (
@@ -141,45 +141,48 @@
     y INTEGER NOT NULL,
     event_type TEXT NOT NULL,         -- 'move', 'click', 'scroll', 'drag'
     button TEXT,                      -- 'left', 'right', 'middle' (for clicks)
-    scroll_delta_x INTEGER,           -- for scroll events
-    scroll_delta_y INTEGER,
-    is_pressed BOOLEAN,               -- mouse button held down
-    modifiers TEXT                    -- JSON: {"ctrl": false, "shift": true, ...}
+    meta TEXT                         -- JSON for scroll delta, modifiers, etc.
   );
   CREATE INDEX idx_mouse_recording ON mouse_events(recording_id, timestamp_ms);
   ```
 
-- [ ] **7.3 MouseTrackerService Setup**
-  - [ ] Create `src/electron/services/mouse-tracker.service.ts`
-  - [ ] Install `uiohook-neon` for global mouse hooks
-  - [ ] Define `MouseEvent` interface with all fields above
-  - [ ] Configure sampling rate: 30 FPS (33.33ms intervals)
+- [x] **7.3 MouseTrackerService Setup**
+  - [x] Create `src/electron/services/mouse-tracker.service.ts`
+  - [x] Install `@mechakeys/iohook` for global mouse hooks
+  - [x] Define `MouseEvent` interface with all fields above
+  - [x] Configure sampling rate: 30 FPS (33.33ms intervals)
 
-- [ ] **7.4 Sampling Logic**
-  - [ ] Track last sample time, only record if ≥33ms elapsed
-  - [ ] Always record click/scroll events immediately (bypass sampling)
-  - [ ] Buffer events in memory array
+- [x] **7.4 Sampling Logic**
+  - [x] Track last sample time, only record if ≥33ms elapsed
+  - [x] Always record click/scroll events immediately (bypass sampling)
+  - [x] Buffer events in memory array
 
-- [ ] **7.5 startTracking(recordingId)**
-  - [ ] Register global mouse hooks: move, click, scroll, drag
-  - [ ] Store recording start time for relative timestamps
-  - [ ] Start 33ms interval timer for position sampling
+- [x] **7.5 startTracking(recordingId)**
+  - [x] Register global mouse hooks: move, click, scroll, drag
+  - [x] Store recording start time for relative timestamps
+  - [x] Start 33ms interval timer for position sampling
 
-- [ ] **7.6 stopTracking()**
-  - [ ] Clear interval timer
-  - [ ] Unregister all mouse hooks
-  - [ ] Flush remaining buffer to SQLite
-  - [ ] Return total event count
+- [x] **7.6 stopTracking()**
+  - [x] Clear interval timer
+  - [x] Unregister all mouse hooks
+  - [x] Flush remaining buffer to SQLite
+  - [x] Return total event count
 
-- [ ] **7.7 Periodic Flush (every 1 second)**
-  - [ ] Batch insert buffered events to SQLite
-  - [ ] Use transaction for performance
-  - [ ] Clear buffer after successful flush
+- [x] **7.7 Periodic Flush (every 1 second)**
+  - [x] Batch insert buffered events to SQLite
+  - [x] Use transaction for performance
+  - [x] Clear buffer after successful flush
 
-- [ ] **7.8 Query Methods**
-  - [ ] `getEventsForRecording(id)` → all events sorted by timestamp
-  - [ ] `getEventsInRange(id, startMs, endMs)` → for preview scrubbing
-  - [ ] `deleteEventsForRecording(id)` → cleanup
+- [x] **7.8 Query Methods**
+  - [x] `getEventsForRecording(id)` → all events sorted by timestamp
+  - [x] `getEventsInRange(id, startMs, endMs)` → for preview scrubbing
+  - [x] `deleteEventsForRecording(id)` → cleanup
+
+- [x] **7.9 Mouse Smoothing Utility**
+  - [x] Create `src/electron/utils/mouse-smoothing.utils.ts`
+  - [x] Implement Catmull-Rom spline interpolation
+  - [x] Upsample 30 FPS to 60/120 FPS for smooth rendering
+  - [x] Jitter removal filter
 
 ---
 
@@ -347,3 +350,38 @@
   - [ ] Trigger FFmpeg export with current settings
   - [ ] Show progress indicator
   - [ ] Save to user-chosen location
+
+---
+
+## Phase 14: Native Recording Architecture (Rust) 🚧
+
+- [ ] **14.1 Velocity Crate Updates**
+  - [ ] Add `windows-capture` dependency to `velocity/Cargo.toml`
+  - [ ] Create `velocity/src/recorder.rs`
+  - [ ] Implement `RecorderState` global struct (Mutex)
+
+- [ ] **14.2 Native Recorder Implementation (Rust)**
+  - [ ] **`start_recording(config)`**:
+    - [ ] Initialize `CaptureControl` / `VideoEncoder`
+    - [ ] Disable cursor capture (`CursorCapture::Never`)
+    - [ ] Spawn capture loop thread
+  - [ ] **`stop_recording()`**:
+    - [ ] Signal stop to capture thread
+    - [ ] Finalize encoder and close file
+    - [ ] Return final file path
+  - [ ] **`pause/resume_recording()`**:
+    - [ ] Implement frame dropping logic in capture loop
+
+- [ ] **14.3 N-API Exports**
+  - [ ] Update `velocity/src/lib.rs` to expose recorder functions
+  - [ ] Create TS definitions in `src/electron/services/native-recorder.service.ts`
+
+- [ ] **14.4 Electron Backend Integration**
+  - [ ] Refactor `RecorderService.startRecording` to use Native Recorder
+  - [ ] Remove `fs.writeStream` and temp file logic (Rust handles IO)
+  - [ ] **Keep** `MouseTrackerService` for DB metadata
+  - [ ] Handle `stop` and `pause` via Native Recorder
+
+- [ ] **14.5 Frontend Simplification**
+  - [ ] Remove `getUserMedia` and `MediaRecorder` from `useScreenRecorder.ts`
+  - [ ] Update UI to be a pure remote control for backend

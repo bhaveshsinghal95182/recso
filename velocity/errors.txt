@@ -1,0 +1,68 @@
+    Checking velocity v0.1.0 (C:\coding-projects\recso\velocity)
+error[E0432]: unresolved import `napi::threadsafe_function::ErrorStrategy`
+ --> src\lib.rs:8:33
+  |
+8 | use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
+  |                                 ^^^^^^^^^^^^^ no `ErrorStrategy` in `threadsafe_function`
+
+error[E0277]: `*mut c_void` cannot be sent between threads safely
+    --> src\lib.rs:44:20
+     |
+  44 | static MOUSE_HOOK: Mutex<Option<HHOOK>> = Mutex::new(None);
+     |                    ^^^^^^^^^^^^^^^^^^^^ `*mut c_void` cannot be sent between threads safely
+     |
+     = help: within `std::option::Option<HHOOK>`, the trait `Send` is not implemented for `*mut c_void`
+note: required because it appears within the type `HHOOK`
+    --> C:\Users\desce\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.58.0\src\Windows\Win32\UI\WindowsAndMessaging\mod.rs:8293:12
+     |
+8293 | pub struct HHOOK(pub *mut core::ffi::c_void);
+     |            ^^^^^
+note: required because it appears within the type `std::option::Option<HHOOK>`
+    --> /rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234\library\core\src\option.rs:599:10
+     = note: required for `std::sync::Mutex<std::option::Option<HHOOK>>` to implement `Sync`
+     = note: shared static variables must have a type that implements `Sync`
+
+error[E0277]: `*mut c_void` cannot be sent between threads safely
+    --> src\lib.rs:45:23
+     |
+  45 | static KEYBOARD_HOOK: Mutex<Option<HHOOK>> = Mutex::new(None);
+     |                       ^^^^^^^^^^^^^^^^^^^^ `*mut c_void` cannot be sent between threads safely
+     |
+     = help: within `std::option::Option<HHOOK>`, the trait `Send` is not implemented for `*mut c_void`
+note: required because it appears within the type `HHOOK`
+    --> C:\Users\desce\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.58.0\src\Windows\Win32\UI\WindowsAndMessaging\mod.rs:8293:12
+     |
+8293 | pub struct HHOOK(pub *mut core::ffi::c_void);
+     |            ^^^^^
+note: required because it appears within the type `std::option::Option<HHOOK>`
+    --> /rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234\library\core\src\option.rs:599:10
+     = note: required for `std::sync::Mutex<std::option::Option<HHOOK>>` to implement `Sync`
+     = note: shared static variables must have a type that implements `Sync`
+
+error[E0282]: type annotations needed
+   --> src\lib.rs:105:41
+    |
+105 |                 if let Some(callback) = guard.as_ref() {
+    |                                         ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+   --> src\lib.rs:106:21
+    |
+106 |                     callback.call(event, ThreadsafeFunctionCallMode::NonBlocking);
+    |                     ^^^^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+   --> src\lib.rs:134:41
+    |
+134 |                 if let Some(callback) = guard.as_ref() {
+    |                                         ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+   --> src\lib.rs:135:21
+    |
+135 |                     callback.call(event, ThreadsafeFunctionCallMode::NonBlocking);
+    |                     ^^^^^^^^ cannot infer type
+
+Some errors have detailed explanations: E0277, E0282, E0432.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `velocity` (lib) due to 7 previous errors

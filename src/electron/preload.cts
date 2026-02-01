@@ -130,6 +130,11 @@ electron.contextBridge.exposeInMainWorld('electron', {
     showBackgroundPicker: (): Promise<string | null> =>
       electron.ipcRenderer.invoke('compositor:show-background-picker'),
   },
+
+  // Debug tools
+  debug: {
+    getMouseStatus: () => electron.ipcRenderer.invoke('debug:get-mouse-status'),
+  },
 });
 
 // Helper to create a subscription that returns an unsubscribe function

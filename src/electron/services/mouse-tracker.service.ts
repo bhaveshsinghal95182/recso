@@ -1,9 +1,9 @@
 /**
  * MouseTrackerService — quick overview:
  * - Tracks mouse position at 30 FPS (33ms intervals) during recording
- * - Captures immediate events: clicks, scrolls, drags
+ * - Captures immediate events: clicks, scrolls, drags via native Rust hooks (velocity)
  * - Buffers events in memory and flushes to SQLite periodically
- * - Uses @mechakeys/iohook for global mouse hooks
+ * - Uses custom Rust N-API addon (velocity) for global mouse hooks
  *
  * Key exports:
  *   MouseTrackerService (singleton class)
@@ -16,11 +16,15 @@
 
 import { screen } from 'electron';
 
+import { createRequire } from 'module';
+import type * as Velocity from 'velocity';
+
 import { getDatabase } from './database.service.js';
 
-// Import iohook - will be dynamically imported to avoid issues if not available
-
-let iohook: any = null;
+// Import velocity - our custom Rust N-API addon for mouse hooks
+// Native .node addons must be loaded via require(), so we use createRequire in ESM
+const require = createRequire(import.meta.url);
+const velocity = require('velocity') as typeof Velocity;
 
 // Mouse event types
 export type MouseEventType = 'move' | 'click' | 'scroll' | 'drag';
@@ -80,17 +84,10 @@ class MouseTrackerService {
   }
 
   /**
-   * Initialize iohook - should be called once at app startup
+   * Initialize - no-op now since velocity is loaded synchronously
    */
   async initialize(): Promise<void> {
-    try {
-      const iohookModule = await import('@mechakeys/iohook');
-      iohook = iohookModule.default || iohookModule;
-      console.log('[MouseTrackerService] iohook initialized');
-    } catch (error) {
-      console.error('[MouseTrackerService] Failed to initialize iohook:', error);
-      // Continue without iohook - will use fallback polling
-    }
+    console.log('[MouseTrackerService] Using velocity Rust addon for mouse hooks');
   }
 
   /**
@@ -112,16 +109,14 @@ class MouseTrackerService {
     const cursorPoint = screen.getCursorScreenPoint();
     this.lastPosition = { x: cursorPoint.x, y: cursorPoint.y };
 
-    // Start position sampling timer (30 FPS)
+    // Start position sampling timer (30 FPS) for move events
     this.sampleTimer = setInterval(() => this.samplePosition(), SAMPLE_INTERVAL_MS);
 
     // Start flush timer (every 1 second)
     this.flushTimer = setInterval(() => this.flushBuffer(), FLUSH_INTERVAL_MS);
 
-    // Register global hooks if iohook is available
-    if (iohook) {
-      this.registerHooks();
-    }
+    // Register velocity hooks for clicks and scrolls
+    this.registerVelocityHooks();
 
     console.log('[MouseTrackerService] Started tracking for recording:', recordingId);
   }
@@ -144,13 +139,14 @@ class MouseTrackerService {
       this.flushTimer = null;
     }
 
-    // Unregister hooks
-    if (iohook) {
-      this.unregisterHooks();
+    // Stop velocity hooks
+    try {
+      velocity.stopHook();
+    } catch (error) {
+      console.error('[MouseTrackerService] Error stopping velocity hooks:', error);
     }
 
     // Flush remaining events
-    const eventCount = this.eventBuffer.length;
     this.flushBuffer();
 
     const totalEvents = this.getTotalEventCount();
@@ -197,61 +193,43 @@ class MouseTrackerService {
   }
 
   /**
-   * Register global mouse hooks
+   * Register velocity (Rust) mouse hooks
    */
-  private registerHooks(): void {
-    if (!iohook) return;
+  private registerVelocityHooks(): void {
+    try {
+      velocity.startMouseHook((err, event) => {
+        if (err) {
+          console.error('[MouseTrackerService] Velocity hook error:', err);
+          return;
+        }
 
-    // Mouse click events
-    iohook.on('mousedown', (event: { x: number; y: number; button: number }) => {
-      this.isMousePressed = true;
-      this.recordClickEvent(event, true);
-    });
-
-    iohook.on('mouseup', (event: { x: number; y: number; button: number }) => {
-      this.isMousePressed = false;
-      this.recordClickEvent(event, false);
-    });
-
-    // Scroll events
-    iohook.on(
-      'mousewheel',
-      (event: { x: number; y: number; rotation?: number; direction?: number }) => {
-        this.recordScrollEvent(event);
-      },
-    );
-
-    // Start listening
-    iohook.start();
-  }
-
-  /**
-   * Unregister global mouse hooks
-   */
-  private unregisterHooks(): void {
-    if (!iohook) return;
-
-    iohook.stop();
-    iohook.removeAllListeners();
+        // Handle click events
+        if (event.eventType === 'mousedown') {
+          this.isMousePressed = true;
+          this.recordClickEvent(event, true);
+        } else if (event.eventType === 'mouseup') {
+          this.isMousePressed = false;
+          this.recordClickEvent(event, false);
+        } else if (event.eventType === 'scroll') {
+          this.recordScrollEvent(event);
+        }
+        // Note: 'move' events are handled by the interval timer for 30 FPS sampling
+      });
+    } catch (error) {
+      console.error('[MouseTrackerService] Failed to start velocity hooks:', error);
+    }
   }
 
   /**
    * Record a click event (bypasses sampling - immediate)
    */
   private recordClickEvent(
-    hookEvent: { x: number; y: number; button: number },
+    hookEvent: { x: number; y: number; button?: string },
     isPressed: boolean,
   ): void {
     if (!this.recordingId) return;
 
-    const button: MouseButton =
-      hookEvent.button === 1
-        ? 'left'
-        : hookEvent.button === 2
-          ? 'right'
-          : hookEvent.button === 3
-            ? 'middle'
-            : null;
+    const button: MouseButton = (hookEvent.button as MouseButton) ?? null;
 
     const event: MouseEvent = {
       recordingId: this.recordingId,
@@ -271,12 +249,7 @@ class MouseTrackerService {
   /**
    * Record a scroll event (bypasses sampling - immediate)
    */
-  private recordScrollEvent(hookEvent: {
-    x: number;
-    y: number;
-    rotation?: number;
-    direction?: number;
-  }): void {
+  private recordScrollEvent(hookEvent: { x: number; y: number; scrollDelta?: number }): void {
     if (!this.recordingId) return;
 
     const event: MouseEvent = {
@@ -288,7 +261,7 @@ class MouseTrackerService {
       button: null,
       meta: {
         scrollDeltaX: 0,
-        scrollDeltaY: hookEvent.rotation ?? hookEvent.direction ?? 0,
+        scrollDeltaY: hookEvent.scrollDelta ?? 0,
       },
     };
 
@@ -400,6 +373,27 @@ class MouseTrackerService {
     } catch (error) {
       console.error('[MouseTrackerService] Failed to delete events:', error);
     }
+  }
+
+  /**
+   * Get debug status for developer tools
+   */
+  getDebugStatus(): {
+    isTracking: boolean;
+    recordingId: string | null;
+    bufferSize: number;
+    lastPosition: { x: number; y: number };
+    totalEvents: number;
+    recentBufferEvents: MouseEvent[];
+  } {
+    return {
+      isTracking: this.isTracking,
+      recordingId: this.recordingId,
+      bufferSize: this.eventBuffer.length,
+      lastPosition: this.lastPosition,
+      totalEvents: this.getTotalEventCount(),
+      recentBufferEvents: this.eventBuffer.slice(-5),
+    };
   }
 
   /**
