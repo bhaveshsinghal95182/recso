@@ -129,6 +129,14 @@
     height: 100%;
     @apply overflow-hidden;
   }
+
+  .app-region-drag {
+    -webkit-app-region: drag;
+  }
+
+  .app-region-no-drag {
+    -webkit-app-region: no-drag;
+  }
 }
 
 .instrument-serif-regular {

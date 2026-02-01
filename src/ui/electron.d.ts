@@ -1,11 +1,17 @@
 import type {
+  CursorConfig,
   DesktopSource,
+  FrameState,
   OrphanedRecording,
+  Project,
   RecordingConfig,
+  SpritesheetMeta,
   StartRecordingResult,
   StaticData,
   Statistics,
   StopRecordingResult,
+  TransformedCursorPosition,
+  ZoomConfig,
 } from './types';
 
 // State event specific to IPC (contains uppercase State status)
@@ -141,6 +147,50 @@ interface ElectronAPI {
 
     /** Open file picker for background image */
     showBackgroundPicker: () => Promise<string | null>;
+  };
+
+  editor: {
+    /** Create a new project from a recording ID */
+    createProject: (recordingId: string) => Promise<Project | null>;
+
+    /** Load an existing project from recording directory */
+    loadProject: (recordingDir: string) => Promise<Project | null>;
+
+    /** Save the active project to .recso folder */
+    saveProject: () => Promise<boolean>;
+
+    /** Get the active project */
+    getProject: () => Promise<Project | null>;
+
+    /** Close the active project */
+    closeProject: () => Promise<boolean>;
+
+    /** Get frame state at a specific time */
+    getFrameState: (timeMs: number) => Promise<FrameState>;
+
+    /** Get cursor position at a specific time */
+    getCursorAt: (timeMs: number) => Promise<TransformedCursorPosition | null>;
+
+    /** Update cursor configuration */
+    updateCursorConfig: (config: Partial<CursorConfig>) => Promise<CursorConfig | undefined>;
+
+    /** Update zoom configuration */
+    updateZoomConfig: (config: Partial<ZoomConfig>) => Promise<ZoomConfig | undefined>;
+
+    /** Update project duration */
+    updateProjectDuration: (durationMs: number) => Promise<boolean>;
+
+    /** Check if a project exists for recording directory */
+    projectExists: (recordingDir: string) => Promise<boolean>;
+
+    /** Get spritesheet metadata */
+    getSpritesheetMeta: () => Promise<SpritesheetMeta | null>;
+
+    /** Get spritesheet image path */
+    getSpritesheetPath: () => Promise<string | null>;
+
+    /** Generate spritesheet for timeline thumbnails */
+    generateSpritesheet: (intervalMs?: number) => Promise<SpritesheetMeta | null>;
   };
 }
 

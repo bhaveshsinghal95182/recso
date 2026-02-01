@@ -20,7 +20,10 @@ app.on('ready', () => {
   const mainWindow = new BrowserWindow({
     width,
     height,
-    webPreferences: { preload: getPreloadPath() },
+    webPreferences: {
+      preload: getPreloadPath(),
+      webSecurity: false,
+    },
     frame: false,
   });
 

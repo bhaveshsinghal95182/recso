@@ -9,28 +9,22 @@ import { cn } from '@/lib/utils';
 
 import { QualitySelector } from './quality-selector';
 
-type VideoCodec = 'H264' | 'Hevc' | 'Vp9';
-
 interface SettingsPanelProps {
   outputDir: string;
   fileName: string;
   videoBitrate: number;
-  codec: VideoCodec;
   onOutputDirChange: (path: string) => void;
   onFileNameChange: (name: string) => void;
   onVideoBitrateChange: (bitrate: number) => void;
-  onCodecChange: (codec: VideoCodec) => void;
 }
 
 export function SettingsPanel({
   outputDir,
   fileName,
   videoBitrate,
-  codec,
   onOutputDirChange,
   onFileNameChange,
   onVideoBitrateChange,
-  onCodecChange,
 }: SettingsPanelProps) {
   const [isValid, setIsValid] = useState(true);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -110,37 +104,13 @@ export function SettingsPanel({
           )}
         >
           <div className="space-y-4 pt-2 border-t border-border/50">
-            {/* Codec Selector */}
-            <div className="space-y-2">
-              <Label>Video Codec</Label>
-              <div className="flex gap-2">
-                {(['H264', 'Hevc', 'Vp9'] as VideoCodec[]).map((c) => (
-                  <button
-                    key={c}
-                    type="button"
-                    onClick={() => onCodecChange(c)}
-                    className={cn(
-                      'flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-colors border',
-                      codec === c
-                        ? 'bg-primary text-primary-foreground border-primary'
-                        : 'bg-card hover:bg-muted border-border',
-                    )}
-                  >
-                    {c === 'H264' ? 'H.264' : c === 'Hevc' ? 'H.265' : 'VP9'}
-                  </button>
-                ))}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                {codec === 'H264' && 'Best compatibility, works on all devices'}
-                {codec === 'Hevc' && 'Better compression, smaller files, newer devices'}
-                {codec === 'Vp9' && 'Open codec, great for web'}
-              </p>
-            </div>
-
             {/* Quality/Bitrate Selector */}
             <div className="space-y-2">
               <QualitySelector value={videoBitrate} onChange={onVideoBitrateChange} />
             </div>
+            <p className="text-xs text-muted-foreground">
+              Note: Browser recording uses WebM format (VP8/VP9 codec).
+            </p>
           </div>
         </div>
       </CardContent>

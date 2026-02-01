@@ -131,6 +131,43 @@ electron.contextBridge.exposeInMainWorld('electron', {
       electron.ipcRenderer.invoke('compositor:show-background-picker'),
   },
 
+  // Editor
+  editor: {
+    createProject: (recordingId: string) =>
+      electron.ipcRenderer.invoke('editor:create-project', recordingId),
+
+    loadProject: (recordingDir: string) =>
+      electron.ipcRenderer.invoke('editor:load-project', recordingDir),
+
+    saveProject: (): Promise<boolean> => electron.ipcRenderer.invoke('editor:save-project'),
+
+    getProject: () => electron.ipcRenderer.invoke('editor:get-project'),
+
+    closeProject: (): Promise<boolean> => electron.ipcRenderer.invoke('editor:close-project'),
+
+    getFrameState: (timeMs: number) =>
+      electron.ipcRenderer.invoke('editor:get-frame-state', timeMs),
+
+    getCursorAt: (timeMs: number) => electron.ipcRenderer.invoke('editor:get-cursor-at', timeMs),
+
+    updateCursorConfig: (config: Record<string, unknown>) =>
+      electron.ipcRenderer.invoke('editor:update-cursor-config', config),
+
+    updateZoomConfig: (config: Record<string, unknown>) =>
+      electron.ipcRenderer.invoke('editor:update-zoom-config', config),
+
+    projectExists: (recordingDir: string): Promise<boolean> =>
+      electron.ipcRenderer.invoke('editor:project-exists', recordingDir),
+
+    getSpritesheetMeta: () => electron.ipcRenderer.invoke('editor:get-spritesheet-meta'),
+
+    getSpritesheetPath: (): Promise<string | null> =>
+      electron.ipcRenderer.invoke('editor:get-spritesheet-path'),
+
+    generateSpritesheet: (intervalMs?: number) =>
+      electron.ipcRenderer.invoke('editor:generate-spritesheet', intervalMs),
+  },
+
   // Debug tools
   debug: {
     getMouseStatus: () => electron.ipcRenderer.invoke('debug:get-mouse-status'),

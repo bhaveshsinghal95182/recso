@@ -186,34 +186,41 @@
 
 ---
 
-## Phase 8: Editor Service (Non-Linear)
+## Phase 8: Editor Service (Non-Linear) 🚧
 
-- [ ] **8.1 Project Model**
-  - [ ] Create `src/electron/types/project.types.ts`
-  - [ ] `Project`: id, rawVideoPath, recordingId, backgroundPath, timeline, effects
-  - [ ] `TimelineTrack`: type (video/audio/overlay), clips[]
-  - [ ] `TimelineClip`: sourceStart, sourceEnd, timelineStart, effects[]
-  - [ ] `ClipEffect`: type, params (crop, scale, speed, etc.)
+- [x] **8.1 Project Model**
+  - [x] Create `src/electron/types/project.types.ts`
+  - [x] `Project`: id, rawVideoPath, recordingId, backgroundPath, timeline, effects
+  - [x] `TimelineTrack`: type (video/audio/cursor), clips[]
+  - [x] `TimelineClip`: sourceStart, sourceEnd, timelineStart, speed
+  - [x] `CursorConfig`: size, style, smoothing, click animations
+  - [x] `ZoomConfig`: level, focalX, focalY
 
-- [ ] **8.2 EditorService Core**
-  - [ ] Create `src/electron/services/editor.service.ts`
-  - [ ] `createProject(rawPath, recordingId)` → new Project
-  - [ ] `loadProject(projectPath)` → parse JSON
-  - [ ] `saveProject()` → write JSON
+- [x] **8.2 EditorService Core**
+  - [x] Create `src/electron/services/editor.service.ts`
+  - [x] `createProject(recordingId)` → new Project
+  - [x] `loadProject(projectPath)` → parse JSON
+  - [x] `saveProject()` → write JSON
 
-- [ ] **8.3 Timeline Operations**
+- [x] **8.3 Coordinate Transforms** (NEW)
+  - [x] Base transform: padding + scaling via CompositorService
+  - [x] Zoom transform: level + focal point
+  - [x] Visibility check for off-screen cursors
+  - [x] `transformCursorPosition()` utility function
+
+- [x] **8.4 Cursor Reconstruction**
+  - [x] `getFrameState(timeMs)` → cursor position + visibility
+  - [x] Integration with velocity `interpolatePositionAt()`
+  - [x] Smoothed path caching
+
+- [ ] **8.5 Timeline Operations** (deferred)
   - [ ] `addClip(track, clip)`
   - [ ] `removeClip(clipId)`
   - [ ] `moveClip(clipId, newPosition)`
   - [ ] `trimClip(clipId, newStart, newEnd)`
   - [ ] `splitClip(clipId, position)`
 
-- [ ] **8.4 Preview Rendering**
-  - [ ] `getFrameAt(position)` → seek raw video, apply effects, composite, return ImageData
-  - [ ] Use offscreen canvas for real-time preview
-  - [ ] Lower resolution for performance (720p preview)
-
-- [ ] **8.5 Export Pipeline**
+- [ ] **8.6 Export Pipeline** (deferred to Phase 11)
   - [ ] `exportVideo(outputPath, settings)` → generate FFmpeg filter graph
   - [ ] Apply all timeline edits + effects
   - [ ] Emit progress events
@@ -231,27 +238,31 @@
   - [ ] `editor:export` / `editor:cancel-export`
   - [ ] `editor:export-progress` → push subscription
 
-- [ ] **9.2 Update preload.cts** with `electron.editor`
-- [ ] **9.3 Update electron.d.ts** with types
+- [x] **9.2 Update preload.cts** with `electron.editor`
+- [x] **9.3 Update electron.d.ts** with types
 
 ---
 
-## Phase 10: Project File Structure
+## Phase 10: Project File Structure ✅
 
-- [ ] **10.1 Directory Layout**
+- [x] **10.1 Directory Layout**
 
   ```
   /recordings/{uuid}/
-  ├── raw.webm           # Original recording
-  ├── project.json       # Edit decisions
-  └── thumbnail.jpg      # Preview
+  ├── .recso/                  # Project metadata folder
+  │   ├── project.json         # Edit decisions, cursor config, zoom
+  │   ├── spritesheet.png      # Timeline thumbnails (Phase 11)
+  │   ├── spritesheet.json     # Spritesheet metadata
+  │   └── thumbnail.jpg        # Project cover thumbnail
+  ├── raw.mp4                  # Original recording
+  └── exports/                 # Exported videos
   ```
 
-- [ ] **10.2 Database Schema**
-  ```sql
-  recordings(id, status, temp_path, final_path, created_at)
-  click_events(id, recording_id, timestamp, x, y, button, type)
-  ```
+- [x] **10.2 Project Storage Service**
+  - [x] `initProjectFolder()` - create .recso structure
+  - [x] `saveProjectMetadata()` / `loadProjectMetadata()`
+  - [x] `getSpritesheetPath()` - path helper
+  - [x] `generateSpritesheet()` - stub (implemented in Phase 11)
 
 ---
 
@@ -268,6 +279,11 @@
   - [ ] `trim(inputPath, start, end, outputPath)`
   - [ ] `concat(clips[], outputPath)`
   - [ ] `applyFilters(inputPath, filterGraph, outputPath)`
+
+- [ ] **11.3 Spritesheet Generation** (NEW)
+  - [ ] `generateSpritesheet(videoPath, intervalMs)` → create timeline thumbnails
+  - [ ] Save to `.recso/spritesheet.png` + `.recso/spritesheet.json`
+  - [ ] `generateThumbnail(videoPath, timeMs)` → project cover image
 
 ---
 
@@ -287,14 +303,21 @@
   - [ ] Show dialog: "Open in Editor" / "Quick Export" / "Save Raw"
   - [ ] Navigate to editor screen with recording ID
 
+- [x] **12.4 Welcome Screen Workflow**
+  - [x] Create `WelcomeScreen` component
+  - [x] Add routing in `App.tsx` for 'welcome' state
+  - [x] Implement "Open Project" functionality using `showOpenDialog`
+  - [x] Implement "New Recording" button (goes to recorder)
+
 ---
 
 ## Phase 13: Editor Preview Screen (Simplified)
 
-- [ ] **13.1 Editor Screen Component**
-  - [ ] Create `src/ui/components/screens/editor/editor.tsx`
-  - [ ] Route to this screen after recording stops (if user chooses Editor)
-  - [ ] Receive `recordingId` via route params or context
+- [x] **13.1 Editor Screen Component**
+  - [x] Create `src/ui/components/screens/editor/editor.tsx`
+  - [x] Route to this screen after recording stops (if user chooses Editor)
+  - [x] Receive `recordingId` via route params or context
+  - [x] **Refactor CSS to Tailwind**
 
 - [ ] **13.2 Video Rendering Canvas**
   - [ ] Create canvas element sized to target output (e.g., 1920×1080)

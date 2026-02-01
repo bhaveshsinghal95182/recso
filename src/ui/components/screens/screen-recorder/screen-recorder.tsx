@@ -10,7 +10,11 @@ import { RecordingControls } from './recording-controls';
 import { SettingsPanel } from './settings-panel';
 import { SourceSelector } from './source-selector';
 
-export function ScreenRecorderBody() {
+interface ScreenRecorderBodyProps {
+  onOpenEditor?: (recordingId: string) => void;
+}
+
+export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
   const {
     sources,
     state,
@@ -28,7 +32,6 @@ export function ScreenRecorderBody() {
   const [outputDir, setOutputDir] = useState('');
   const [fileName, setFileName] = useState('');
   const [videoBitrate, setVideoBitrate] = useState(5000000);
-  const [codec, setCodec] = useState<'H264' | 'Hevc' | 'Vp9'>('H264');
   const [isStarting, setIsStarting] = useState(false);
 
   // 'selection' = source grid, 'ready' = settings & record button
@@ -59,10 +62,7 @@ export function ScreenRecorderBody() {
     if (!selectedSourceId || !outputDir || !fileName) return;
 
     setIsStarting(true);
-    const result = await startRecording(selectedSourceId, outputDir, fileName, {
-      videoBitrate,
-      codec,
-    });
+    const result = await startRecording(selectedSourceId, outputDir, fileName);
     setIsStarting(false);
 
     if (!result.success) {
@@ -71,12 +71,21 @@ export function ScreenRecorderBody() {
   };
 
   const handleStop = async () => {
-    await stopRecording();
-    // Reset state for next recording
-    setFileName(`recording_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}`);
-    refreshSources();
-    setView('selection');
-    setSelectedSourceId(null);
+    // Capture recording ID before stopping (state will be cleared)
+    const recordingId = state.recordingId;
+
+    const result = await stopRecording();
+
+    if (result.success && recordingId && onOpenEditor) {
+      // Navigate to editor with the recording
+      onOpenEditor(recordingId);
+    } else {
+      // Reset state for next recording (only if not navigating away)
+      setFileName(`recording_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}`);
+      refreshSources();
+      setView('selection');
+      setSelectedSourceId(null);
+    }
   };
 
   const selectedSource = sources.find((s) => s.id === selectedSourceId);
@@ -178,11 +187,9 @@ export function ScreenRecorderBody() {
                     outputDir={outputDir}
                     fileName={fileName}
                     videoBitrate={videoBitrate}
-                    codec={codec}
                     onOutputDirChange={setOutputDir}
                     onFileNameChange={setFileName}
                     onVideoBitrateChange={setVideoBitrate}
-                    onCodecChange={setCodec}
                   />
                 </Card>
 

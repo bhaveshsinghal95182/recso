@@ -1,6 +1,10 @@
 export interface DesktopSource {
   id: string;
   name: string;
+  /** Thumbnail as base64 data URL */
+  thumbnailDataUrl: string;
+  /** Whether this source is a screen (vs window) */
+  isScreen: boolean;
   /** Monitor width in pixels */
   width?: number;
   /** Monitor height in pixels */
@@ -19,24 +23,15 @@ export interface RecorderState {
 export interface UseScreenRecorderOptions {
   /** Chunk interval in ms (default: 1000) */
   timeslice?: number;
-  /** Video frame rate (default: 30) */
-  frameRate?: number;
   /** Include system audio */
   audio?: boolean;
 }
 
 // --- Types mirrored from Backend ---
 
-/** Video codec for recording */
-export type VideoCodec = 'H264' | 'Hevc' | 'Vp9';
-
 export interface RecordingOptions {
-  frameRate?: number;
   videoBitrate?: number;
   audioBitrate?: number;
-  codec?: VideoCodec;
-  width?: number;
-  height?: number;
 }
 
 export interface RecordingConfig {
@@ -79,4 +74,89 @@ export interface OrphanedRecording {
   fileExists: boolean;
   fileSize: number;
   warning: string | null;
+}
+
+// --- Editor Types ---
+
+export type CursorStyle = 'default' | 'pointer' | 'crosshair' | 'custom';
+
+export interface CursorConfig {
+  size: number;
+  style: CursorStyle;
+  customImagePath?: string;
+  showClickAnimations: boolean;
+  clickAnimationScale: number;
+  clickDisplayDuration: number;
+}
+
+export interface ZoomConfig {
+  level: number;
+  focalX: number;
+  focalY: number;
+}
+
+export interface TimelineClip {
+  id: string;
+  sourceStart: number;
+  sourceEnd: number;
+  timelineStart: number;
+  speed: number;
+}
+
+export interface TimelineTrack {
+  id: string;
+  type: 'video' | 'audio' | 'cursor';
+  clips: TimelineClip[];
+  enabled: boolean;
+}
+
+export interface Timeline {
+  duration: number;
+  tracks: TimelineTrack[];
+}
+
+export interface SpritesheetMeta {
+  frameCount: number;
+  intervalMs: number;
+  frameWidth: number;
+  frameHeight: number;
+  columns: number;
+  rows: number;
+  totalDurationMs: number;
+  imagePath: string;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  recordingId: string;
+  projectFolderPath: string;
+  rawVideoPath: string;
+  videoDimensions: {
+    width: number;
+    height: number;
+  };
+  timeline: Timeline;
+  cursorConfig: CursorConfig;
+  zoomConfig: ZoomConfig;
+  spritesheetMeta: SpritesheetMeta | null;
+  backgroundPath?: string;
+  backgroundColor: string;
+  createdAt: number;
+  modifiedAt: number;
+}
+
+export interface TransformedCursorPosition {
+  x: number;
+  y: number;
+  visible: boolean;
+  eventType: 'click';
+  button?: string;
+  isInterpolated: boolean;
+  fadeProgress?: number;
+}
+
+export interface FrameState {
+  timeMs: number;
+  cursor: TransformedCursorPosition | null;
 }

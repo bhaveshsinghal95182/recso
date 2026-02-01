@@ -9,20 +9,12 @@ export enum RecordingState {
   PAUSED = 'PAUSED',
 }
 
-/** Video codec for recording - values match velocity.VideoCodec enum */
-export type VideoCodec = 'H264' | 'Hevc' | 'Vp9';
-
 /** Recording quality/format options */
 export interface RecordingOptions {
-  frameRate?: number;
+  /** Video bitrate in bps (browser MediaRecorder) */
   videoBitrate?: number;
+  /** Audio bitrate in bps */
   audioBitrate?: number;
-  /** Video codec (default: H264) */
-  codec?: VideoCodec;
-  /** Output width for resolution scaling */
-  width?: number;
-  /** Output height for resolution scaling */
-  height?: number;
 }
 
 /** Recording configuration provided when starting */
@@ -33,17 +25,17 @@ export interface RecordingConfig {
   options?: RecordingOptions;
 }
 
-/** Desktop source (screen or window) from desktopCapturer or native recorder */
+/** Desktop source (screen or window) from desktopCapturer */
 export interface DesktopSource {
   id: string;
   name: string;
   thumbnailDataUrl: string;
   isScreen: boolean;
-  /** Width in pixels (available for native monitors) */
+  /** Width in pixels */
   width?: number;
-  /** Height in pixels (available for native monitors) */
+  /** Height in pixels */
   height?: number;
-  /** Whether this is the primary monitor (available for native monitors) */
+  /** Whether this is the primary monitor */
   isPrimary?: boolean;
 }
 

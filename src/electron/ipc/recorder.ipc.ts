@@ -1,9 +1,5 @@
 /**
- * RecorderIPC — quick overview:
- * - Handles all recording-related IPC: sources, start/stop/pause/resume, chunk appending.
- * - Provides settings dialogs: save dialog, default output dir, path validation.
- * - Manages recovery: get orphans, recover, delete.
- * - Pushes real-time state updates to renderer.
+ * IPC handlers for recording functionality
  */
 
 import { app, type BrowserWindow, dialog, ipcMain } from 'electron';
