@@ -160,6 +160,10 @@ electron.contextBridge.exposeInMainWorld('electron', {
     updateProjectDuration: (durationMs: number) =>
       electron.ipcRenderer.invoke('editor:update-project-duration', durationMs),
 
+    /** Update background color */
+    updateBackgroundColor: (color: string) =>
+      electron.ipcRenderer.invoke('editor:update-background-color', color),
+
     projectExists: (recordingDir: string): Promise<boolean> =>
       electron.ipcRenderer.invoke('editor:project-exists', recordingDir),
 

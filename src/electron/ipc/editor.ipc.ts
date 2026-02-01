@@ -71,6 +71,11 @@ export function registerEditorHandlers(): void {
     return editorService.updateProjectDuration(durationMs);
   });
 
+  // Update background color
+  ipcMain.handle('editor:update-background-color', async (_event, color: string) => {
+    return editorService.updateBackgroundColor(color);
+  });
+
   // Check if a project exists for recording
   ipcMain.handle('editor:project-exists', async (_event, recordingDir: string) => {
     return projectStorage.projectExists(recordingDir);

@@ -180,6 +180,9 @@ interface ElectronAPI {
     /** Update project duration */
     updateProjectDuration: (durationMs: number) => Promise<boolean>;
 
+    /** Update background color */
+    updateBackgroundColor: (color: string) => Promise<boolean>;
+
     /** Check if a project exists for recording directory */
     projectExists: (recordingDir: string) => Promise<boolean>;
 

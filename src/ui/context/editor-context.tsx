@@ -53,6 +53,7 @@ interface EditorActions {
   updateCursorConfig: (config: Partial<CursorConfig>) => void;
   updateZoomConfig: (config: Partial<ZoomConfig>) => void;
   updateDuration: (durationMs: number) => void;
+  updateBackgroundColor: (color: string) => void;
 }
 
 type EditorContextValue = EditorState & EditorActions;
@@ -77,6 +78,7 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
   // Refs for animation frame
   const animationFrameRef = useRef<number | null>(null);
   const lastFrameTimeRef = useRef<number>(0);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Load project on mount if recordingId provided
   useEffect(() => {
@@ -257,6 +259,29 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
     [project, duration],
   );
 
+  const updateBackgroundColor = useCallback(
+    (color: string) => {
+      if (!project) return;
+
+      // Optimistic update
+      setProject((prev) => (prev ? { ...prev, backgroundColor: color } : null));
+
+      // Debounce IPC call
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
+
+      debounceRef.current = setTimeout(async () => {
+        try {
+          await window.electron.editor.updateBackgroundColor(color);
+        } catch (err) {
+          console.error('[EditorContext] updateBackgroundColor error:', err);
+        }
+      }, 300);
+    },
+    [project],
+  );
+
   const value: EditorContextValue = {
     project,
     isLoading,
@@ -274,6 +299,7 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
     updateCursorConfig,
     updateZoomConfig,
     updateDuration,
+    updateBackgroundColor,
   };
 
   return <EditorContext.Provider value={value}>{children}</EditorContext.Provider>;

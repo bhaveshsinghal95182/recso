@@ -162,6 +162,20 @@ export function updateProjectDuration(durationMs: number): boolean {
 }
 
 /**
+ * Update project background color
+ */
+export function updateBackgroundColor(color: string): boolean {
+  if (!activeProject) return false;
+
+  activeProject.backgroundColor = color;
+  activeProject.modifiedAt = Date.now();
+
+  // Auto-save metadata
+  projectStorage.saveProjectMetadata(activeProject);
+  return true;
+}
+
+/**
  * Get the frame state at a specific time.
  * Returns click indicator if a click occurred near this time.
  */

@@ -10,6 +10,8 @@ interface EditorScreenProps {
   recordingId: string;
 }
 
+import { Pause, Play } from 'lucide-react';
+
 function MinimalPreview() {
   const { project, isPlaying, currentTime, duration, play, pause, seek, updateDuration } =
     useEditor();
@@ -139,9 +141,13 @@ function MinimalPreview() {
       <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex gap-3 items-center bg-black/60 backdrop-blur px-4 py-2 rounded-full">
         <button
           onClick={handlePlayPause}
-          className="text-white bg-transparent border-0 cursor-pointer p-1 hover:opacity-80"
+          className="text-white bg-transparent border-0 cursor-pointer p-1 hover:opacity-80 flex items-center justify-center"
         >
-          {isPlaying ? '⏸' : '▶'}
+          {isPlaying ? (
+            <Pause className="w-4 h-4 fill-white" />
+          ) : (
+            <Play className="w-4 h-4 fill-white" />
+          )}
         </button>
         <input
           type="range"
@@ -158,6 +164,9 @@ function MinimalPreview() {
     </div>
   );
 }
+
+import { EditorLayout } from './editor-layout';
+import { PropertiesPanel } from './properties-panel';
 
 function EditorContent() {
   const { project, isLoading, error } = useEditor();
@@ -187,7 +196,13 @@ function EditorContent() {
     );
   }
 
-  return <MinimalPreview />;
+  return (
+    <EditorLayout
+      viewport={<MinimalPreview />}
+      properties={<PropertiesPanel />}
+      timeline={<div className="p-4 text-muted-foreground text-sm">Timeline placeholder</div>}
+    />
+  );
 }
 
 export function EditorScreen({ recordingId }: EditorScreenProps) {
