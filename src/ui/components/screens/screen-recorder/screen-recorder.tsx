@@ -1,4 +1,4 @@
-import { ArrowLeft, Monitor } from 'lucide-react';
+import { AppWindow, ArrowLeft, Monitor } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -159,23 +159,39 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
               {/* Left: Monitor Info */}
               <div className="flex-1 w-full h-full flex flex-col gap-4">
                 <Card className="flex-1 overflow-hidden border-2 border-primary/20 relative group bg-card/50">
-                  <div className="w-full h-full flex flex-col items-center justify-center gap-4 p-8">
-                    <div className="p-6 rounded-2xl bg-primary/10">
-                      <Monitor size={64} className="text-primary" />
-                    </div>
-                    <div className="text-center space-y-2">
-                      <h3 className="text-xl font-semibold">{selectedSource?.name}</h3>
-                      {selectedSource?.width && selectedSource?.height && (
-                        <p className="text-muted-foreground">
-                          {selectedSource.width} × {selectedSource.height}
-                        </p>
-                      )}
-                      {selectedSource?.isPrimary && (
-                        <span className="inline-block px-3 py-1 text-xs font-semibold uppercase bg-primary/20 text-primary rounded-full">
-                          Primary Display
-                        </span>
-                      )}
-                    </div>
+                  <div className="w-full h-full flex flex-col items-center justify-center gap-4 p-8 relative">
+                    {selectedSource?.thumbnailDataUrl ? (
+                      <div className="relative w-full h-full flex items-center justify-center">
+                        <img
+                          src={selectedSource.thumbnailDataUrl}
+                          alt={selectedSource.name}
+                          className="max-w-full max-h-full object-contain rounded-lg shadow-lg"
+                        />
+                      </div>
+                    ) : (
+                      <div className="p-6 rounded-2xl bg-primary/10">
+                        {selectedSource?.isScreen ? (
+                          <Monitor size={64} className="text-primary" />
+                        ) : (
+                          <AppWindow size={64} className="text-primary" />
+                        )}
+                      </div>
+                    )}
+                    {!selectedSource?.thumbnailDataUrl && (
+                      <div className="text-center space-y-2">
+                        <h3 className="text-xl font-semibold">{selectedSource?.name}</h3>
+                        {selectedSource?.width && selectedSource?.height && (
+                          <p className="text-muted-foreground">
+                            {selectedSource.width} × {selectedSource.height}
+                          </p>
+                        )}
+                        {selectedSource?.isPrimary && (
+                          <span className="inline-block px-3 py-1 text-xs font-semibold uppercase bg-primary/20 text-primary rounded-full">
+                            Primary Display
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </Card>
               </div>
