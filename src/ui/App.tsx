@@ -77,7 +77,7 @@ function App() {
           {/* Back button overlay */}
           <button
             onClick={goHome}
-            className="fixed top-12 left-2 z-[1000] bg-black/50 hover:bg-black/70 text-white border-0 rounded px-3 py-1.5 cursor-pointer text-xs backdrop-blur-sm transition-colors"
+            className="fixed top-12 left-2 z-1000 bg-black/50 hover:bg-black/70 text-white border-0 rounded px-3 py-1.5 cursor-pointer text-xs backdrop-blur-sm transition-colors"
           >
             ← Home
           </button>
