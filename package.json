@@ -21,7 +21,8 @@
     "transpile:electron": "tsc -p src/electron/tsconfig.json",
     "dist:mac": "pnpm run transpile:electron && pnpm run build && electron-builder --mac --arm64",
     "dist:win": "pnpm run transpile:electron && pnpm run build && electron-builder --win --x64",
-    "dist:linux": "pnpm run transpile:electron && pnpm run build && electron-builder --linux --x64"
+    "dist:linux": "pnpm run transpile:electron && pnpm run build && electron-builder --linux --x64",
+    "cleanup:db": "npx electron scripts/cleanup-db.js"
   },
   "dependencies": {
     "@base-ui/react": "^1.1.0",
