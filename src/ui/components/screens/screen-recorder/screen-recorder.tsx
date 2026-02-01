@@ -1,4 +1,4 @@
-import { AppWindow, ArrowLeft, Monitor } from 'lucide-react';
+import { ArrowLeft, Monitor } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -28,6 +28,7 @@ export function ScreenRecorderBody() {
   const [outputDir, setOutputDir] = useState('');
   const [fileName, setFileName] = useState('');
   const [videoBitrate, setVideoBitrate] = useState(5000000);
+  const [codec, setCodec] = useState<'H264' | 'Hevc' | 'Vp9'>('H264');
   const [isStarting, setIsStarting] = useState(false);
 
   // 'selection' = source grid, 'ready' = settings & record button
@@ -58,7 +59,10 @@ export function ScreenRecorderBody() {
     if (!selectedSourceId || !outputDir || !fileName) return;
 
     setIsStarting(true);
-    const result = await startRecording(selectedSourceId, outputDir, fileName, { videoBitrate });
+    const result = await startRecording(selectedSourceId, outputDir, fileName, {
+      videoBitrate,
+      codec,
+    });
     setIsStarting(false);
 
     if (!result.success) {
@@ -143,19 +147,26 @@ export function ScreenRecorderBody() {
           ) : (
             /* View 2: Ready / Settings */
             <div className="w-full max-w-4xl flex flex-col md:flex-row gap-8 items-start justify-center h-full max-h-[500px]">
-              {/* Left: Preview */}
+              {/* Left: Monitor Info */}
               <div className="flex-1 w-full h-full flex flex-col gap-4">
-                <Card className="flex-1 overflow-hidden bg-black/5 border-2 border-primary/20 relative group">
-                  {selectedSource?.thumbnailDataUrl && (
-                    <img
-                      src={selectedSource.thumbnailDataUrl}
-                      alt="Preview"
-                      className="w-full h-full object-contain p-4 transition-transform duration-700 group-hover:scale-105"
-                    />
-                  )}
-                  <div className="absolute bottom-0 left-0 right-0 bg-background/80 backdrop-blur-md p-3 border-t flex items-center gap-2 text-sm font-medium">
-                    {selectedSource?.isScreen ? <Monitor size={16} /> : <AppWindow size={16} />}
-                    <span className="truncate">{selectedSource?.name}</span>
+                <Card className="flex-1 overflow-hidden border-2 border-primary/20 relative group bg-card/50">
+                  <div className="w-full h-full flex flex-col items-center justify-center gap-4 p-8">
+                    <div className="p-6 rounded-2xl bg-primary/10">
+                      <Monitor size={64} className="text-primary" />
+                    </div>
+                    <div className="text-center space-y-2">
+                      <h3 className="text-xl font-semibold">{selectedSource?.name}</h3>
+                      {selectedSource?.width && selectedSource?.height && (
+                        <p className="text-muted-foreground">
+                          {selectedSource.width} × {selectedSource.height}
+                        </p>
+                      )}
+                      {selectedSource?.isPrimary && (
+                        <span className="inline-block px-3 py-1 text-xs font-semibold uppercase bg-primary/20 text-primary rounded-full">
+                          Primary Display
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </Card>
               </div>
@@ -167,9 +178,11 @@ export function ScreenRecorderBody() {
                     outputDir={outputDir}
                     fileName={fileName}
                     videoBitrate={videoBitrate}
+                    codec={codec}
                     onOutputDirChange={setOutputDir}
                     onFileNameChange={setFileName}
                     onVideoBitrateChange={setVideoBitrate}
+                    onCodecChange={setCodec}
                   />
                 </Card>
 

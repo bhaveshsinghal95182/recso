@@ -1,8 +1,12 @@
 export interface DesktopSource {
   id: string;
   name: string;
-  thumbnailDataUrl: string;
-  isScreen: boolean;
+  /** Monitor width in pixels */
+  width?: number;
+  /** Monitor height in pixels */
+  height?: number;
+  /** Whether this is the primary display */
+  isPrimary?: boolean;
 }
 
 export interface RecorderState {
@@ -23,10 +27,16 @@ export interface UseScreenRecorderOptions {
 
 // --- Types mirrored from Backend ---
 
+/** Video codec for recording */
+export type VideoCodec = 'H264' | 'Hevc' | 'Vp9';
+
 export interface RecordingOptions {
   frameRate?: number;
   videoBitrate?: number;
   audioBitrate?: number;
+  codec?: VideoCodec;
+  width?: number;
+  height?: number;
 }
 
 export interface RecordingConfig {

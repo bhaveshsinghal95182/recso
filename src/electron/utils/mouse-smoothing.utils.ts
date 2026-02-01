@@ -12,7 +12,7 @@
  */
 
 import { createRequire } from 'module';
-import type { RawMouseEvent, SmoothedPoint, SmoothingOptions } from 'velocity';
+import type { RawMouseEvent, SmoothedPoint, SmoothingEventType, SmoothingOptions } from 'velocity';
 import type * as Velocity from 'velocity';
 
 import type { MouseEvent } from '../services/mouse-tracker.service.js';
@@ -61,7 +61,7 @@ function toRawMouseEvent(event: MouseEvent): RawMouseEvent {
     timestampMs: event.timestampMs,
     x: event.x,
     y: event.y,
-    eventType: event.eventType,
+    eventType: event.eventType as SmoothingEventType,
     button: event.button ?? undefined,
   };
 }

@@ -1,11 +1,12 @@
 /**
  * RecorderService — quick overview:
- * - Enumerates sources.
- * - Manages a single streaming `.webm` recording lifecycle (start, append, pause, resume, stop) and moves final files to the chosen output.
- * - Integrates with DB for metadata and provides a temp-path recovery helper.
+ * - Enumerates sources via native Rust addon (cursor-free capable).
+ * - Manages recording lifecycle via native recorder (start, pause, resume, stop).
+ * - Integrates with DB for metadata and mouse tracking.
+ *
+ * NOTE: Video encoding and file writing is handled entirely in Rust.
+ * No video chunks are sent from the renderer to the main process.
  */
-
-import { app, desktopCapturer } from 'electron';
 
 import { randomUUID } from 'crypto';
 import fs from 'fs';
@@ -26,42 +27,47 @@ import {
   updateRecordingStatus,
 } from './database.service.js';
 import { mouseTrackerService } from './mouse-tracker.service.js';
+import { nativeRecorderService, type NativeRecordingConfig } from './native-recorder.service.js';
 
 /** Active recording session state */
 interface ActiveRecording {
   id: string;
-  tempPath: string;
+  outputPath: string;
   outputDir: string;
   fileName: string;
-  writeStream: fs.WriteStream;
   state: RecordingState;
   startedAt: number;
-  bytesWritten: number;
 }
 
 // Current active recording (only one at a time)
 let activeRecording: ActiveRecording | null = null;
 
 /**
- * Get available desktop sources (screens and windows)
+ * Get available desktop sources (monitors)
+ * Uses native Rust addon for enumeration
  */
 export async function getSources(): Promise<DesktopSource[]> {
-  const sources = await desktopCapturer.getSources({
-    types: ['screen', 'window'],
-    thumbnailSize: { width: 320, height: 180 },
-  });
+  try {
+    const monitors = nativeRecorderService.getMonitors();
 
-  return sources.map((source) => ({
-    id: source.id,
-    name: source.name,
-    thumbnailDataUrl: source.thumbnail.toDataURL(),
-    isScreen: source.id.startsWith('screen:'),
-  }));
+    return monitors.map((monitor) => ({
+      id: `monitor:${monitor.index}`,
+      name: monitor.name,
+      thumbnailDataUrl: '', // Native recorder doesn't provide thumbnails
+      isScreen: true,
+      width: monitor.width,
+      height: monitor.height,
+      isPrimary: monitor.isPrimary,
+    }));
+  } catch (error) {
+    console.error('[RecorderService] Failed to get native sources:', error);
+    return [];
+  }
 }
 
 /**
  * Start a new recording session
- * Creates temp file and database entry
+ * Uses native Rust recorder (cursor is hidden from recording)
  */
 export function startRecording(config: RecordingConfig): StartRecordingResult {
   if (activeRecording) {
@@ -70,43 +76,61 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
 
   try {
     const recordingId = randomUUID();
-    const tempDir = path.join(app.getPath('temp'), 'recso');
-    const tempPath = path.join(tempDir, `rec_${recordingId}.webm`);
 
-    // Ensure temp directory exists
-    if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir, { recursive: true });
+    // Parse monitor index from sourceId (format: "monitor:1")
+    const monitorIndex = parseInt(config.sourceId.replace('monitor:', ''), 10) || 1;
+
+    // Build output path
+    const ext = '.mp4'; // Native recorder outputs MP4
+    let outputPath = path.join(config.outputDir, `${config.fileName}${ext}`);
+
+    // Handle duplicate file names
+    let counter = 1;
+    while (fs.existsSync(outputPath)) {
+      outputPath = path.join(config.outputDir, `${config.fileName}_${counter}${ext}`);
+      counter++;
     }
 
-    // Create write stream for streaming writes
-    const writeStream = fs.createWriteStream(tempPath, { flags: 'a' });
+    // Ensure output directory exists
+    if (!fs.existsSync(config.outputDir)) {
+      fs.mkdirSync(config.outputDir, { recursive: true });
+    }
 
     // Store in database
     createRecording({
       id: recordingId,
       status: 'recording',
-      tempPath,
+      tempPath: outputPath, // Native recorder writes directly to final path
       finalPath: null,
       outputDir: config.outputDir,
       fileName: config.fileName,
       sourceId: config.sourceId,
       startedAt: Date.now(),
-      windowBounds: null, // Will be updated from renderer
+      windowBounds: null,
+    });
+
+    // Start native recording
+    nativeRecorderService.startRecording({
+      monitorIndex,
+      outputPath,
+      frameRate: config.options?.frameRate ?? 30,
+      bitrate: config.options?.videoBitrate ?? 8_000_000,
+      codec: config.options?.codec as NativeRecordingConfig['codec'],
+      width: config.options?.width,
+      height: config.options?.height,
     });
 
     // Set active recording
     activeRecording = {
       id: recordingId,
-      tempPath,
+      outputPath,
       outputDir: config.outputDir,
       fileName: config.fileName,
-      writeStream,
       state: 'RECORDING' as RecordingState,
       startedAt: Date.now(),
-      bytesWritten: 0,
     };
 
-    console.log('[RecorderService] Started recording:', recordingId);
+    console.log('[RecorderService] Started native recording:', recordingId);
 
     // Start mouse tracking for this recording
     mouseTrackerService.startTracking(recordingId);
@@ -114,7 +138,7 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
     return {
       success: true,
       recordingId,
-      tempPath,
+      tempPath: outputPath,
     };
   } catch (error) {
     console.error('[RecorderService] Failed to start recording:', error);
@@ -127,27 +151,11 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
 
 /**
  * Append a video chunk to the active recording
- * Called repeatedly from renderer as MediaRecorder produces data
+ * @deprecated Not used with native recorder - chunks are handled in Rust
  */
-export function appendChunk(recordingId: string, chunk: Buffer): boolean {
-  if (!activeRecording || activeRecording.id !== recordingId) {
-    console.warn('[RecorderService] No active recording for ID:', recordingId);
-    return false;
-  }
-
-  if (activeRecording.state === 'PAUSED') {
-    // Don't write while paused
-    return true;
-  }
-
-  try {
-    activeRecording.writeStream.write(chunk);
-    activeRecording.bytesWritten += chunk.length;
-    return true;
-  } catch (error) {
-    console.error('[RecorderService] Failed to write chunk:', error);
-    return false;
-  }
+export function appendChunk(_recordingId: string, _chunk: Buffer): boolean {
+  console.warn('[RecorderService] appendChunk is deprecated with native recorder');
+  return true;
 }
 
 /**
@@ -163,45 +171,18 @@ export async function stopRecording(recordingId: string): Promise<StopRecordingR
   console.log('[RecorderService] Mouse events recorded:', mouseEventCount);
 
   try {
-    // Close the write stream
-    await new Promise<void>((resolve, reject) => {
-      activeRecording!.writeStream.end((err: Error | null) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
-
-    // Determine final path
-    const ext = '.webm';
-    let finalPath = path.join(activeRecording.outputDir, `${activeRecording.fileName}${ext}`);
-
-    // Handle duplicate file names
-    let counter = 1;
-    while (fs.existsSync(finalPath)) {
-      finalPath = path.join(
-        activeRecording.outputDir,
-        `${activeRecording.fileName}_${counter}${ext}`,
-      );
-      counter++;
-    }
-
-    // Ensure output directory exists
-    if (!fs.existsSync(activeRecording.outputDir)) {
-      fs.mkdirSync(activeRecording.outputDir, { recursive: true });
-    }
-
-    // Move temp file to final location
-    fs.renameSync(activeRecording.tempPath, finalPath);
+    // Stop native recording (this finalizes the file)
+    const filePath = nativeRecorderService.stopRecording();
 
     // Update database
-    completeRecording(recordingId, finalPath);
+    completeRecording(recordingId, filePath);
 
-    console.log('[RecorderService] Recording saved to:', finalPath);
+    console.log('[RecorderService] Recording saved to:', filePath);
 
     // Clear active recording
     activeRecording = null;
 
-    return { success: true, filePath: finalPath };
+    return { success: true, filePath };
   } catch (error) {
     console.error('[RecorderService] Failed to stop recording:', error);
     return {
@@ -219,6 +200,7 @@ export function pauseRecording(recordingId: string): boolean {
     return false;
   }
 
+  nativeRecorderService.pauseRecording();
   activeRecording.state = 'PAUSED' as RecordingState;
   updateRecordingStatus(recordingId, 'paused');
   console.log('[RecorderService] Recording paused:', recordingId);
@@ -233,6 +215,7 @@ export function resumeRecording(recordingId: string): boolean {
     return false;
   }
 
+  nativeRecorderService.resumeRecording();
   activeRecording.state = 'RECORDING' as RecordingState;
   updateRecordingStatus(recordingId, 'recording');
   console.log('[RecorderService] Recording resumed:', recordingId);
@@ -258,7 +241,7 @@ export function getState(): RecordingStateEvent {
     state: activeRecording.state,
     recordingId: activeRecording.id,
     duration,
-    bytesWritten: activeRecording.bytesWritten,
+    bytesWritten: 0, // Native recorder doesn't report bytes in real-time
   };
 }
 

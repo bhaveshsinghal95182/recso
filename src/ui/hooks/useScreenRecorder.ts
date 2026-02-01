@@ -1,20 +1,18 @@
 /**
  * useScreenRecorder — quick overview:
- * - Manages screen capture in the renderer process using MediaRecorder API.
- * - Streams video chunks to main process for crash-safe disk writes.
+ * - Provides screen recording controls via IPC to native Rust recorder.
+ * - No MediaRecorder or getUserMedia needed - recording happens natively.
  * - Provides start/stop/pause/resume controls and real-time state.
  *
  * Usage:
  *   const { sources, startRecording, stopRecording, state } = useScreenRecorder();
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
-import type { DesktopSource, RecorderState, UseScreenRecorderOptions } from '@/types';
+import type { DesktopSource, RecorderState, RecordingOptions } from '@/types';
 
-export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
-  const { timeslice = 1000, frameRate = 30, audio = false } = options;
-
+export function useScreenRecorder() {
   const [sources, setSources] = useState<DesktopSource[]>([]);
   const [state, setState] = useState<RecorderState>({
     status: 'idle',
@@ -24,10 +22,7 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
   });
   const [error, setError] = useState<string | null>(null);
 
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-
-  // Fetch available sources
+  // Fetch available sources (monitors)
   const refreshSources = useCallback(async () => {
     try {
       const sources = await window.electron.recorder.getSources();
@@ -55,112 +50,52 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
 
     return () => {
       unsubscribe();
-      // Cleanup on unmount
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-      }
     };
   }, [refreshSources]);
 
-  // Start recording
+  // Start recording (native - no getUserMedia needed)
   const startRecording = useCallback(
     async (
       sourceId: string,
       outputDir: string,
       fileName: string,
-      recordingOptions?: { videoBitrate?: number },
+      recordingOptions?: RecordingOptions,
     ) => {
       try {
         setError(null);
 
-        // Get media stream from the source
-
-        const constraints: any = {
-          audio: audio
-            ? {
-                mandatory: {
-                  chromeMediaSource: 'desktop',
-                },
-              }
-            : false,
-          video: {
-            mandatory: {
-              chromeMediaSource: 'desktop',
-              chromeMediaSourceId: sourceId,
-              maxFrameRate: frameRate,
-            },
-          },
-        };
-
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
-        streamRef.current = stream;
-
-        // Start recording in main process
+        // Start recording in main process (native Rust recorder)
         const result = await window.electron.recorder.start({
           sourceId,
           outputDir,
           fileName,
-          options: recordingOptions, // Pass options to backend for metadata
+          options: recordingOptions,
         });
 
         if (!result.success || !result.recordingId) {
           throw new Error(result.error || 'Failed to start recording');
         }
 
-        const recordingId = result.recordingId;
-
-        // Create MediaRecorder
-        const mediaRecorder = new MediaRecorder(stream, {
-          mimeType: 'video/webm;codecs=vp9',
-          videoBitsPerSecond: recordingOptions?.videoBitrate || 5000000, // Default 5 Mbps
-        });
-
-        mediaRecorderRef.current = mediaRecorder;
-
-        // Stream chunks to main process
-        mediaRecorder.ondataavailable = async (event) => {
-          if (event.data.size > 0) {
-            const arrayBuffer = await event.data.arrayBuffer();
-            await window.electron.recorder.appendChunk(recordingId, arrayBuffer);
-          }
-        };
-
-        mediaRecorder.onerror = () => {
-          setError('Recording error occurred');
-        };
-
-        // Start with timeslice for chunked recording
-        mediaRecorder.start(timeslice);
-
         setState({
           status: 'recording',
-          recordingId,
+          recordingId: result.recordingId,
           duration: 0,
           bytesWritten: 0,
         });
 
-        return { success: true, recordingId };
+        return { success: true, recordingId: result.recordingId };
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to start recording';
         setError(message);
         return { success: false, error: message };
       }
     },
-    [audio, frameRate, timeslice],
+    [],
   );
 
   // Stop recording
   const stopRecording = useCallback(async () => {
     try {
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-        mediaRecorderRef.current.stop();
-      }
-
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-        streamRef.current = null;
-      }
-
       if (state.recordingId) {
         const result = await window.electron.recorder.stop(state.recordingId);
         setState({
@@ -182,21 +117,15 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
 
   // Pause recording
   const pauseRecording = useCallback(() => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-      mediaRecorderRef.current.pause();
-      if (state.recordingId) {
-        window.electron.recorder.pause(state.recordingId);
-      }
+    if (state.recordingId) {
+      window.electron.recorder.pause(state.recordingId);
     }
   }, [state.recordingId]);
 
   // Resume recording
   const resumeRecording = useCallback(() => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'paused') {
-      mediaRecorderRef.current.resume();
-      if (state.recordingId) {
-        window.electron.recorder.resume(state.recordingId);
-      }
+    if (state.recordingId) {
+      window.electron.recorder.resume(state.recordingId);
     }
   }, [state.recordingId]);
 
