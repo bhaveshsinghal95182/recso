@@ -110,7 +110,8 @@ export async function startExport(config: ExportConfig): Promise<ExportResult> {
   }
 
   // Create exports folder in project directory
-  const exportsDir = path.join(project.projectFolderPath, 'exports');
+  const recordingDir = path.dirname(project.projectFolderPath);
+  const exportsDir = path.join(recordingDir, 'exports');
   if (!fs.existsSync(exportsDir)) {
     fs.mkdirSync(exportsDir, { recursive: true });
   }
@@ -211,7 +212,8 @@ export function getCurrentJob(): ExportJob | null {
 export function getExportsFolder(): string | null {
   const project = editorService.getActiveProject();
   if (!project) return null;
-  return path.join(project.projectFolderPath, 'exports');
+  const recordingDir = path.dirname(project.projectFolderPath);
+  return path.join(recordingDir, 'exports');
 }
 
 /**
