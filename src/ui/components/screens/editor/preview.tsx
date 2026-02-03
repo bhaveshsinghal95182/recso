@@ -2,6 +2,7 @@ import { Pause, Play } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useEditor } from '../../../context/editor-context';
+import { VerticalTabs } from './vertical-tabs';
 
 export function MinimalPreview() {
   const { project, isPlaying, currentTime, duration, play, pause, seek, updateDuration } =
@@ -152,6 +153,7 @@ export function MinimalPreview() {
           {formatTime(currentTime)} / {formatTime(duration)}
         </span>
       </div>
+      <VerticalTabs />
     </div>
   );
 }

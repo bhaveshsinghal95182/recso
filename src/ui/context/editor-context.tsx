@@ -26,6 +26,9 @@ import type {
   ZoomConfig,
 } from '../types';
 
+// Tabs for the properties panel
+export type PropertiesTab = 'general' | 'cursor' | 'export';
+
 // Editor state interface
 interface EditorState {
   project: Project | null;
@@ -37,6 +40,8 @@ interface EditorState {
   duration: number;
   // Frame state (cursor position at current time)
   frameState: FrameState | null;
+  // Active properties panel tab
+  activePropertiesTab: PropertiesTab;
 }
 
 // Editor actions interface
@@ -54,6 +59,7 @@ interface EditorActions {
   updateZoomConfig: (config: Partial<ZoomConfig>) => void;
   updateDuration: (durationMs: number) => void;
   updateBackgroundColor: (color: string) => void;
+  setActivePropertiesTab: (tab: PropertiesTab) => void;
 }
 
 type EditorContextValue = EditorState & EditorActions;
@@ -74,6 +80,9 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [frameState, setFrameState] = useState<FrameState | null>(null);
+
+  // Active properties tab (default to 'general')
+  const [activePropertiesTab, setActivePropertiesTab] = useState<PropertiesTab>('general');
 
   // Refs for animation frame
   const animationFrameRef = useRef<number | null>(null);
@@ -290,6 +299,7 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
     currentTime,
     duration,
     frameState,
+    activePropertiesTab,
     loadProject,
     saveProject,
     closeProject,
@@ -300,6 +310,7 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
     updateZoomConfig,
     updateDuration,
     updateBackgroundColor,
+    setActivePropertiesTab,
   };
 
   return <EditorContext.Provider value={value}>{children}</EditorContext.Provider>;
