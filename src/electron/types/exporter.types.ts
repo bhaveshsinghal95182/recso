@@ -49,6 +49,10 @@ export interface ExportConfig {
   fps: ExportFPS;
   /** Background color from editor (hex) */
   backgroundColor: string;
+  /** Optional explicit output folder path */
+  outputFolder?: string;
+  /** Optional explicit output filename */
+  outputFilename?: string;
 }
 
 /** Export progress event */

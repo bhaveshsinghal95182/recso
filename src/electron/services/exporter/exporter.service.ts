@@ -14,7 +14,7 @@ import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
 
-import { createFilterContext, getEnabledFilters, getOutputDimensions } from './filters/index.js';
+import { createFilterContext, getEnabledFilters } from './filters/index.js';
 import type {
   ExportConfig,
   ExportJob,
@@ -109,17 +109,28 @@ export async function startExport(config: ExportConfig): Promise<ExportResult> {
     return { success: false, error: `Source video is empty (0 bytes): ${project.rawVideoPath}` };
   }
 
-  // Create exports folder in project directory
+  // Create default exports folder in project directory
   const recordingDir = path.dirname(project.projectFolderPath);
-  const exportsDir = path.join(recordingDir, 'exports');
+  const defaultExportsDir = path.join(recordingDir, 'exports');
+  if (!fs.existsSync(defaultExportsDir)) {
+    fs.mkdirSync(defaultExportsDir, { recursive: true });
+  }
+
+  const exportsDir = config.outputFolder ? config.outputFolder : defaultExportsDir;
   if (!fs.existsSync(exportsDir)) {
     fs.mkdirSync(exportsDir, { recursive: true });
   }
 
   // Generate output filename with timestamp
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const sanitizedName = project.name.replace(/[^a-zA-Z0-9-_]/g, '_');
   const ext = config.format === 'mp4' ? 'mp4' : 'webm';
+  // Use custom filename if provided, else project name
+  let baseNameRaw = config.outputFilename || project.name || 'export';
+  // Remove existing extension if any
+  baseNameRaw = baseNameRaw.replace(new RegExp(`\\.${ext}$`, 'i'), '');
+  // Sanitize filename
+  const sanitizedName = baseNameRaw.replace(/[^a-zA-Z0-9-_]/g, '_');
+
   const outputPath = path.join(exportsDir, `${sanitizedName}_${timestamp}.${ext}`);
 
   // Create job

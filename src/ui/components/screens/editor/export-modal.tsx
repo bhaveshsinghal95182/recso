@@ -77,6 +77,8 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
   const [format, setFormat] = useState<ExportFormat>('mp4');
   const [quality, setQuality] = useState<ExportQuality>('high');
   const [fps, setFps] = useState<ExportFPS>(30);
+  const [fileName, setFileName] = useState<string>('');
+  const [outputFolder, setOutputFolder] = useState<string>('');
 
   // Export state
   const [step, setStep] = useState<ExportStep>('configure');
@@ -114,6 +116,8 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
       quality,
       fps,
       backgroundColor: project.backgroundColor || '#000000',
+      outputFolder: outputFolder || undefined,
+      outputFilename: fileName || undefined,
     };
 
     setStep('exporting');
@@ -160,6 +164,23 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
     const secs = Math.round(seconds % 60);
     return `${mins}m ${secs}s remaining`;
   };
+
+  const handleChooseOutput = useCallback(async () => {
+    if (!project) return;
+    const defaultExt = format;
+    const defaultName = `${fileName || project.name}.${defaultExt}`;
+    const chosen = await window.electron.recorder.showSaveDialog(defaultName);
+    if (chosen) {
+      // Normalize separators and split
+      const parts = chosen.replace(/\\/g, '/').split('/');
+      const chosenFile = parts.pop() || defaultName;
+      const chosenFolder = parts.join('/');
+      // Remove extension if present
+      const nameNoExt = chosenFile.replace(new RegExp(`\\.${defaultExt}$`, 'i'), '');
+      setFileName(nameNoExt);
+      setOutputFolder(chosenFolder);
+    }
+  }, []);
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -283,6 +304,27 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+
+              {/* Output Folder and Filename */}
+              <div className="space-y-2">
+                <Label>Output</Label>
+                <div className="flex gap-2">
+                  <Input
+                    value={fileName}
+                    onChange={(e) => setFileName(e.target.value)}
+                    placeholder="File name"
+                  />
+                  <Button onClick={handleChooseOutput} variant="outline">
+                    <FolderOpen className="size-4" />
+                    Choose...
+                  </Button>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {outputFolder
+                    ? `${outputFolder}/${fileName}.${format}`
+                    : `Will export to default exports folder`}
+                </div>
               </div>
 
               {/* Export Button */}
