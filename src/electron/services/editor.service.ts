@@ -22,6 +22,7 @@ import type {
   ZoomConfig,
 } from '../types/project.types.js';
 import { DEFAULT_CURSOR_CONFIG, DEFAULT_ZOOM_CONFIG } from '../types/project.types.js';
+import * as CompositorService from './compositor.service.js';
 import { getRecording } from './database.service.js';
 import { type ClickEvent, mouseTrackerService } from './mouse-tracker.service.js';
 import * as projectStorage from './project-storage.service.js';
@@ -169,6 +170,12 @@ export function updateBackgroundColor(color: string): boolean {
 
   activeProject.backgroundColor = color;
   activeProject.modifiedAt = Date.now();
+
+  try {
+    CompositorService.setBackgroundColor(color);
+  } catch (err) {
+    console.warn('[EditorService] Failed to update compositor background color:', err);
+  }
 
   // Auto-save metadata
   projectStorage.saveProjectMetadata(activeProject);

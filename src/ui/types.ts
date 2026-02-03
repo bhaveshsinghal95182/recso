@@ -162,3 +162,66 @@ export interface FrameState {
   timeMs: number;
   cursor: TransformedCursorPosition | null;
 }
+
+// --- Exporter Types ---
+
+/** Supported output resolutions */
+export type ExportResolution = '720p' | '1080p' | '4k' | 'custom';
+
+/** Supported output formats */
+export type ExportFormat = 'mp4' | 'webm';
+
+/** Quality presets */
+export type ExportQuality = 'low' | 'medium' | 'high' | 'lossless';
+
+/** Supported frame rates */
+export type ExportFPS = 24 | 30 | 60;
+
+/** Export configuration from UI */
+export interface ExportConfig {
+  /** Target resolution preset */
+  resolution: ExportResolution;
+  /** Custom width (only used when resolution is 'custom') */
+  customWidth?: number;
+  /** Custom height (only used when resolution is 'custom') */
+  customHeight?: number;
+  /** Output format (mp4 or webm) */
+  format: ExportFormat;
+  /** Quality preset */
+  quality: ExportQuality;
+  /** Target frame rate */
+  fps: ExportFPS;
+  /** Background color from editor (hex) */
+  backgroundColor: string;
+}
+
+/** Export progress event */
+export interface ExportProgress {
+  /** Progress percentage (0-100) */
+  percent: number;
+  /** Current frame being processed */
+  currentFrame: number;
+  /** Total frames in video */
+  totalFrames: number;
+  /** Current encoding speed in fps */
+  fps: number;
+  /** Estimated seconds remaining */
+  eta: number;
+}
+
+/** Export result */
+export interface ExportResult {
+  /** Whether export completed successfully */
+  success: boolean;
+  /** Path to exported file (on success) */
+  outputPath?: string;
+  /** Video duration in seconds */
+  duration?: number;
+  /** File size in bytes */
+  fileSize?: number;
+  /** Error message (on failure) */
+  error?: string;
+}
+
+/** Export job state */
+export type ExportState = 'idle' | 'exporting' | 'cancelled' | 'completed' | 'error';

@@ -1,15 +1,7 @@
 {
   "appId": "com.recso.app",
-  "files": [
-    "dist-electron/**/*",
-    "dist-react/**/*",
-    "package.json",
-    "!**/velocity/src/**",
-    "!**/velocity/target/**",
-    "!**/velocity/Cargo.*",
-    "!**/velocity/.*"
-  ],
-  "asarUnpack": ["**/velocity/*.node"],
+  "files": ["dist-electron/**/*", "dist-react/**/*", "package.json"],
+  "asarUnpack": ["node_modules/ffmpeg-static/**", "node_modules/ffprobe-static/**"],
   "extraResources": ["dist-electron/preload.cjs", "public/**/*"],
   "icon": "./public/R.png",
   "mac": {

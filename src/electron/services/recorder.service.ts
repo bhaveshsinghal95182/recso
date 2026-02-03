@@ -142,7 +142,22 @@ export function appendChunk(recordingId: string, chunk: Buffer): boolean {
 
   try {
     activeRecording.writeStream.write(chunk);
+
+    const oldBytes = activeRecording.bytesWritten;
     activeRecording.bytesWritten += chunk.length;
+
+    // Log first chunk and every ~5MB
+    if (oldBytes === 0) {
+      console.log('[RecorderService] First chunk written. Size:', chunk.length);
+    } else if (
+      Math.floor(activeRecording.bytesWritten / (5 * 1024 * 1024)) >
+      Math.floor(oldBytes / (5 * 1024 * 1024))
+    ) {
+      console.log(
+        `[RecorderService] Written ${(activeRecording.bytesWritten / 1024 / 1024).toFixed(2)} MB...`,
+      );
+    }
+
     return true;
   } catch (error) {
     console.error('[RecorderService] Failed to write chunk:', error);
@@ -166,6 +181,14 @@ export async function stopRecording(recordingId: string): Promise<StopRecordingR
         else resolve();
       });
     });
+
+    // Check final file size
+    const stats = fs.statSync(activeRecording.tempPath);
+    if (stats.size === 0) {
+      console.error('[RecorderService] WARNING: Recording resulted in 0-byte file!');
+    } else {
+      console.log('[RecorderService] Recording finished. Size:', stats.size);
+    }
 
     // Ensure root output directory exists
     if (!fs.existsSync(activeRecording.outputDir)) {

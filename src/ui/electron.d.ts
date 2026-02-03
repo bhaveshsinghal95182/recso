@@ -1,6 +1,10 @@
 import type {
   CursorConfig,
   DesktopSource,
+  ExportConfig,
+  ExportProgress,
+  ExportResult,
+  ExportState,
   FrameState,
   OrphanedRecording,
   Project,
@@ -194,6 +198,44 @@ interface ElectronAPI {
 
     /** Generate spritesheet for timeline thumbnails */
     generateSpritesheet: (intervalMs?: number) => Promise<SpritesheetMeta | null>;
+  };
+
+  exporter: {
+    /** Start export with configuration */
+    start: (config: ExportConfig) => Promise<ExportResult>;
+
+    /** Cancel ongoing export */
+    cancel: () => Promise<boolean>;
+
+    /** Get current progress */
+    getProgress: () => Promise<ExportProgress | null>;
+
+    /** Get current export state */
+    getState: () => Promise<ExportState>;
+
+    /** Get current job info */
+    getJob: () => Promise<{
+      id: string;
+      projectId: string;
+      state: ExportState;
+      config: ExportConfig;
+      outputPath: string;
+      progress: ExportProgress;
+      startedAt: number;
+      error?: string;
+    } | null>;
+
+    /** Get exports folder path */
+    getExportsFolder: () => Promise<string | null>;
+
+    /** Open exports folder in file explorer */
+    openExportsFolder: () => Promise<boolean>;
+
+    /** Show file in folder */
+    showInFolder: (filePath: string) => Promise<boolean>;
+
+    /** Subscribe to progress updates */
+    onProgress: (callback: (progress: ExportProgress) => void) => () => void;
   };
 }
 

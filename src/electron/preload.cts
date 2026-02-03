@@ -176,6 +176,50 @@ electron.contextBridge.exposeInMainWorld('electron', {
       electron.ipcRenderer.invoke('editor:generate-spritesheet', intervalMs),
   },
 
+  // Exporter
+  exporter: {
+    /** Start export with configuration */
+    start: (config: Record<string, unknown>) =>
+      electron.ipcRenderer.invoke('exporter:start', config),
+
+    /** Cancel ongoing export */
+    cancel: (): Promise<boolean> => electron.ipcRenderer.invoke('exporter:cancel'),
+
+    /** Get current progress */
+    getProgress: () => electron.ipcRenderer.invoke('exporter:get-progress'),
+
+    /** Get current export state */
+    getState: (): Promise<string> => electron.ipcRenderer.invoke('exporter:get-state'),
+
+    /** Get current job info */
+    getJob: () => electron.ipcRenderer.invoke('exporter:get-job'),
+
+    /** Get exports folder path */
+    getExportsFolder: (): Promise<string | null> =>
+      electron.ipcRenderer.invoke('exporter:get-exports-folder'),
+
+    /** Open exports folder in file explorer */
+    openExportsFolder: (): Promise<boolean> =>
+      electron.ipcRenderer.invoke('exporter:open-exports-folder'),
+
+    /** Show file in folder */
+    showInFolder: (filePath: string): Promise<boolean> =>
+      electron.ipcRenderer.invoke('exporter:show-in-folder', filePath),
+
+    /** Subscribe to progress updates */
+    onProgress: (callback: (progress: Record<string, unknown>) => void) => {
+      electron.ipcRenderer.send('exporter:subscribe-progress');
+      const handler = (_event: IpcRendererEvent, progress: Record<string, unknown>) =>
+        callback(progress);
+      electron.ipcRenderer.on('exporter:progress', handler);
+      // Return unsubscribe function
+      return () => {
+        electron.ipcRenderer.send('exporter:unsubscribe-progress');
+        electron.ipcRenderer.removeListener('exporter:progress', handler);
+      };
+    },
+  },
+
   // Debug tools
   debug: {
     getMouseStatus: () => electron.ipcRenderer.invoke('debug:get-mouse-status'),
