@@ -25,53 +25,11 @@ import type {
 import { QUALITY_CRF_MAP } from '../../types/exporter.types.js';
 import type { Project } from '../../types/project.types.js';
 import * as editorService from '../editor.service.js';
-
-let ffmpegPath: string | null = null;
-let ffprobePath: string | null = null;
-let ffmpegInitialized = false;
+import * as ffmpegService from '../ffmpeg.service.js';
 
 /**
  * Lazily initialize FFmpeg path
  */
-async function ensureFfmpegInitialized(): Promise<void> {
-  if (ffmpegInitialized) return;
-
-  try {
-    const ffmpegStatic = await import('ffmpeg-static');
-    const ffprobeStatic = await import('ffprobe-static');
-
-    // @ts-expect-error - ffmpeg-static types are sometimes weird with default export
-    let rawFfmpegPath = (ffmpegStatic.default as string) || null;
-    let rawFfprobePath = ffprobeStatic.default?.path || null;
-
-    // Fix paths for production (asar)
-    if (rawFfmpegPath && rawFfmpegPath.includes('app.asar')) {
-      rawFfmpegPath = rawFfmpegPath.replace('app.asar', 'app.asar.unpacked');
-    }
-    if (rawFfprobePath && rawFfprobePath.includes('app.asar')) {
-      rawFfprobePath = rawFfprobePath.replace('app.asar', 'app.asar.unpacked');
-    }
-
-    ffmpegPath = rawFfmpegPath;
-    ffprobePath = rawFfprobePath;
-
-    if (ffmpegPath) {
-      console.log('[ExporterService] FFmpeg initialized:', ffmpegPath);
-    } else {
-      console.error('[ExporterService] FFmpeg path not found!');
-    }
-
-    if (ffprobePath) {
-      console.log('[ExporterService] FFprobe initialized:', ffprobePath);
-    } else {
-      console.error('[ExporterService] FFprobe path not found!');
-    }
-
-    ffmpegInitialized = true;
-  } catch (err) {
-    console.error('[ExporterService] Failed to initialize ffmpeg-static:', err);
-  }
-}
 
 /** Event emitter for progress updates */
 export const exporterEvents = new EventEmitter();
@@ -87,7 +45,7 @@ let ffmpegProcess: ChildProcess | null = null;
  */
 export async function startExport(config: ExportConfig): Promise<ExportResult> {
   // Initialize FFmpeg lazily on first export
-  await ensureFfmpegInitialized();
+  await ffmpegService.ensureInitialized();
 
   const project = editorService.getActiveProject();
 
@@ -235,43 +193,14 @@ async function runFFmpegPipeline(
   config: ExportConfig,
   outputPath: string,
 ): Promise<ExportResult> {
-  if (!ffmpegPath || !ffprobePath) {
-    throw new Error('FFmpeg/FFprobe not initialized');
+  const ffmpegPath = ffmpegService.getFfmpegPath();
+  if (!ffmpegPath) {
+    throw new Error('FFmpeg not initialized');
   }
 
-  // 1. Probe video duration first to validate input
-  const videoDuration = await new Promise<number>((resolve, reject) => {
-    // We can't use fluent-ffmpeg anymore, so we spawn ffprobe manually
-    // or we could keep fluent-ffmpeg just for probing, but better to remove it entirely.
-    // Let's use spawn for ffprobe too.
-    const ffprobe = spawn(ffprobePath!, [
-      '-v',
-      'error',
-      '-show_entries',
-      'format=duration',
-      '-of',
-      'default=noprint_wrappers=1:nokey=1',
-      project.rawVideoPath,
-    ]);
-
-    let output = '';
-    ffprobe.stdout.on('data', (data) => {
-      output += data.toString();
-    });
-
-    ffprobe.on('close', (code) => {
-      if (code === 0) {
-        const duration = parseFloat(output.trim());
-        resolve(isNaN(duration) ? 0 : duration);
-      } else {
-        reject(new Error(`FFprobe exited with code ${code}`));
-      }
-    });
-
-    ffprobe.on('error', (err) => {
-      reject(err);
-    });
-  });
+  // 1. Probe video duration
+  const metadata = await ffmpegService.probeVideo(project.rawVideoPath);
+  const videoDuration = metadata.duration;
 
   if (videoDuration === 0) {
     throw new Error('Source video duration is 0 seconds');
@@ -333,10 +262,10 @@ async function runFFmpegPipeline(
     // Output path
     args.push(outputPath);
 
-    console.log('[ExporterService] FFmpeg command:', ffmpegPath!, args.join(' '));
+    console.log('[ExporterService] FFmpeg command:', ffmpegPath, args.join(' '));
 
     // Spawn process
-    const child = spawn(ffmpegPath!, args);
+    const child = spawn(ffmpegPath, args);
     ffmpegProcess = child;
 
     // Handle progress

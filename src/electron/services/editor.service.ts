@@ -25,6 +25,7 @@ import type {
 import { DEFAULT_CURSOR_CONFIG, DEFAULT_ZOOM_CONFIG } from '../types/project.types.js';
 import * as CompositorService from './compositor.service.js';
 import { getRecording } from './database.service.js';
+import * as ffmpegService from './ffmpeg.service.js';
 import { type ClickEvent, mouseTrackerService } from './mouse-tracker.service.js';
 import * as projectStorage from './project-storage.service.js';
 
@@ -37,7 +38,7 @@ const clickEventsCache = new Map<string, ClickEvent[]>();
 /**
  * Create a new editing project from a recording
  */
-export function createProject(recordingId: string): Project | null {
+export async function createProject(recordingId: string): Promise<Project | null> {
   const recording = getRecording(recordingId);
   if (!recording) {
     console.error('[EditorService] Recording not found:', recordingId);
@@ -47,6 +48,18 @@ export function createProject(recordingId: string): Project | null {
   if (!recording.finalPath || !fs.existsSync(recording.finalPath)) {
     console.error('[EditorService] Recording file not found:', recording.finalPath);
     return null;
+  }
+
+  // Probe video for metadata
+  await ffmpegService.ensureInitialized();
+  let metadata;
+  try {
+    metadata = await ffmpegService.probeVideo(recording.finalPath);
+    console.log('[EditorService] Probed video metadata:', metadata);
+  } catch (err) {
+    console.error('[EditorService] Failed to probe video:', err);
+    // Fallback to defaults if probe fails
+    metadata = { width: 1920, height: 1080, duration: 0 };
   }
 
   // Get the recording directory and init .recso folder
@@ -62,8 +75,8 @@ export function createProject(recordingId: string): Project | null {
     recordingId,
     projectFolderPath,
     rawVideoPath: recording.finalPath,
-    videoDimensions: { width: 1920, height: 1080 }, // TODO: Extract from video metadata
-    timeline: createDefaultTimeline(),
+    videoDimensions: { width: metadata.width, height: metadata.height },
+    timeline: { ...createDefaultTimeline(), duration: metadata.duration * 1000 },
     cursorConfig: { ...DEFAULT_CURSOR_CONFIG },
     zoomConfig: { ...DEFAULT_ZOOM_CONFIG },
     spritesheetMeta,
