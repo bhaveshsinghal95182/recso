@@ -28,7 +28,11 @@ const filters: ExportFilter[] = [
 /**
  * Create a filter context from project and config
  */
-export function createFilterContext(project: Project, config: ExportConfig): FilterContext {
+export function createFilterContext(
+  project: Project,
+  config: ExportConfig,
+  videoDuration: number,
+): FilterContext {
   const { width, height } = getOutputDimensions(config);
 
   return {
@@ -36,6 +40,7 @@ export function createFilterContext(project: Project, config: ExportConfig): Fil
     config,
     outputWidth: width,
     outputHeight: height,
+    videoDuration,
   };
 }
 

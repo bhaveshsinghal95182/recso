@@ -23,6 +23,8 @@ export interface FilterContext {
   /** Output dimensions (resolved from config) */
   outputWidth: number;
   outputHeight: number;
+  /** Duration of the source video in seconds */
+  videoDuration: number;
 }
 
 /**

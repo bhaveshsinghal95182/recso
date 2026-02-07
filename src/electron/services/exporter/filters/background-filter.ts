@@ -25,6 +25,7 @@ export const backgroundFilter: ExportFilter = {
 
     const canvasW = canvasSize.width;
     const canvasH = canvasSize.height;
+    const videoDuration = context.videoDuration;
 
     if (compositorConfig.backgroundPath) {
       const bgPath = compositorConfig.backgroundPath.replace(/\\/g, '/').replace(/:/g, '\\:');
@@ -41,11 +42,12 @@ export const backgroundFilter: ExportFilter = {
         compositorConfig.backgroundColor || context.project.backgroundColor || '#000000';
       const ffmpegColor = bgColor.startsWith('#') ? bgColor.slice(1) : bgColor;
 
-      // create solid color background and overlay the scaled input
+      // create solid color background with duration matching video to prevent infinite frames
+      // The color filter generates infinite frames by default, so we must specify duration
       const complex =
-        `color=s=${canvasW}x${canvasH}:c=0x${ffmpegColor}[bg];` +
+        `color=s=${canvasW}x${canvasH}:c=0x${ffmpegColor}:d=${videoDuration}[bg];` +
         `[0:v]scale=${layout.width}:${layout.height}:flags=lanczos[vsc];` +
-        `[bg][vsc]overlay=${layout.x}:${layout.y}`;
+        `[bg][vsc]overlay=${layout.x}:${layout.y}:shortest=1`;
 
       return [complex];
     }

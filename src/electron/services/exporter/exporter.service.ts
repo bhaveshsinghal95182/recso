@@ -287,7 +287,7 @@ async function runFFmpegPipeline(
 
   return new Promise((resolve, reject) => {
     // Create filter context
-    const context = createFilterContext(project, config);
+    const context = createFilterContext(project, config, videoDuration);
 
     // Get enabled filters
     const enabledFilters = getEnabledFilters(context);
