@@ -18,8 +18,8 @@ import { scalingFilter } from './scaling-filter.js';
  * Add new filters to this array to include them in exports.
  */
 const filters: ExportFilter[] = [
-  cutFilter, // Priority 5 - Cut regions first at source resolution
   backgroundFilter, // Priority 10 - Apply background at original resolution
+  cutFilter, // Priority 50 - Cut AFTER compositing to avoid duration issues
   scalingFilter, // Priority 90 - Scale to output resolution last
   // Future filters:
   // cursorOverlayFilter,

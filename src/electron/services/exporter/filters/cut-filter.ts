@@ -10,7 +10,7 @@ import type { ExportFilter, FilterContext } from './base-filter.js';
 
 export const cutFilter: ExportFilter = {
   name: 'cut',
-  priority: 5, // Apply before background/scaling to cut at source resolution
+  priority: 50, // Apply AFTER background filter - cuts from composited video
 
   isEnabled(context: FilterContext): boolean {
     // Only enable if there are cuts defined
