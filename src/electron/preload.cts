@@ -174,6 +174,20 @@ electron.contextBridge.exposeInMainWorld('electron', {
 
     generateSpritesheet: (intervalMs?: number) =>
       electron.ipcRenderer.invoke('editor:generate-spritesheet', intervalMs),
+
+    /** Get all cut regions */
+    getCuts: () => electron.ipcRenderer.invoke('editor:get-cuts'),
+
+    /** Add a new cut region */
+    addCut: (cut: { id: string; startMs: number; endMs: number }) =>
+      electron.ipcRenderer.invoke('editor:add-cut', cut),
+
+    /** Remove a cut region by ID */
+    removeCut: (cutId: string) => electron.ipcRenderer.invoke('editor:remove-cut', cutId),
+
+    /** Update a cut region */
+    updateCut: (cut: { id: string; startMs: number; endMs: number }) =>
+      electron.ipcRenderer.invoke('editor:update-cut', cut),
   },
 
   // Exporter

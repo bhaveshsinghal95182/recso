@@ -13,6 +13,7 @@ import { randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
+import type { CutRegion } from '../types/cut.types.js';
 import type {
   CursorConfig,
   FrameState,
@@ -67,6 +68,7 @@ export function createProject(recordingId: string): Project | null {
     zoomConfig: { ...DEFAULT_ZOOM_CONFIG },
     spritesheetMeta,
     backgroundColor: '#000000',
+    cuts: [],
     createdAt: Date.now(),
     modifiedAt: Date.now(),
   };
@@ -178,6 +180,67 @@ export function updateBackgroundColor(color: string): boolean {
   }
 
   // Auto-save metadata
+  projectStorage.saveProjectMetadata(activeProject);
+  return true;
+}
+
+/**
+ * Get all cut regions
+ */
+export function getCuts(): CutRegion[] {
+  if (!activeProject) return [];
+  return activeProject.cuts || [];
+}
+
+/**
+ * Add a new cut region
+ */
+export function addCut(cut: CutRegion): boolean {
+  if (!activeProject) return false;
+
+  // Initialize cuts array if not present
+  if (!activeProject.cuts) {
+    activeProject.cuts = [];
+  }
+
+  // Check for overlaps and merge if needed
+  activeProject.cuts.push(cut);
+  activeProject.cuts.sort((a, b) => a.startMs - b.startMs);
+  activeProject.modifiedAt = Date.now();
+
+  projectStorage.saveProjectMetadata(activeProject);
+  return true;
+}
+
+/**
+ * Remove a cut region by ID
+ */
+export function removeCut(cutId: string): boolean {
+  if (!activeProject || !activeProject.cuts) return false;
+
+  const index = activeProject.cuts.findIndex((c) => c.id === cutId);
+  if (index === -1) return false;
+
+  activeProject.cuts.splice(index, 1);
+  activeProject.modifiedAt = Date.now();
+
+  projectStorage.saveProjectMetadata(activeProject);
+  return true;
+}
+
+/**
+ * Update a cut region
+ */
+export function updateCut(cut: CutRegion): boolean {
+  if (!activeProject || !activeProject.cuts) return false;
+
+  const index = activeProject.cuts.findIndex((c) => c.id === cut.id);
+  if (index === -1) return false;
+
+  activeProject.cuts[index] = cut;
+  activeProject.cuts.sort((a, b) => a.startMs - b.startMs);
+  activeProject.modifiedAt = Date.now();
+
   projectStorage.saveProjectMetadata(activeProject);
   return true;
 }

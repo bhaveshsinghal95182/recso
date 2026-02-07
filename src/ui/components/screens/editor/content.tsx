@@ -2,6 +2,7 @@ import { useEditor } from '../../../context/editor-context';
 import { EditorLayout } from './editor-layout';
 import { MinimalPreview } from './preview';
 import { PropertiesPanel } from './properties-panel';
+import { Timeline } from './timeline';
 
 export function EditorContent() {
   const { project, isLoading, error } = useEditor();
@@ -35,7 +36,7 @@ export function EditorContent() {
     <EditorLayout
       viewport={<MinimalPreview />}
       properties={<PropertiesPanel />}
-      timeline={<div className="p-4 text-muted-foreground text-sm">Timeline placeholder</div>}
+      timeline={<Timeline />}
     />
   );
 }

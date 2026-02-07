@@ -1,3 +1,4 @@
+import type { CutRegion } from './cut.types.js';
 import type { SpritesheetMeta } from './spritesheet.types.js';
 
 /**
@@ -108,6 +109,8 @@ export interface Project {
   backgroundPath?: string;
   /** Background color (hex) */
   backgroundColor: string;
+  /** Cut regions to exclude from export */
+  cuts: CutRegion[];
   /** Project creation timestamp */
   createdAt: number;
   /** Last modified timestamp */

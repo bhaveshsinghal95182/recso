@@ -5,8 +5,7 @@ import { useEditor } from '../../../context/editor-context';
 import { VerticalTabs } from './vertical-tabs';
 
 export function MinimalPreview() {
-  const { project, isPlaying, currentTime, duration, play, pause, seek, updateDuration } =
-    useEditor();
+  const { project, isPlaying, currentTime, play, pause, updateDuration } = useEditor();
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -105,17 +104,6 @@ export function MinimalPreview() {
     else play();
   }, [isPlaying, play, pause]);
 
-  const handleSeek = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => seek(Number(e.target.value)),
-    [seek],
-  );
-
-  const formatTime = (ms: number) => {
-    const s = Math.floor(ms / 1000);
-    const m = Math.floor(s / 60);
-    return `${m}:${(s % 60).toString().padStart(2, '0')}`;
-  };
-
   if (!project) return null;
 
   return (
@@ -129,30 +117,17 @@ export function MinimalPreview() {
         height={540}
       />
 
-      {/* Minimal controls */}
-      <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex gap-3 items-center bg-black/60 backdrop-blur px-4 py-2 rounded-full">
-        <button
-          onClick={handlePlayPause}
-          className="text-white bg-transparent border-0 cursor-pointer p-1 hover:opacity-80 flex items-center justify-center"
-        >
-          {isPlaying ? (
-            <Pause className="w-4 h-4 fill-white" />
-          ) : (
-            <Play className="w-4 h-4 fill-white" />
-          )}
-        </button>
-        <input
-          type="range"
-          min={0}
-          max={duration}
-          value={currentTime}
-          onChange={handleSeek}
-          className="w-48 accent-primary h-1 cursor-pointer"
-        />
-        <span className="text-xs text-gray-300 font-mono">
-          {formatTime(currentTime)} / {formatTime(duration)}
-        </span>
-      </div>
+      {/* Play/Pause button overlay */}
+      <button
+        onClick={handlePlayPause}
+        className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-black/60 backdrop-blur px-4 py-3 rounded-full text-white border-0 cursor-pointer hover:bg-black/70 transition-colors flex items-center justify-center"
+      >
+        {isPlaying ? (
+          <Pause className="w-5 h-5 fill-white" />
+        ) : (
+          <Play className="w-5 h-5 fill-white" />
+        )}
+      </button>
       <VerticalTabs />
     </div>
   );

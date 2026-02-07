@@ -12,6 +12,7 @@ import { ipcMain } from 'electron';
 
 import * as editorService from '../services/editor.service.js';
 import * as projectStorage from '../services/project-storage.service.js';
+import type { CutRegion } from '../types/cut.types.js';
 import type { CursorConfig, ZoomConfig } from '../types/project.types.js';
 
 /**
@@ -111,6 +112,26 @@ export function registerEditorHandlers(): void {
     }
 
     return meta;
+  });
+
+  // Get all cut regions
+  ipcMain.handle('editor:get-cuts', async () => {
+    return editorService.getCuts();
+  });
+
+  // Add a new cut region
+  ipcMain.handle('editor:add-cut', async (_event, cut: CutRegion) => {
+    return editorService.addCut(cut);
+  });
+
+  // Remove a cut region
+  ipcMain.handle('editor:remove-cut', async (_event, cutId: string) => {
+    return editorService.removeCut(cutId);
+  });
+
+  // Update a cut region
+  ipcMain.handle('editor:update-cut', async (_event, cut: CutRegion) => {
+    return editorService.updateCut(cut);
   });
 
   console.log('[EditorIPC] Handlers registered');

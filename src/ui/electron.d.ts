@@ -1,5 +1,6 @@
 import type {
   CursorConfig,
+  CutRegion,
   DesktopSource,
   ExportConfig,
   ExportProgress,
@@ -198,6 +199,18 @@ interface ElectronAPI {
 
     /** Generate spritesheet for timeline thumbnails */
     generateSpritesheet: (intervalMs?: number) => Promise<SpritesheetMeta | null>;
+
+    /** Get all cut regions */
+    getCuts: () => Promise<CutRegion[]>;
+
+    /** Add a new cut region */
+    addCut: (cut: CutRegion) => Promise<boolean>;
+
+    /** Remove a cut region by ID */
+    removeCut: (cutId: string) => Promise<boolean>;
+
+    /** Update a cut region */
+    updateCut: (cut: CutRegion) => Promise<boolean>;
   };
 
   exporter: {

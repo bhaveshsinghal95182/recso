@@ -20,6 +20,7 @@ import {
 
 import type {
   CursorConfig,
+  CutRegion,
   FrameState,
   Project,
   TransformedCursorPosition,
@@ -42,6 +43,9 @@ interface EditorState {
   frameState: FrameState | null;
   // Active properties panel tab
   activePropertiesTab: PropertiesTab;
+  // Cut regions
+  cuts: CutRegion[];
+  selectedCutId: string | null;
 }
 
 // Editor actions interface
@@ -60,6 +64,11 @@ interface EditorActions {
   updateDuration: (durationMs: number) => void;
   updateBackgroundColor: (color: string) => void;
   setActivePropertiesTab: (tab: PropertiesTab) => void;
+  // Cut management
+  addCut: (startMs: number, endMs: number) => Promise<void>;
+  removeCut: (cutId: string) => Promise<void>;
+  updateCut: (cut: CutRegion) => Promise<void>;
+  setSelectedCut: (cutId: string | null) => void;
 }
 
 type EditorContextValue = EditorState & EditorActions;
@@ -83,6 +92,10 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
 
   // Active properties tab (default to 'general')
   const [activePropertiesTab, setActivePropertiesTab] = useState<PropertiesTab>('general');
+
+  // Cut regions state
+  const [cuts, setCuts] = useState<CutRegion[]>([]);
+  const [selectedCutId, setSelectedCut] = useState<string | null>(null);
 
   // Refs for animation frame
   const animationFrameRef = useRef<number | null>(null);
@@ -167,6 +180,8 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
 
       setProject(proj);
       setDuration(proj.timeline.duration || 0);
+      setCuts(proj.cuts || []);
+      setSelectedCut(null);
       setCurrentTime(0);
       setIsLoading(false);
       return true;
@@ -291,6 +306,78 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
     [project],
   );
 
+  // Cut management actions
+  const addCut = useCallback(
+    async (startMs: number, endMs: number) => {
+      if (!project) return;
+
+      const newCut: CutRegion = {
+        id: crypto.randomUUID(),
+        startMs,
+        endMs,
+      };
+
+      try {
+        await window.electron.editor.addCut(newCut);
+        setCuts((prev) => [...prev, newCut].sort((a, b) => a.startMs - b.startMs));
+        setProject((prev) =>
+          prev
+            ? { ...prev, cuts: [...prev.cuts, newCut].sort((a, b) => a.startMs - b.startMs) }
+            : null,
+        );
+      } catch (err) {
+        console.error('[EditorContext] addCut error:', err);
+      }
+    },
+    [project],
+  );
+
+  const removeCut = useCallback(
+    async (cutId: string) => {
+      if (!project) return;
+
+      try {
+        await window.electron.editor.removeCut(cutId);
+        setCuts((prev) => prev.filter((c) => c.id !== cutId));
+        setProject((prev) =>
+          prev ? { ...prev, cuts: prev.cuts.filter((c) => c.id !== cutId) } : null,
+        );
+        if (selectedCutId === cutId) {
+          setSelectedCut(null);
+        }
+      } catch (err) {
+        console.error('[EditorContext] removeCut error:', err);
+      }
+    },
+    [project, selectedCutId],
+  );
+
+  const updateCut = useCallback(
+    async (cut: CutRegion) => {
+      if (!project) return;
+
+      try {
+        await window.electron.editor.updateCut(cut);
+        setCuts((prev) =>
+          prev.map((c) => (c.id === cut.id ? cut : c)).sort((a, b) => a.startMs - b.startMs),
+        );
+        setProject((prev) =>
+          prev
+            ? {
+                ...prev,
+                cuts: prev.cuts
+                  .map((c) => (c.id === cut.id ? cut : c))
+                  .sort((a, b) => a.startMs - b.startMs),
+              }
+            : null,
+        );
+      } catch (err) {
+        console.error('[EditorContext] updateCut error:', err);
+      }
+    },
+    [project],
+  );
+
   const value: EditorContextValue = {
     project,
     isLoading,
@@ -300,6 +387,8 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
     duration,
     frameState,
     activePropertiesTab,
+    cuts,
+    selectedCutId,
     loadProject,
     saveProject,
     closeProject,
@@ -311,6 +400,10 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
     updateDuration,
     updateBackgroundColor,
     setActivePropertiesTab,
+    addCut,
+    removeCut,
+    updateCut,
+    setSelectedCut,
   };
 
   return <EditorContext.Provider value={value}>{children}</EditorContext.Provider>;

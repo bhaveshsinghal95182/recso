@@ -10,6 +10,7 @@ import { RESOLUTION_MAP } from '../../../types/exporter.types.js';
 import type { Project } from '../../../types/project.types.js';
 import { backgroundFilter } from './background-filter.js';
 import type { ExportFilter, FilterContext } from './base-filter.js';
+import { cutFilter } from './cut-filter.js';
 import { scalingFilter } from './scaling-filter.js';
 
 /**
@@ -17,6 +18,7 @@ import { scalingFilter } from './scaling-filter.js';
  * Add new filters to this array to include them in exports.
  */
 const filters: ExportFilter[] = [
+  cutFilter, // Priority 5 - Cut regions first at source resolution
   backgroundFilter, // Priority 10 - Apply background at original resolution
   scalingFilter, // Priority 90 - Scale to output resolution last
   // Future filters:

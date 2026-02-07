@@ -128,6 +128,16 @@ export interface SpritesheetMeta {
   imagePath: string;
 }
 
+/** A region of the video to be cut (excluded) from export */
+export interface CutRegion {
+  /** Unique identifier for the cut */
+  id: string;
+  /** Start time of the cut in milliseconds */
+  startMs: number;
+  /** End time of the cut in milliseconds */
+  endMs: number;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -144,6 +154,7 @@ export interface Project {
   spritesheetMeta: SpritesheetMeta | null;
   backgroundPath?: string;
   backgroundColor: string;
+  cuts: CutRegion[];
   createdAt: number;
   modifiedAt: number;
 }
