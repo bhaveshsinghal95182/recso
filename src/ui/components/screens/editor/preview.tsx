@@ -11,6 +11,10 @@ export function MinimalPreview() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [videoLoaded, setVideoLoaded] = useState(false);
 
+  // Refs to prevent flickering during scrubbing
+  const seekTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSeekTimeRef = useRef<number>(0);
+
   // Initialize video element
   useEffect(() => {
     if (!project?.rawVideoPath || !videoRef.current) return;
@@ -32,15 +36,47 @@ export function MinimalPreview() {
     return () => video.removeEventListener('loadedmetadata', handleLoadedMetadata);
   }, [project?.rawVideoPath, updateDuration]);
 
-  // Sync video time with editor state
+  // Sync video time with editor state - debounced to prevent flicker during scrubbing
   useEffect(() => {
     if (!videoRef.current || !videoLoaded) return;
     const video = videoRef.current;
     const videoTime = currentTime / 1000;
-    if (Math.abs(video.currentTime - videoTime) > 0.1) {
-      video.currentTime = videoTime;
+
+    // Skip if difference is minimal (prevents unnecessary seeks)
+    if (Math.abs(video.currentTime - videoTime) <= 0.05) return;
+
+    // During playback, sync immediately
+    if (isPlaying) {
+      if (Math.abs(video.currentTime - videoTime) > 0.15) {
+        video.currentTime = videoTime;
+      }
+      return;
     }
-  }, [currentTime, videoLoaded]);
+
+    // During scrubbing (not playing), debounce the seek to prevent flicker
+    if (seekTimeoutRef.current) {
+      clearTimeout(seekTimeoutRef.current);
+    }
+
+    // Store target time for the canvas to use immediately
+    lastSeekTimeRef.current = videoTime;
+
+    // Debounce actual video seek to reduce flickering
+    seekTimeoutRef.current = setTimeout(() => {
+      if (
+        videoRef.current &&
+        Math.abs(videoRef.current.currentTime - lastSeekTimeRef.current) > 0.05
+      ) {
+        videoRef.current.currentTime = lastSeekTimeRef.current;
+      }
+    }, 50);
+
+    return () => {
+      if (seekTimeoutRef.current) {
+        clearTimeout(seekTimeoutRef.current);
+      }
+    };
+  }, [currentTime, videoLoaded, isPlaying]);
 
   // Control video playback
   useEffect(() => {
