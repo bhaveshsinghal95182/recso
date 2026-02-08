@@ -100,9 +100,13 @@ export function MinimalPreview() {
     const video = videoRef.current;
 
     const render = () => {
-      // Draw background
-      ctx.fillStyle = project.backgroundColor || '#1a1a2e';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      // Draw background or clear if transparent
+      if (project.backgroundColor === 'transparent') {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      } else {
+        ctx.fillStyle = project.backgroundColor || '#1a1a2e';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
 
       // Draw video frame centered
       if (videoLoaded && video.readyState >= 2) {

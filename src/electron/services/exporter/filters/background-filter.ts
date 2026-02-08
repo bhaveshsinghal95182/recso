@@ -40,6 +40,13 @@ export const backgroundFilter: ExportFilter = {
     } else {
       const bgColor =
         compositorConfig.backgroundColor || context.project.backgroundColor || '#000000';
+
+      // If transparent, just scale the video without adding a background
+      if (bgColor === 'transparent') {
+        const complex = `scale=${layout.width}:${layout.height}:flags=lanczos,pad=${canvasW}:${canvasH}:${layout.x}:${layout.y}:color=black@0`;
+        return [complex];
+      }
+
       const ffmpegColor = bgColor.startsWith('#') ? bgColor.slice(1) : bgColor;
 
       // create solid color background with duration matching video to prevent infinite frames
