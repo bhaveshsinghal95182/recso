@@ -1,26 +1,25 @@
 /**
- * MouseTrackerService — Simplified click tracking.
+ * MouseTrackerService — Global mouse event tracking using uiohook-napi.
  *
- * This service only tracks click events (not continuous mouse movement).
- * - Polls for click events using Electron's globalShortcut or iohook alternative
- * - Records timestamp and position of each click
+ * This service tracks click and movement events using native input hooks.
+ * - Uses uiohook-napi for cross-platform global input hooks
+ * - Records timestamp and position of each click and movement
  * - Stores in SQLite for playback in editor
- *
- * Simplified from the original velocity-based implementation.
  */
 
-import { screen } from 'electron';
+import { uIOhook, type UiohookMouseEvent } from 'uiohook-napi';
 
 import { getDatabase } from './database.service.js';
 
-// Click event interface
-export interface ClickEvent {
+// Mouse event interface
+export interface MouseEvent {
   id?: number;
   recordingId: string;
   timestampMs: number;
   x: number;
   y: number;
-  button: 'left' | 'right' | 'middle';
+  eventType: 'click' | 'mousemove';
+  button?: 'left' | 'right' | 'middle';
 }
 
 /** Monitor bounds for coordinate offset calculation */
@@ -36,16 +35,19 @@ class MouseTrackerService {
 
   private recordingId: string | null = null;
   private recordingStartTime: number = 0;
-  private eventBuffer: ClickEvent[] = [];
+  private eventBuffer: MouseEvent[] = [];
   private flushTimer: NodeJS.Timeout | null = null;
   private isTracking: boolean = false;
   private monitorBounds: MonitorBounds | null = null;
 
-  // Simple click detection via polling (fallback without native hooks)
-  private pollTimer: NodeJS.Timeout | null = null;
-  private lastClickState: boolean = false;
+  // Throttle mouse movement events (capture at most every N ms)
+  private lastMoveTime: number = 0;
+  private readonly moveThrottleMs: number = 50; // 20 events per second max
 
-  private constructor() {}
+  private constructor() {
+    this.onMouseDown = this.onMouseDown.bind(this);
+    this.onMouseMove = this.onMouseMove.bind(this);
+  }
 
   static getInstance(): MouseTrackerService {
     if (!MouseTrackerService.instance) {
@@ -55,7 +57,7 @@ class MouseTrackerService {
   }
 
   /**
-   * Start tracking clicks for a recording
+   * Start tracking mouse events for a recording
    */
   startTracking(recordingId: string, monitorBounds?: MonitorBounds): void {
     if (this.isTracking) {
@@ -68,38 +70,88 @@ class MouseTrackerService {
     this.eventBuffer = [];
     this.isTracking = true;
     this.monitorBounds = monitorBounds ?? null;
+    this.lastMoveTime = 0;
+
+    // Register uiohook event listeners
+    uIOhook.on('mousedown', this.onMouseDown);
+    uIOhook.on('mousemove', this.onMouseMove);
+
+    // Start the hook
+    uIOhook.start();
 
     // Start flush timer (every 2 seconds)
     this.flushTimer = setInterval(() => this.flushBuffer(), 2000);
 
-    console.log('[MouseTrackerService] Started click tracking for:', recordingId);
+    console.log('[MouseTrackerService] Started mouse tracking for:', recordingId);
     if (monitorBounds) {
       console.log('[MouseTrackerService] Monitor bounds:', monitorBounds);
     }
   }
 
   /**
-   * Record a click event (called from IPC when renderer detects a click)
+   * Handle mouse down events from uiohook
    */
-  recordClick(button: 'left' | 'right' | 'middle' = 'left'): void {
+  private onMouseDown(event: UiohookMouseEvent): void {
     if (!this.recordingId || !this.isTracking) return;
 
-    const cursorPoint = screen.getCursorScreenPoint();
+    // Map button number to string
+    let button: 'left' | 'right' | 'middle' = 'left';
+    if (event.button === 2) button = 'right';
+    else if (event.button === 3) button = 'middle';
 
-    // Convert to monitor-local coordinates
-    const localX = this.monitorBounds ? cursorPoint.x - this.monitorBounds.x : cursorPoint.x;
-    const localY = this.monitorBounds ? cursorPoint.y - this.monitorBounds.y : cursorPoint.y;
+    // Get normalized coordinates
+    const { x, y } = this.normalizeCoordinates(event.x, event.y);
 
-    const event: ClickEvent = {
+    const mouseEvent: MouseEvent = {
       recordingId: this.recordingId,
       timestampMs: Date.now() - this.recordingStartTime,
-      x: localX,
-      y: localY,
+      x,
+      y,
+      eventType: 'click',
       button,
     };
 
-    this.eventBuffer.push(event);
-    console.log('[MouseTrackerService] Click recorded:', { x: localX, y: localY, button });
+    this.eventBuffer.push(mouseEvent);
+    console.log('[MouseTrackerService] Click recorded:', { x, y, button });
+  }
+
+  /**
+   * Handle mouse move events from uiohook (throttled)
+   */
+  private onMouseMove(event: UiohookMouseEvent): void {
+    if (!this.recordingId || !this.isTracking) return;
+
+    const now = Date.now();
+    if (now - this.lastMoveTime < this.moveThrottleMs) {
+      return; // Skip this event due to throttling
+    }
+    this.lastMoveTime = now;
+
+    // Get normalized coordinates
+    const { x, y } = this.normalizeCoordinates(event.x, event.y);
+
+    const mouseEvent: MouseEvent = {
+      recordingId: this.recordingId,
+      timestampMs: now - this.recordingStartTime,
+      x,
+      y,
+      eventType: 'mousemove',
+    };
+
+    this.eventBuffer.push(mouseEvent);
+  }
+
+  /**
+   * Normalize coordinates to monitor-local if bounds are set
+   */
+  private normalizeCoordinates(x: number, y: number): { x: number; y: number } {
+    if (this.monitorBounds) {
+      return {
+        x: x - this.monitorBounds.x,
+        y: y - this.monitorBounds.y,
+      };
+    }
+    return { x, y };
   }
 
   /**
@@ -110,14 +162,17 @@ class MouseTrackerService {
       return 0;
     }
 
+    // Remove uiohook event listeners
+    uIOhook.off('mousedown', this.onMouseDown);
+    uIOhook.off('mousemove', this.onMouseMove);
+
+    // Stop the hook
+    uIOhook.stop();
+
     // Clear timers
     if (this.flushTimer) {
       clearInterval(this.flushTimer);
       this.flushTimer = null;
-    }
-    if (this.pollTimer) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = null;
     }
 
     // Flush remaining events
@@ -130,7 +185,7 @@ class MouseTrackerService {
     this.recordingId = null;
     this.monitorBounds = null;
 
-    console.log('[MouseTrackerService] Stopped tracking. Total clicks:', totalEvents);
+    console.log('[MouseTrackerService] Stopped tracking. Total events:', totalEvents);
     return totalEvents;
   }
 
@@ -144,17 +199,24 @@ class MouseTrackerService {
       const db = getDatabase();
       const stmt = db.prepare(`
         INSERT INTO mouse_events (recording_id, timestamp_ms, x, y, event_type, button, meta)
-        VALUES (?, ?, ?, ?, 'click', ?, NULL)
+        VALUES (?, ?, ?, ?, ?, ?, NULL)
       `);
 
-      const insertMany = db.transaction((events: ClickEvent[]) => {
+      const insertMany = db.transaction((events: MouseEvent[]) => {
         for (const event of events) {
-          stmt.run(event.recordingId, event.timestampMs, event.x, event.y, event.button);
+          stmt.run(
+            event.recordingId,
+            event.timestampMs,
+            event.x,
+            event.y,
+            event.eventType,
+            event.button ?? null,
+          );
         }
       });
 
       insertMany(this.eventBuffer);
-      console.log('[MouseTrackerService] Flushed', this.eventBuffer.length, 'clicks to database');
+      console.log('[MouseTrackerService] Flushed', this.eventBuffer.length, 'events to database');
       this.eventBuffer = [];
     } catch (error) {
       console.error('[MouseTrackerService] Failed to flush events:', error);
@@ -162,7 +224,7 @@ class MouseTrackerService {
   }
 
   /**
-   * Get total click count for current recording
+   * Get total event count for current recording
    */
   private getTotalEventCount(): number {
     if (!this.recordingId) return 0;
@@ -178,14 +240,14 @@ class MouseTrackerService {
   }
 
   /**
-   * Get all click events for a recording
+   * Get all events for a recording
    */
-  getEventsForRecording(recordingId: string): ClickEvent[] {
+  getEventsForRecording(recordingId: string): MouseEvent[] {
     try {
       const db = getDatabase();
       const stmt = db.prepare(`
         SELECT * FROM mouse_events
-        WHERE recording_id = ? AND event_type = 'click'
+        WHERE recording_id = ?
         ORDER BY timestamp_ms ASC
       `);
       const rows = stmt.all(recordingId) as Array<Record<string, unknown>>;
@@ -196,7 +258,8 @@ class MouseTrackerService {
         timestampMs: row.timestamp_ms as number,
         x: row.x as number,
         y: row.y as number,
-        button: (row.button as 'left' | 'right' | 'middle') ?? 'left',
+        eventType: row.event_type as 'click' | 'mousemove',
+        button: row.button as 'left' | 'right' | 'middle' | undefined,
       }));
     } catch (error) {
       console.error('[MouseTrackerService] Failed to get events:', error);

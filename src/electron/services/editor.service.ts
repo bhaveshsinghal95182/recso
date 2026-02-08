@@ -26,14 +26,14 @@ import { DEFAULT_CURSOR_CONFIG, DEFAULT_ZOOM_CONFIG } from '../types/project.typ
 import * as CompositorService from './compositor.service.js';
 import { getRecording } from './database.service.js';
 import * as ffmpegService from './ffmpeg.service.js';
-import { type ClickEvent, mouseTrackerService } from './mouse-tracker.service.js';
+import { type MouseEvent, mouseTrackerService } from './mouse-tracker.service.js';
 import * as projectStorage from './project-storage.service.js';
 
 // Active project (only one at a time)
 let activeProject: Project | null = null;
 
 // Cache for click events (key: recordingId)
-const clickEventsCache = new Map<string, ClickEvent[]>();
+const clickEventsCache = new Map<string, MouseEvent[]>();
 
 /**
  * Create a new editing project from a recording
