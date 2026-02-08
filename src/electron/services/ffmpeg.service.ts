@@ -9,7 +9,6 @@
  */
 
 import { spawn } from 'child_process';
-import path from 'path';
 
 let ffmpegPath: string | null = null;
 let ffprobePath: string | null = null;

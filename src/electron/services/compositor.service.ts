@@ -125,9 +125,10 @@ export function getLayoutConfig(): LayoutConfig {
  * Calculate the layout for placing a video on the canvas.
  *
  * Logic:
- * 1. If video is smaller than canvas and scaleUp is true, scale up to fit (with padding)
- * 2. If video is larger than canvas, scale down to fit (with padding)
- * 3. Center the result on the canvas
+ * 1. Calculate the scale needed to fit the video within available space (with padding)
+ * 2. If scaleUp is enabled, scale up small videos to fill more of the canvas
+ * 3. Apply maxScale as a limit on how much of the available space to fill
+ * 4. Center the result on the canvas
  *
  * @param videoBounds - The original video/window dimensions
  * @param canvasSize - Optional override for canvas size (defaults to config)
@@ -141,21 +142,28 @@ export function calculateLayout(videoBounds: Rectangle | Size, canvasSize?: Size
   const videoWidth = videoBounds.width;
   const videoHeight = videoBounds.height;
 
-  // Calculate available space (with padding)
-  const availableWidth = canvas.width * (1 - layout.padding * 2);
-  const availableHeight = canvas.height * (1 - layout.padding * 2);
+  console.log('[Compositor] Calculating layout:', {
+    video: `${videoWidth}x${videoHeight}`,
+    canvas: `${canvas.width}x${canvas.height}`,
+    padding: layout.padding,
+    maxScale: layout.maxScale,
+    scaleUp: layout.scaleUp,
+  });
 
-  // Calculate scale factors to fit
+  // Calculate available space (with padding)
+  // maxScale further limits how much of the available space we use
+  const effectiveMaxFill = layout.maxScale; // e.g., 0.9 means fill up to 90% of available space
+  const availableWidth = canvas.width * (1 - layout.padding * 2) * effectiveMaxFill;
+  const availableHeight = canvas.height * (1 - layout.padding * 2) * effectiveMaxFill;
+
+  // Calculate scale factors to fit video within the available space
   const scaleX = availableWidth / videoWidth;
   const scaleY = availableHeight / videoHeight;
 
-  // Use the smaller scale to maintain aspect ratio
+  // Use the smaller scale to maintain aspect ratio (ensures video fits)
   let scale = Math.min(scaleX, scaleY);
 
-  // Apply max scale limit
-  scale = Math.min(scale, layout.maxScale);
-
-  // If scaleUp is false and video is smaller, use 1:1
+  // If scaleUp is false and this would scale up the video, use 1:1 instead
   if (!layout.scaleUp && scale > 1) {
     scale = 1;
   }
@@ -168,13 +176,21 @@ export function calculateLayout(videoBounds: Rectangle | Size, canvasSize?: Size
   const x = Math.round((canvas.width - finalWidth) / 2);
   const y = Math.round((canvas.height - finalHeight) / 2);
 
-  return {
+  const result = {
     x,
     y,
     width: finalWidth,
     height: finalHeight,
     scale,
   };
+
+  console.log('[Compositor] Final layout:', result, {
+    scaleX: scaleX.toFixed(3),
+    scaleY: scaleY.toFixed(3),
+    chosenScale: scale.toFixed(3),
+  });
+
+  return result;
 }
 
 /**
