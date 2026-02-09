@@ -50,6 +50,8 @@ interface EditorState {
   // Zoom regions
   zoomRegions: ZoomRegion[];
   selectedZoomId: string | null;
+  // Focal point editing mode
+  isEditingFocalPoint: boolean;
 }
 
 // Editor actions interface
@@ -80,6 +82,7 @@ interface EditorActions {
   updateZoomRegions: (zooms: ZoomRegion[]) => Promise<void>;
   replaceZoomRegions: (zooms: ZoomRegion[]) => Promise<void>;
   setSelectedZoom: (zoomId: string | null) => void;
+  setIsEditingFocalPoint: (isEditing: boolean) => void;
 }
 
 type EditorContextValue = EditorState & EditorActions;
@@ -112,10 +115,16 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
   const [zoomRegions, setZoomRegions] = useState<ZoomRegion[]>([]);
   const [selectedZoomId, setSelectedZoom] = useState<string | null>(null);
 
+  // Focal point editing mode
+  const [isEditingFocalPoint, setIsEditingFocalPoint] = useState(false);
+
   // Refs for animation frame
   const animationFrameRef = useRef<number | null>(null);
   const lastFrameTimeRef = useRef<number>(0);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Debounce ref for zoom updates (to separate it from background color updates)
+  const zoomDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Load project on mount if recordingId provided
   useEffect(() => {
@@ -456,24 +465,33 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
     async (zoom: ZoomRegion) => {
       if (!project) return;
 
-      try {
-        await window.electron.editor.updateZoomRegion(zoom);
-        setZoomRegions((prev) =>
-          prev.map((z) => (z.id === zoom.id ? zoom : z)).sort((a, b) => a.startMs - b.startMs),
-        );
-        setProject((prev) =>
-          prev
-            ? {
-                ...prev,
-                zoomRegions: (prev.zoomRegions || [])
-                  .map((z) => (z.id === zoom.id ? zoom : z))
-                  .sort((a, b) => a.startMs - b.startMs),
-              }
-            : null,
-        );
-      } catch (err) {
-        console.error('[EditorContext] updateZoom error:', err);
+      // Optimistic update
+      setZoomRegions((prev) =>
+        prev.map((z) => (z.id === zoom.id ? zoom : z)).sort((a, b) => a.startMs - b.startMs),
+      );
+      setProject((prev) =>
+        prev
+          ? {
+              ...prev,
+              zoomRegions: (prev.zoomRegions || [])
+                .map((z) => (z.id === zoom.id ? zoom : z))
+                .sort((a, b) => a.startMs - b.startMs),
+            }
+          : null,
+      );
+
+      // Debounce IPC call
+      if (zoomDebounceRef.current) {
+        clearTimeout(zoomDebounceRef.current);
       }
+
+      zoomDebounceRef.current = setTimeout(async () => {
+        try {
+          await window.electron.editor.updateZoomRegion(zoom);
+        } catch (err) {
+          console.error('[EditorContext] updateZoom error:', err);
+        }
+      }, 300);
     },
     [project],
   );
@@ -553,6 +571,7 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
     selectedCutId,
     zoomRegions,
     selectedZoomId,
+    isEditingFocalPoint,
     loadProject,
     saveProject,
     closeProject,
@@ -574,6 +593,7 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
     updateZoomRegions,
     replaceZoomRegions,
     setSelectedZoom,
+    setIsEditingFocalPoint,
   };
 
   return <EditorContext.Provider value={value}>{children}</EditorContext.Provider>;

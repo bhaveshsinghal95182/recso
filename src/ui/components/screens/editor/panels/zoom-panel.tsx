@@ -1,4 +1,4 @@
-import { Copy, MousePointerClick, Zap } from 'lucide-react';
+import { Copy, Crosshair, MousePointerClick, Zap } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -104,6 +104,8 @@ export function ZoomPanel() {
     updateZoom,
     updateZoomRegions,
     replaceZoomRegions,
+    isEditingFocalPoint,
+    setIsEditingFocalPoint,
   } = useEditor();
 
   const selectedZoom = zoomRegions.find((z) => z.id === selectedZoomId);
@@ -427,6 +429,18 @@ export function ZoomPanel() {
           </Button>
         </div>
       )}
+
+      {/* Edit Focal Point button */}
+      <div className="pt-2">
+        <Button
+          variant={isEditingFocalPoint ? 'default' : 'outline'}
+          onClick={() => setIsEditingFocalPoint(!isEditingFocalPoint)}
+          className="w-full"
+        >
+          <Crosshair className="size-4 mr-2" />
+          {isEditingFocalPoint ? 'Done Editing' : 'Edit Focal Point'}
+        </Button>
+      </div>
 
       {/* Smart Pan button - local mode (selected region) */}
       {smartPanButton}

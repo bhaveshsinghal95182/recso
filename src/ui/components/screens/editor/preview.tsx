@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useEditor } from '../../../context/editor-context';
 import type { ZoomRegion } from '../../../types';
+import { FocalPointOverlay } from './focal-point-overlay';
 import { VerticalTabs } from './vertical-tabs';
 
 /**
@@ -39,7 +40,18 @@ function calculateZoomLevel(
 }
 
 export function MinimalPreview() {
-  const { project, isPlaying, currentTime, play, pause, updateDuration, zoomRegions } = useEditor();
+  const {
+    project,
+    isPlaying,
+    currentTime,
+    play,
+    pause,
+    updateDuration,
+    zoomRegions,
+    isEditingFocalPoint,
+    selectedZoomId,
+    updateZoom,
+  } = useEditor();
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -223,6 +235,24 @@ export function MinimalPreview() {
           <Play className="w-5 h-5 fill-white" />
         )}
       </button>
+
+      {/* Focal Point Editor Overlay */}
+      {isEditingFocalPoint && selectedZoomId && project.videoDimensions && (
+        <FocalPointOverlay
+          videoWidth={project.videoDimensions.width}
+          videoHeight={project.videoDimensions.height}
+          containerWidth={960}
+          containerHeight={540}
+          selectedZoom={zoomRegions.find((z) => z.id === selectedZoomId)!}
+          onUpdate={(focalX, focalY) => {
+            const zoom = zoomRegions.find((z) => z.id === selectedZoomId);
+            if (zoom) {
+              updateZoom({ ...zoom, focalX, focalY });
+            }
+          }}
+        />
+      )}
+
       <VerticalTabs />
     </div>
   );
