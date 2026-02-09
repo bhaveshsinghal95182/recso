@@ -155,5 +155,10 @@ export function registerEditorHandlers(): void {
     return editorService.updateZoomRegion(zoom);
   });
 
+  // Update multiple zoom regions at once (bulk update)
+  ipcMain.handle('editor:update-zoom-regions', async (_event, zooms: ZoomRegion[]) => {
+    return editorService.updateZoomRegions(zooms);
+  });
+
   console.log('[EditorIPC] Handlers registered');
 }

@@ -217,6 +217,19 @@ electron.contextBridge.exposeInMainWorld('electron', {
       focalY: number;
       easeDurationMs: number;
     }) => electron.ipcRenderer.invoke('editor:update-zoom-region', zoom),
+
+    /** Update multiple zoom regions at once (bulk) */
+    updateZoomRegions: (
+      zooms: {
+        id: string;
+        startMs: number;
+        endMs: number;
+        zoomLevel: number;
+        focalX: number;
+        focalY: number;
+        easeDurationMs: number;
+      }[],
+    ) => electron.ipcRenderer.invoke('editor:update-zoom-regions', zooms),
   },
 
   // Exporter

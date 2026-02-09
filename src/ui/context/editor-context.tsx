@@ -77,6 +77,7 @@ interface EditorActions {
   addZoom: (startMs: number, endMs: number) => Promise<void>;
   removeZoom: (zoomId: string) => Promise<void>;
   updateZoom: (zoom: ZoomRegion) => Promise<void>;
+  updateZoomRegions: (zooms: ZoomRegion[]) => Promise<void>;
   setSelectedZoom: (zoomId: string | null) => void;
 }
 
@@ -476,6 +477,39 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
     [project],
   );
 
+  const updateZoomRegions = useCallback(
+    async (zooms: ZoomRegion[]) => {
+      if (!project) return;
+
+      try {
+        await window.electron.editor.updateZoomRegions(zooms);
+        setZoomRegions((prev) => {
+          const updated = prev.map((z) => {
+            const match = zooms.find((u) => u.id === z.id);
+            return match || z;
+          });
+          return updated.sort((a, b) => a.startMs - b.startMs);
+        });
+        setProject((prev) =>
+          prev
+            ? {
+                ...prev,
+                zoomRegions: (prev.zoomRegions || [])
+                  .map((z) => {
+                    const match = zooms.find((u) => u.id === z.id);
+                    return match || z;
+                  })
+                  .sort((a, b) => a.startMs - b.startMs),
+              }
+            : null,
+        );
+      } catch (err) {
+        console.error('[EditorContext] updateZoomRegions error:', err);
+      }
+    },
+    [project],
+  );
+
   const value: EditorContextValue = {
     project,
     isLoading,
@@ -507,6 +541,7 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
     addZoom,
     removeZoom,
     updateZoom,
+    updateZoomRegions,
     setSelectedZoom,
   };
 

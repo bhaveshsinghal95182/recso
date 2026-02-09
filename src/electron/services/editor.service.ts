@@ -321,6 +321,26 @@ export function updateZoomRegion(zoom: ZoomRegion): boolean {
 }
 
 /**
+ * Update multiple zoom regions at once (bulk update)
+ */
+export function updateZoomRegions(zooms: ZoomRegion[]): boolean {
+  if (!activeProject || !activeProject.zoomRegions) return false;
+
+  for (const zoom of zooms) {
+    const index = activeProject.zoomRegions.findIndex((z) => z.id === zoom.id);
+    if (index !== -1) {
+      activeProject.zoomRegions[index] = zoom;
+    }
+  }
+
+  activeProject.zoomRegions.sort((a, b) => a.startMs - b.startMs);
+  activeProject.modifiedAt = Date.now();
+
+  projectStorage.saveProjectMetadata(activeProject);
+  return true;
+}
+
+/**
  * Get the frame state at a specific time.
  * Returns click indicator if a click occurred near this time.
  */

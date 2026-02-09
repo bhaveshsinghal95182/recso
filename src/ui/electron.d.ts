@@ -223,6 +223,9 @@ interface ElectronAPI {
 
     /** Update a zoom region */
     updateZoomRegion: (zoom: ZoomRegion) => Promise<boolean>;
+
+    /** Update multiple zoom regions at once (bulk) */
+    updateZoomRegions: (zooms: ZoomRegion[]) => Promise<boolean>;
   };
 
   exporter: {

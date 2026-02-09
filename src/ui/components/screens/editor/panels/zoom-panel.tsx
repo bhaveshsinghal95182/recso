@@ -1,4 +1,5 @@
 import { Copy } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -7,9 +8,64 @@ import { Label } from '@/components/ui/label';
 import { useEditor } from '../../../../context/editor-context';
 
 export function ZoomPanel() {
-  const { zoomRegions, selectedZoomId, updateZoom } = useEditor();
+  const { zoomRegions, selectedZoomId, updateZoom, updateZoomRegions } = useEditor();
 
   const selectedZoom = zoomRegions.find((z) => z.id === selectedZoomId);
+
+  // Local state for debounced slider
+  const [localZoomLevel, setLocalZoomLevel] = useState(selectedZoom?.zoomLevel ?? 1.5);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Sync local state when selected zoom changes
+  useEffect(() => {
+    if (selectedZoom) {
+      setLocalZoomLevel(selectedZoom.zoomLevel);
+    }
+  }, [selectedZoom?.id, selectedZoom?.zoomLevel]);
+
+  // Debounced update handler
+  const handleZoomLevelChange = useCallback(
+    (value: string) => {
+      const level = parseFloat(value);
+      if (isNaN(level) || level < 1 || level > 5) return;
+
+      // Update local state immediately for responsive UI
+      setLocalZoomLevel(level);
+
+      // Debounce the actual update
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
+
+      debounceRef.current = setTimeout(() => {
+        if (selectedZoom) {
+          updateZoom({ ...selectedZoom, zoomLevel: level });
+        }
+      }, 150);
+    },
+    [selectedZoom, updateZoom],
+  );
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
+    };
+  }, []);
+
+  const handleApplyToAll = useCallback(() => {
+    if (!selectedZoom || zoomRegions.length <= 1) return;
+
+    // Build array of updated zoom regions
+    const updatedZooms = zoomRegions
+      .filter((z) => z.id !== selectedZoom.id)
+      .map((z) => ({ ...z, zoomLevel: selectedZoom.zoomLevel }));
+
+    // Use bulk update for efficiency
+    updateZoomRegions(updatedZooms);
+  }, [selectedZoom, zoomRegions, updateZoomRegions]);
 
   if (!selectedZoom) {
     return (
@@ -18,21 +74,6 @@ export function ZoomPanel() {
       </div>
     );
   }
-
-  const handleZoomLevelChange = (value: string) => {
-    const level = parseFloat(value);
-    if (!isNaN(level) && level >= 1 && level <= 5) {
-      updateZoom({ ...selectedZoom, zoomLevel: level });
-    }
-  };
-
-  const handleApplyToAll = () => {
-    zoomRegions.forEach((z) => {
-      if (z.id !== selectedZoom.id) {
-        updateZoom({ ...z, zoomLevel: selectedZoom.zoomLevel });
-      }
-    });
-  };
 
   return (
     <div className="space-y-4">
@@ -45,7 +86,7 @@ export function ZoomPanel() {
             min="1"
             max="5"
             step="0.1"
-            value={selectedZoom.zoomLevel}
+            value={localZoomLevel}
             onChange={(e) => handleZoomLevelChange(e.target.value)}
             className="flex-1"
           />
@@ -55,7 +96,7 @@ export function ZoomPanel() {
             min="1"
             max="5"
             step="0.1"
-            value={selectedZoom.zoomLevel}
+            value={localZoomLevel}
             onChange={(e) => handleZoomLevelChange(e.target.value)}
             className="w-20 font-mono text-xs h-8"
           />
