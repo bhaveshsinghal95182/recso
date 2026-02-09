@@ -267,10 +267,18 @@ async function runFFmpegPipeline(
     // Spawn process
     const child = spawn(ffmpegPath, args);
     ffmpegProcess = child;
+    let stderrOutput = '';
+    child.on('exit', (code) => {
+      if (code !== 0) {
+        console.error('[FFmpeg full stderr]', stderrOutput);
+      }
+    });
 
     // Handle progress
     child.stderr.on('data', (data) => {
       const output = data.toString();
+      console.log('[FFmpeg stderr]', data.toString());
+
       // Parse progress from stderr
       // Example: frame=  123 fps= 30 q=28.0 size=    123kB time=00:00:04.10 bitrate= 245.6kbits/s speed=1.02x
       const frameMatch = output.match(/frame=\s*(\d+)/);

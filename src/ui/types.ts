@@ -138,6 +138,24 @@ export interface CutRegion {
   endMs: number;
 }
 
+/** A region of the video where zoom is applied */
+export interface ZoomRegion {
+  /** Unique identifier for the zoom region */
+  id: string;
+  /** Start time of the zoom in milliseconds */
+  startMs: number;
+  /** End time of the zoom in milliseconds */
+  endMs: number;
+  /** Zoom level (1.0 = no zoom, 2.0 = 2x zoom, etc.) */
+  zoomLevel: number;
+  /** Focal point X position (0.0 to 1.0, relative to canvas width) */
+  focalX: number;
+  /** Focal point Y position (0.0 to 1.0, relative to canvas height) */
+  focalY: number;
+  /** Duration of ease in/out animation in milliseconds */
+  easeDurationMs: number;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -155,6 +173,7 @@ export interface Project {
   backgroundPath?: string;
   backgroundColor: string;
   cuts: CutRegion[];
+  zoomRegions: ZoomRegion[];
   createdAt: number;
   modifiedAt: number;
 }

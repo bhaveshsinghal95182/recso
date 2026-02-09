@@ -211,6 +211,18 @@ interface ElectronAPI {
 
     /** Update a cut region */
     updateCut: (cut: CutRegion) => Promise<boolean>;
+
+    /** Get all zoom regions */
+    getZoomRegions: () => Promise<ZoomRegion[]>;
+
+    /** Add a new zoom region */
+    addZoomRegion: (zoom: ZoomRegion) => Promise<boolean>;
+
+    /** Remove a zoom region by ID */
+    removeZoomRegion: (zoomId: string) => Promise<boolean>;
+
+    /** Update a zoom region */
+    updateZoomRegion: (zoom: ZoomRegion) => Promise<boolean>;
   };
 
   exporter: {

@@ -1,43 +1,88 @@
 /**
- * CutRegion Component
+ * TimelineRegion Component
  *
- * Renders a single cut region on the timeline track.
+ * A unified component for rendering timeline regions (cuts, zooms, etc.)
  * Supports:
- * - Dragging to move the cut
+ * - Dragging to move the region
  * - Resizing via edge handles
  * - Selection and deletion
+ * - Customizable styling per region type
  */
 
 import { useCallback, useRef, useState } from 'react';
 
-import type { CutRegion } from '../../../types';
+export type RegionVariant = 'cut' | 'zoom';
 
-interface CutRegionProps {
-  cut: CutRegion;
+export interface BaseRegion {
+  id: string;
+  startMs: number;
+  endMs: number;
+}
+
+interface TimelineRegionProps<T extends BaseRegion> {
+  /** The region data */
+  region: T;
+  /** Total video duration in milliseconds */
   duration: number;
+  /** Whether this region is currently selected */
   isSelected: boolean;
+  /** Visual variant for styling */
+  variant: RegionVariant;
+  /** Content to display inside the region */
+  label?: string;
+  /** Called when the region is clicked/selected */
   onSelect: () => void;
-  onUpdate: (cut: CutRegion) => void;
+  /** Called when the region is moved or resized */
+  onUpdate: (region: T) => void;
+  /** Called when the region is deleted */
   onDelete: () => void;
 }
 
-export function CutRegionOverlay({
-  cut,
+// Variant-specific styling configuration
+const variantStyles: Record<
+  RegionVariant,
+  {
+    default: string;
+    selected: string;
+    deleteButton: string;
+    deleteTitle: string;
+  }
+> = {
+  cut: {
+    default: 'bg-red-500/40 hover:bg-red-500/50',
+    selected: 'bg-red-500/60 ring-2 ring-red-400',
+    deleteButton: 'bg-red-600 hover:bg-red-700',
+    deleteTitle: 'Remove cut',
+  },
+  zoom: {
+    default: 'bg-cyan-500/40 hover:bg-cyan-500/50',
+    selected: 'bg-cyan-500/60 ring-2 ring-cyan-400',
+    deleteButton: 'bg-cyan-600 hover:bg-cyan-700',
+    deleteTitle: 'Remove zoom',
+  },
+};
+
+export function TimelineRegion<T extends BaseRegion>({
+  region,
   duration,
   isSelected,
+  variant,
+  label,
   onSelect,
   onUpdate,
   onDelete,
-}: CutRegionProps) {
+}: TimelineRegionProps<T>) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState<'left' | 'right' | null>(null);
 
+  const styles = variantStyles[variant];
+
   // Convert time to percentage
   const timeToPercent = (time: number) => (duration > 0 ? (time / duration) * 100 : 0);
 
-  const left = timeToPercent(cut.startMs);
-  const width = timeToPercent(cut.endMs - cut.startMs);
+  const left = timeToPercent(region.startMs);
+  const width = timeToPercent(region.endMs - region.startMs);
 
   // Handle drag to move
   const handleMouseDown = useCallback(
@@ -50,8 +95,8 @@ export function CutRegionOverlay({
 
       const startX = e.clientX;
       const rect = parent.getBoundingClientRect();
-      const originalStart = cut.startMs;
-      const cutDuration = cut.endMs - cut.startMs;
+      const originalStart = region.startMs;
+      const regionDuration = region.endMs - region.startMs;
 
       setIsDragging(true);
 
@@ -61,16 +106,16 @@ export function CutRegionOverlay({
         const deltaMs = deltaPercent * duration;
 
         let newStart = Math.max(0, originalStart + deltaMs);
-        let newEnd = newStart + cutDuration;
+        let newEnd = newStart + regionDuration;
 
         // Clamp to duration
         if (newEnd > duration) {
           newEnd = duration;
-          newStart = newEnd - cutDuration;
+          newStart = newEnd - regionDuration;
         }
 
         onUpdate({
-          ...cut,
+          ...region,
           startMs: Math.round(newStart),
           endMs: Math.round(newEnd),
         });
@@ -85,7 +130,7 @@ export function CutRegionOverlay({
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
     },
-    [cut, duration, onSelect, onUpdate],
+    [region, duration, onSelect, onUpdate],
   );
 
   // Handle resize from edges
@@ -99,8 +144,8 @@ export function CutRegionOverlay({
 
       const startX = e.clientX;
       const rect = parent.getBoundingClientRect();
-      const originalStartMs = cut.startMs;
-      const originalEndMs = cut.endMs;
+      const originalStartMs = region.startMs;
+      const originalEndMs = region.endMs;
 
       setIsResizing(edge);
 
@@ -112,7 +157,7 @@ export function CutRegionOverlay({
         if (edge === 'left') {
           const newStart = Math.max(0, Math.min(originalEndMs - 100, originalStartMs + deltaMs));
           onUpdate({
-            ...cut,
+            ...region,
             startMs: Math.round(newStart),
             endMs: originalEndMs,
           });
@@ -122,7 +167,7 @@ export function CutRegionOverlay({
             Math.max(originalStartMs + 100, originalEndMs + deltaMs),
           );
           onUpdate({
-            ...cut,
+            ...region,
             startMs: originalStartMs,
             endMs: Math.round(newEnd),
           });
@@ -138,7 +183,7 @@ export function CutRegionOverlay({
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
     },
-    [cut, duration, onSelect, onUpdate],
+    [region, duration, onSelect, onUpdate],
   );
 
   // Handle keyboard delete
@@ -165,7 +210,7 @@ export function CutRegionOverlay({
     <div
       ref={containerRef}
       className={`absolute top-1 bottom-1 rounded cursor-move transition-colors group ${
-        isSelected ? 'bg-red-500/60 ring-2 ring-red-400' : 'bg-red-500/40 hover:bg-red-500/50'
+        isSelected ? styles.selected : styles.default
       } ${isDragging || isResizing ? 'cursor-grabbing' : ''}`}
       style={{
         left: `${left}%`,
@@ -195,9 +240,9 @@ export function CutRegionOverlay({
       {/* Delete button */}
       <button
         type="button"
-        className="absolute -top-2 -right-2 w-4 h-4 bg-red-600 hover:bg-red-700 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-20"
+        className={`absolute -top-2 -right-2 w-4 h-4 ${styles.deleteButton} rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-20`}
         onClick={handleDeleteClick}
-        title="Remove cut"
+        title={styles.deleteTitle}
       >
         <svg
           className="w-2.5 h-2.5 text-white"
@@ -210,10 +255,10 @@ export function CutRegionOverlay({
         </svg>
       </button>
 
-      {/* Cut indicator */}
-      {width > 5 && (
+      {/* Region label */}
+      {label && width > 5 && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <span className="text-[10px] text-white/70 font-medium select-none">CUT</span>
+          <span className="text-[10px] text-white/70 font-medium select-none">{label}</span>
         </div>
       )}
     </div>

@@ -14,6 +14,7 @@ import * as editorService from '../services/editor.service.js';
 import * as projectStorage from '../services/project-storage.service.js';
 import type { CutRegion } from '../types/cut.types.js';
 import type { CursorConfig, ZoomConfig } from '../types/project.types.js';
+import type { ZoomRegion } from '../types/zoom.types.js';
 
 /**
  * Register all editor IPC handlers
@@ -132,6 +133,26 @@ export function registerEditorHandlers(): void {
   // Update a cut region
   ipcMain.handle('editor:update-cut', async (_event, cut: CutRegion) => {
     return editorService.updateCut(cut);
+  });
+
+  // Get all zoom regions
+  ipcMain.handle('editor:get-zoom-regions', async () => {
+    return editorService.getZoomRegions();
+  });
+
+  // Add a new zoom region
+  ipcMain.handle('editor:add-zoom-region', async (_event, zoom: ZoomRegion) => {
+    return editorService.addZoomRegion(zoom);
+  });
+
+  // Remove a zoom region
+  ipcMain.handle('editor:remove-zoom-region', async (_event, zoomId: string) => {
+    return editorService.removeZoomRegion(zoomId);
+  });
+
+  // Update a zoom region
+  ipcMain.handle('editor:update-zoom-region', async (_event, zoom: ZoomRegion) => {
+    return editorService.updateZoomRegion(zoom);
   });
 
   console.log('[EditorIPC] Handlers registered');

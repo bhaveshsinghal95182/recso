@@ -25,6 +25,7 @@ import type {
   Project,
   TransformedCursorPosition,
   ZoomConfig,
+  ZoomRegion,
 } from '../types';
 
 // Tabs for the properties panel
@@ -46,6 +47,9 @@ interface EditorState {
   // Cut regions
   cuts: CutRegion[];
   selectedCutId: string | null;
+  // Zoom regions
+  zoomRegions: ZoomRegion[];
+  selectedZoomId: string | null;
 }
 
 // Editor actions interface
@@ -69,6 +73,11 @@ interface EditorActions {
   removeCut: (cutId: string) => Promise<void>;
   updateCut: (cut: CutRegion) => Promise<void>;
   setSelectedCut: (cutId: string | null) => void;
+  // Zoom management
+  addZoom: (startMs: number, endMs: number) => Promise<void>;
+  removeZoom: (zoomId: string) => Promise<void>;
+  updateZoom: (zoom: ZoomRegion) => Promise<void>;
+  setSelectedZoom: (zoomId: string | null) => void;
 }
 
 type EditorContextValue = EditorState & EditorActions;
@@ -96,6 +105,10 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
   // Cut regions state
   const [cuts, setCuts] = useState<CutRegion[]>([]);
   const [selectedCutId, setSelectedCut] = useState<string | null>(null);
+
+  // Zoom regions state
+  const [zoomRegions, setZoomRegions] = useState<ZoomRegion[]>([]);
+  const [selectedZoomId, setSelectedZoom] = useState<string | null>(null);
 
   // Refs for animation frame
   const animationFrameRef = useRef<number | null>(null);
@@ -182,6 +195,8 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
       setDuration(proj.timeline.duration || 0);
       setCuts(proj.cuts || []);
       setSelectedCut(null);
+      setZoomRegions(proj.zoomRegions || []);
+      setSelectedZoom(null);
       setCurrentTime(0);
       setIsLoading(false);
       return true;
@@ -378,6 +393,89 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
     [project],
   );
 
+  // Zoom management actions
+  const addZoom = useCallback(
+    async (startMs: number, endMs: number) => {
+      if (!project) return;
+
+      const newZoom: ZoomRegion = {
+        id: crypto.randomUUID(),
+        startMs,
+        endMs,
+        zoomLevel: 1.5,
+        focalX: 0.5,
+        focalY: 0.5,
+        easeDurationMs: 300,
+      };
+
+      try {
+        await window.electron.editor.addZoomRegion(newZoom);
+        setZoomRegions((prev) => [...prev, newZoom].sort((a, b) => a.startMs - b.startMs));
+        setProject((prev) =>
+          prev
+            ? {
+                ...prev,
+                zoomRegions: [...(prev.zoomRegions || []), newZoom].sort(
+                  (a, b) => a.startMs - b.startMs,
+                ),
+              }
+            : null,
+        );
+      } catch (err) {
+        console.error('[EditorContext] addZoom error:', err);
+      }
+    },
+    [project],
+  );
+
+  const removeZoom = useCallback(
+    async (zoomId: string) => {
+      if (!project) return;
+
+      try {
+        await window.electron.editor.removeZoomRegion(zoomId);
+        setZoomRegions((prev) => prev.filter((z) => z.id !== zoomId));
+        setProject((prev) =>
+          prev
+            ? { ...prev, zoomRegions: (prev.zoomRegions || []).filter((z) => z.id !== zoomId) }
+            : null,
+        );
+        if (selectedZoomId === zoomId) {
+          setSelectedZoom(null);
+        }
+      } catch (err) {
+        console.error('[EditorContext] removeZoom error:', err);
+      }
+    },
+    [project, selectedZoomId],
+  );
+
+  const updateZoom = useCallback(
+    async (zoom: ZoomRegion) => {
+      if (!project) return;
+
+      try {
+        await window.electron.editor.updateZoomRegion(zoom);
+        setZoomRegions((prev) =>
+          prev.map((z) => (z.id === zoom.id ? zoom : z)).sort((a, b) => a.startMs - b.startMs),
+        );
+        setProject((prev) =>
+          prev
+            ? {
+                ...prev,
+                zoomRegions: (prev.zoomRegions || [])
+                  .map((z) => (z.id === zoom.id ? zoom : z))
+                  .sort((a, b) => a.startMs - b.startMs),
+              }
+            : null,
+        );
+      } catch (err) {
+        console.error('[EditorContext] updateZoom error:', err);
+      }
+    },
+    [project],
+  );
+
   const value: EditorContextValue = {
     project,
     isLoading,
@@ -389,6 +487,8 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
     activePropertiesTab,
     cuts,
     selectedCutId,
+    zoomRegions,
+    selectedZoomId,
     loadProject,
     saveProject,
     closeProject,
@@ -404,6 +504,10 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
     removeCut,
     updateCut,
     setSelectedCut,
+    addZoom,
+    removeZoom,
+    updateZoom,
+    setSelectedZoom,
   };
 
   return <EditorContext.Provider value={value}>{children}</EditorContext.Provider>;

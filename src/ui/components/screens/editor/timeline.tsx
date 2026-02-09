@@ -5,11 +5,11 @@
  * a draggable playhead, and a track area for video/cuts.
  */
 
-import { Scissors } from 'lucide-react';
+import { Scissors, ZoomIn } from 'lucide-react';
 import { useCallback, useRef } from 'react';
 
 import { useEditor } from '../../../context/editor-context';
-import { CutRegionOverlay } from './cut-region';
+import { TimelineRegion } from './timeline-region';
 
 /**
  * Format milliseconds to MM:SS format
@@ -53,6 +53,12 @@ export function Timeline() {
     updateCut,
     removeCut,
     setSelectedCut,
+    zoomRegions,
+    selectedZoomId,
+    addZoom,
+    updateZoom,
+    removeZoom,
+    setSelectedZoom,
   } = useEditor();
   const containerRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -129,10 +135,35 @@ export function Timeline() {
     addCut(startMs, endMs);
   }, [currentTime, duration, addCut]);
 
-  // Deselect cut when clicking on track area (not on a cut region)
+  // Handle Add Zoom at current playhead position
+  const handleAddZoom = useCallback(() => {
+    if (duration <= 0) return;
+
+    // Create a 2-second zoom region centered on playhead
+    const zoomDuration = 2000; // 2 seconds
+    const halfDuration = zoomDuration / 2;
+
+    let startMs = currentTime - halfDuration;
+    let endMs = currentTime + halfDuration;
+
+    // Clamp to video bounds
+    if (startMs < 0) {
+      startMs = 0;
+      endMs = Math.min(zoomDuration, duration);
+    }
+    if (endMs > duration) {
+      endMs = duration;
+      startMs = Math.max(0, duration - zoomDuration);
+    }
+
+    addZoom(startMs, endMs);
+  }, [currentTime, duration, addZoom]);
+
+  // Deselect cut/zoom when clicking on track area (not on a region)
   const handleTrackClick = useCallback(() => {
     setSelectedCut(null);
-  }, [setSelectedCut]);
+    setSelectedZoom(null);
+  }, [setSelectedCut, setSelectedZoom]);
 
   const playheadPercent = timeToPercent(currentTime);
 
@@ -155,10 +186,28 @@ export function Timeline() {
           <span>Add Cut</span>
         </button>
 
+        {/* Add Zoom button */}
+        <button
+          type="button"
+          onClick={handleAddZoom}
+          className="flex items-center gap-1.5 px-2 py-1 text-xs rounded bg-muted hover:bg-muted-foreground/20 transition-colors"
+          title="Add zoom at playhead"
+        >
+          <ZoomIn className="w-3.5 h-3.5" />
+          <span>Add Zoom</span>
+        </button>
+
         {/* Cut count indicator */}
         {cuts.length > 0 && (
           <span className="text-xs text-muted-foreground">
             {cuts.length} cut{cuts.length !== 1 ? 's' : ''}
+          </span>
+        )}
+
+        {/* Zoom count indicator */}
+        {zoomRegions.length > 0 && (
+          <span className="text-xs text-muted-foreground">
+            {zoomRegions.length} zoom{zoomRegions.length !== 1 ? 's' : ''}
           </span>
         )}
       </div>
@@ -209,14 +258,31 @@ export function Timeline() {
           <div className="absolute inset-y-2 left-0 right-0 mx-1 bg-primary/20 rounded">
             {/* Cut regions */}
             {cuts.map((cut) => (
-              <CutRegionOverlay
+              <TimelineRegion
                 key={cut.id}
-                cut={cut}
+                region={cut}
                 duration={duration}
+                variant="cut"
+                label="CUT"
                 isSelected={selectedCutId === cut.id}
                 onSelect={() => setSelectedCut(cut.id)}
                 onUpdate={updateCut}
                 onDelete={() => removeCut(cut.id)}
+              />
+            ))}
+
+            {/* Zoom regions */}
+            {zoomRegions.map((zoom) => (
+              <TimelineRegion
+                key={zoom.id}
+                region={zoom}
+                duration={duration}
+                variant="zoom"
+                label={`${zoom.zoomLevel.toFixed(1)}x`}
+                isSelected={selectedZoomId === zoom.id}
+                onSelect={() => setSelectedZoom(zoom.id)}
+                onUpdate={updateZoom}
+                onDelete={() => removeZoom(zoom.id)}
               />
             ))}
           </div>
@@ -227,10 +293,10 @@ export function Timeline() {
             style={{ left: `${playheadPercent}%` }}
           />
 
-          {/* Placeholder text when no cuts */}
-          {cuts.length === 0 && (
+          {/* Placeholder text when no regions */}
+          {cuts.length === 0 && zoomRegions.length === 0 && (
             <div className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground/50">
-              Click "Add Cut" to mark sections to remove
+              Click "Add Cut" or "Add Zoom" to add timeline regions
             </div>
           )}
         </div>

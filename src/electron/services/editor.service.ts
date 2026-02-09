@@ -23,6 +23,7 @@ import type {
   ZoomConfig,
 } from '../types/project.types.js';
 import { DEFAULT_CURSOR_CONFIG, DEFAULT_ZOOM_CONFIG } from '../types/project.types.js';
+import type { ZoomRegion } from '../types/zoom.types.js';
 import * as CompositorService from './compositor.service.js';
 import { getRecording } from './database.service.js';
 import * as ffmpegService from './ffmpeg.service.js';
@@ -82,6 +83,7 @@ export async function createProject(recordingId: string): Promise<Project | null
     spritesheetMeta,
     backgroundColor: '#000000',
     cuts: [],
+    zoomRegions: [],
     createdAt: Date.now(),
     modifiedAt: Date.now(),
   };
@@ -252,6 +254,66 @@ export function updateCut(cut: CutRegion): boolean {
 
   activeProject.cuts[index] = cut;
   activeProject.cuts.sort((a, b) => a.startMs - b.startMs);
+  activeProject.modifiedAt = Date.now();
+
+  projectStorage.saveProjectMetadata(activeProject);
+  return true;
+}
+
+/**
+ * Get all zoom regions
+ */
+export function getZoomRegions(): ZoomRegion[] {
+  if (!activeProject) return [];
+  return activeProject.zoomRegions || [];
+}
+
+/**
+ * Add a new zoom region
+ */
+export function addZoomRegion(zoom: ZoomRegion): boolean {
+  if (!activeProject) return false;
+
+  // Initialize zoomRegions array if not present
+  if (!activeProject.zoomRegions) {
+    activeProject.zoomRegions = [];
+  }
+
+  activeProject.zoomRegions.push(zoom);
+  activeProject.zoomRegions.sort((a, b) => a.startMs - b.startMs);
+  activeProject.modifiedAt = Date.now();
+
+  projectStorage.saveProjectMetadata(activeProject);
+  return true;
+}
+
+/**
+ * Remove a zoom region by ID
+ */
+export function removeZoomRegion(zoomId: string): boolean {
+  if (!activeProject || !activeProject.zoomRegions) return false;
+
+  const index = activeProject.zoomRegions.findIndex((z) => z.id === zoomId);
+  if (index === -1) return false;
+
+  activeProject.zoomRegions.splice(index, 1);
+  activeProject.modifiedAt = Date.now();
+
+  projectStorage.saveProjectMetadata(activeProject);
+  return true;
+}
+
+/**
+ * Update a zoom region
+ */
+export function updateZoomRegion(zoom: ZoomRegion): boolean {
+  if (!activeProject || !activeProject.zoomRegions) return false;
+
+  const index = activeProject.zoomRegions.findIndex((z) => z.id === zoom.id);
+  if (index === -1) return false;
+
+  activeProject.zoomRegions[index] = zoom;
+  activeProject.zoomRegions.sort((a, b) => a.startMs - b.startMs);
   activeProject.modifiedAt = Date.now();
 
   projectStorage.saveProjectMetadata(activeProject);

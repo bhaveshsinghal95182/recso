@@ -1,5 +1,6 @@
 import type { CutRegion } from './cut.types.js';
 import type { SpritesheetMeta } from './spritesheet.types.js';
+import type { ZoomRegion } from './zoom.types.js';
 
 /**
  * Project Types for the Editor Service
@@ -111,6 +112,8 @@ export interface Project {
   backgroundColor: string;
   /** Cut regions to exclude from export */
   cuts: CutRegion[];
+  /** Zoom regions for zoom effects during export */
+  zoomRegions: ZoomRegion[];
   /** Project creation timestamp */
   createdAt: number;
   /** Last modified timestamp */

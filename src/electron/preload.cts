@@ -188,6 +188,35 @@ electron.contextBridge.exposeInMainWorld('electron', {
     /** Update a cut region */
     updateCut: (cut: { id: string; startMs: number; endMs: number }) =>
       electron.ipcRenderer.invoke('editor:update-cut', cut),
+
+    /** Get all zoom regions */
+    getZoomRegions: () => electron.ipcRenderer.invoke('editor:get-zoom-regions'),
+
+    /** Add a new zoom region */
+    addZoomRegion: (zoom: {
+      id: string;
+      startMs: number;
+      endMs: number;
+      zoomLevel: number;
+      focalX: number;
+      focalY: number;
+      easeDurationMs: number;
+    }) => electron.ipcRenderer.invoke('editor:add-zoom-region', zoom),
+
+    /** Remove a zoom region by ID */
+    removeZoomRegion: (zoomId: string) =>
+      electron.ipcRenderer.invoke('editor:remove-zoom-region', zoomId),
+
+    /** Update a zoom region */
+    updateZoomRegion: (zoom: {
+      id: string;
+      startMs: number;
+      endMs: number;
+      zoomLevel: number;
+      focalX: number;
+      focalY: number;
+      easeDurationMs: number;
+    }) => electron.ipcRenderer.invoke('editor:update-zoom-region', zoom),
   },
 
   // Exporter

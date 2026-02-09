@@ -2,10 +2,44 @@ import { Pause, Play } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useEditor } from '../../../context/editor-context';
+import type { ZoomRegion } from '../../../types';
 import { VerticalTabs } from './vertical-tabs';
 
+/**
+ * Calculate the current zoom level based on time within a zoom region
+ * Uses ease-in at the start and ease-out at the end
+ */
+function calculateZoomLevel(
+  timeMs: number,
+  region: ZoomRegion,
+): { scale: number; focalX: number; focalY: number } {
+  const regionDuration = region.endMs - region.startMs;
+  const timeInRegion = timeMs - region.startMs;
+  const easeDuration = Math.min(region.easeDurationMs, regionDuration / 2);
+
+  let progress: number;
+
+  if (timeInRegion < easeDuration) {
+    // Ease in phase
+    progress = timeInRegion / easeDuration;
+    // Smooth easing using cosine
+    progress = (1 - Math.cos(progress * Math.PI)) / 2;
+  } else if (timeInRegion > regionDuration - easeDuration) {
+    // Ease out phase
+    const timeFromEnd = regionDuration - timeInRegion;
+    progress = timeFromEnd / easeDuration;
+    progress = (1 - Math.cos(progress * Math.PI)) / 2;
+  } else {
+    // Fully zoomed in
+    progress = 1;
+  }
+
+  const scale = 1 + (region.zoomLevel - 1) * progress;
+  return { scale, focalX: region.focalX, focalY: region.focalY };
+}
+
 export function MinimalPreview() {
-  const { project, isPlaying, currentTime, play, pause, updateDuration } = useEditor();
+  const { project, isPlaying, currentTime, play, pause, updateDuration, zoomRegions } = useEditor();
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -129,7 +163,28 @@ export function MinimalPreview() {
         const offsetX = (canvas.width - drawWidth) / 2;
         const offsetY = (canvas.height - drawHeight) / 2;
 
-        ctx.drawImage(video, offsetX, offsetY, drawWidth, drawHeight);
+        // Check for active zoom region
+        const activeZoom = zoomRegions.find(
+          (z) => currentTime >= z.startMs && currentTime <= z.endMs,
+        );
+
+        if (activeZoom) {
+          const { scale, focalX, focalY } = calculateZoomLevel(currentTime, activeZoom);
+
+          // Calculate focal point in canvas coordinates (relative to video area)
+          const focalCanvasX = offsetX + drawWidth * focalX;
+          const focalCanvasY = offsetY + drawHeight * focalY;
+
+          // Apply zoom transform around focal point
+          ctx.save();
+          ctx.translate(focalCanvasX, focalCanvasY);
+          ctx.scale(scale, scale);
+          ctx.translate(-focalCanvasX, -focalCanvasY);
+          ctx.drawImage(video, offsetX, offsetY, drawWidth, drawHeight);
+          ctx.restore();
+        } else {
+          ctx.drawImage(video, offsetX, offsetY, drawWidth, drawHeight);
+        }
       }
 
       requestAnimationFrame(render);
@@ -137,7 +192,7 @@ export function MinimalPreview() {
 
     const animId = requestAnimationFrame(render);
     return () => cancelAnimationFrame(animId);
-  }, [project, videoLoaded]);
+  }, [project, videoLoaded, zoomRegions, currentTime]);
 
   const handlePlayPause = useCallback(() => {
     if (isPlaying) pause();

@@ -12,6 +12,7 @@ import { backgroundFilter } from './background-filter.js';
 import type { ExportFilter, FilterContext } from './base-filter.js';
 import { cutFilter } from './cut-filter.js';
 import { scalingFilter } from './scaling-filter.js';
+import { zoomFilter } from './zoom-filter.js';
 
 /**
  * All registered filters.
@@ -19,12 +20,9 @@ import { scalingFilter } from './scaling-filter.js';
  */
 const filters: ExportFilter[] = [
   backgroundFilter, // Priority 10 - Apply background at original resolution
+  zoomFilter, // Priority 30 - Zoom AFTER background, before cut
   cutFilter, // Priority 50 - Cut AFTER compositing to avoid duration issues
   scalingFilter, // Priority 90 - Scale to output resolution last
-  // Future filters:
-  // cursorOverlayFilter,
-  // zoomFilter,
-  // watermarkFilter,
 ];
 
 /**
