@@ -35,6 +35,10 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  // Ref to track recording ID across async closures (e.g. track.onended)
+  const recordingIdRef = useRef<string | null>(null);
+  // Guard against double-stop (e.g. track ends + user clicks stop)
+  const isStoppingRef = useRef(false);
 
   // Fetch available sources
   const refreshSources = useCallback(async () => {
@@ -70,6 +74,50 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
       }
     };
   }, [refreshSources]);
+
+  // Internal stop helper — used by both stopRecording() and the track.onended handler
+  const stopRecordingInternal = useCallback(async () => {
+    // Guard against double-stop
+    if (isStoppingRef.current) {
+      console.log('[Recorder] Stop already in progress, skipping');
+      return { success: true };
+    }
+    isStoppingRef.current = true;
+
+    try {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        // Request final data chunk before stopping
+        mediaRecorderRef.current.requestData();
+        mediaRecorderRef.current.stop();
+      }
+
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
+
+      const recId = recordingIdRef.current;
+      if (recId) {
+        recordingIdRef.current = null;
+        const result = await window.electron.recorder.stop(recId);
+        setState({
+          status: 'idle',
+          recordingId: null,
+          duration: 0,
+          bytesWritten: 0,
+        });
+        return result;
+      }
+
+      return { success: false, error: 'No active recording' };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to stop recording';
+      setError(message);
+      return { success: false, error: message };
+    } finally {
+      isStoppingRef.current = false;
+    }
+  }, []);
 
   // Start recording
   const startRecording = useCallback(
@@ -125,6 +173,7 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
         }
 
         const recordingId = result.recordingId;
+        recordingIdRef.current = recordingId;
 
         // Create MediaRecorder
         const mediaRecorder = new MediaRecorder(stream, {
@@ -146,6 +195,17 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
           setError('Recording error occurred');
         };
 
+        // Listen for the video track ending (e.g. user clicks "Stop Sharing")
+        const videoTrack = stream.getVideoTracks()[0];
+        if (videoTrack) {
+          videoTrack.onended = () => {
+            console.log(
+              '[Recorder] Video track ended (user clicked "Stop Sharing"), auto-stopping recording',
+            );
+            stopRecordingInternal();
+          };
+        }
+
         // Start with timeslice for chunked recording
         mediaRecorder.start(timeslice);
 
@@ -163,39 +223,13 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
         return { success: false, error: message };
       }
     },
-    [audio, frameRate, timeslice],
+    [audio, frameRate, timeslice, stopRecordingInternal],
   );
 
-  // Stop recording
+  // Stop recording (public API — delegates to internal helper)
   const stopRecording = useCallback(async () => {
-    try {
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-        mediaRecorderRef.current.stop();
-      }
-
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-        streamRef.current = null;
-      }
-
-      if (state.recordingId) {
-        const result = await window.electron.recorder.stop(state.recordingId);
-        setState({
-          status: 'idle',
-          recordingId: null,
-          duration: 0,
-          bytesWritten: 0,
-        });
-        return result;
-      }
-
-      return { success: false, error: 'No active recording' };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to stop recording';
-      setError(message);
-      return { success: false, error: message };
-    }
-  }, [state.recordingId]);
+    return stopRecordingInternal();
+  }, [stopRecordingInternal]);
 
   // Pause recording
   const pauseRecording = useCallback(() => {

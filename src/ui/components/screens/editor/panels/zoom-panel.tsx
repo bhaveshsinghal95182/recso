@@ -91,15 +91,19 @@ export function ZoomPanel() {
       const events = await window.electron.editor.getMouseEvents();
       console.log(`[ZoomPanel] Fetched ${events.length} total events`);
 
-      // Filter for clicks only and sort by time
+      // Get video duration to filter out clicks past the end
+      const videoDuration = project.timeline.duration;
+      console.log(`[ZoomPanel] Video duration: ${videoDuration}ms`);
+
+      // Filter for clicks only, exclude clicks past video duration, and sort by time
       const clicks = events
-        .filter((e) => e.eventType === 'click')
+        .filter((e) => e.eventType === 'click' && e.timestampMs <= videoDuration)
         .sort((a, b) => a.timestampMs - b.timestampMs);
 
-      console.log(`[ZoomPanel] Found ${clicks.length} click events`);
+      console.log(`[ZoomPanel] Found ${clicks.length} valid click events (within video duration)`);
 
       if (clicks.length === 0) {
-        console.log('[ZoomPanel] No click events found');
+        console.log('[ZoomPanel] No click events found within video duration');
         setIsGenerating(false);
         return;
       }
@@ -122,7 +126,8 @@ export function ZoomPanel() {
           console.log(
             `[ZoomPanel] Extending region for click at ${click.timestampMs}ms (diff: ${timeSinceLastClick}ms)`,
           );
-          currentRegion.endMs = click.timestampMs + ZOOM_DURATION_MS;
+          // Clamp endMs to video duration
+          currentRegion.endMs = Math.min(click.timestampMs + ZOOM_DURATION_MS, videoDuration);
           // Keep focal point at first click's location
         } else {
           // Create new region
@@ -144,7 +149,7 @@ export function ZoomPanel() {
           currentRegion = {
             id: crypto.randomUUID(),
             startMs: Math.max(0, click.timestampMs - PRE_CLICK_LEAD_MS),
-            endMs: click.timestampMs + ZOOM_DURATION_MS,
+            endMs: Math.min(click.timestampMs + ZOOM_DURATION_MS, videoDuration),
             zoomLevel: DEFAULT_ZOOM_LEVEL,
             focalX,
             focalY,
