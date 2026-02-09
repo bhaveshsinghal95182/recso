@@ -9,6 +9,7 @@ import type {
   FrameState,
   OrphanedRecording,
   Project,
+  RecordedMouseEvent,
   RecordingConfig,
   SpritesheetMeta,
   StartRecordingResult,
@@ -226,6 +227,9 @@ interface ElectronAPI {
 
     /** Update multiple zoom regions at once (bulk) */
     updateZoomRegions: (zooms: ZoomRegion[]) => Promise<boolean>;
+
+    /** Get mouse events for the active project's recording */
+    getMouseEvents: () => Promise<RecordedMouseEvent[]>;
   };
 
   exporter: {

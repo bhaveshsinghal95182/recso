@@ -13,6 +13,17 @@ export interface DesktopSource {
   isPrimary?: boolean;
 }
 
+/** Mouse event recorded during a session */
+export interface RecordedMouseEvent {
+  id?: number;
+  recordingId: string;
+  timestampMs: number;
+  x: number;
+  y: number;
+  eventType: 'click' | 'mousemove';
+  button?: 'left' | 'right' | 'middle';
+}
+
 export interface RecorderState {
   status: 'idle' | 'recording' | 'paused';
   recordingId: string | null;

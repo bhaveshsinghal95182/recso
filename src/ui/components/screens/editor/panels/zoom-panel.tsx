@@ -1,4 +1,4 @@
-import { Copy } from 'lucide-react';
+import { Copy, Zap } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -6,14 +6,23 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
 import { useEditor } from '../../../../context/editor-context';
+import type { ZoomRegion } from '../../../../types';
+
+// Constants for auto-zoom generation
+const GROUP_THRESHOLD_MS = 3000; // Max time between clicks to consider them part of the same action
+const ZOOM_DURATION_MS = 2000; // Duration to hold zoom after the last click in a group
+const PRE_CLICK_LEAD_MS = 500; // Start zooming slightly before the click
+const DEFAULT_ZOOM_LEVEL = 1.5;
 
 export function ZoomPanel() {
-  const { zoomRegions, selectedZoomId, updateZoom, updateZoomRegions } = useEditor();
+  const { project, zoomRegions, selectedZoomId, addZoom, updateZoom, updateZoomRegions } =
+    useEditor();
 
   const selectedZoom = zoomRegions.find((z) => z.id === selectedZoomId);
 
   // Local state for debounced slider
   const [localZoomLevel, setLocalZoomLevel] = useState(selectedZoom?.zoomLevel ?? 1.5);
+  const [isGenerating, setIsGenerating] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Sync local state when selected zoom changes
@@ -67,10 +76,127 @@ export function ZoomPanel() {
     updateZoomRegions(updatedZooms);
   }, [selectedZoom, zoomRegions, updateZoomRegions]);
 
+  /**
+   * Generate zoom regions from recorded mouse click events.
+   * Groups rapid clicks (within GROUP_THRESHOLD_MS) into single zoom regions.
+   */
+  const generateZoomsFromClicks = useCallback(async () => {
+    if (!project) return;
+
+    setIsGenerating(true);
+
+    try {
+      console.log('[ZoomPanel] Fetching mouse events...');
+      // Fetch mouse events from backend
+      const events = await window.electron.editor.getMouseEvents();
+      console.log(`[ZoomPanel] Fetched ${events.length} total events`);
+
+      // Filter for clicks only and sort by time
+      const clicks = events
+        .filter((e) => e.eventType === 'click')
+        .sort((a, b) => a.timestampMs - b.timestampMs);
+
+      console.log(`[ZoomPanel] Found ${clicks.length} click events`);
+
+      if (clicks.length === 0) {
+        console.log('[ZoomPanel] No click events found');
+        setIsGenerating(false);
+        return;
+      }
+
+      // Get video dimensions for normalizing coordinates
+      const videoWidth = project.videoDimensions?.width || 1920;
+      const videoHeight = project.videoDimensions?.height || 1080;
+      console.log(`[ZoomPanel] Using video dimensions: ${videoWidth}x${videoHeight}`);
+
+      // Generate zoom regions by grouping rapid clicks
+      const newZooms: ZoomRegion[] = [];
+      let currentRegion: ZoomRegion | null = null;
+      let lastClickTime = 0;
+
+      for (const click of clicks) {
+        const timeSinceLastClick = click.timestampMs - lastClickTime;
+
+        if (currentRegion && timeSinceLastClick < GROUP_THRESHOLD_MS) {
+          // Extend current region - rapid click detected
+          console.log(
+            `[ZoomPanel] Extending region for click at ${click.timestampMs}ms (diff: ${timeSinceLastClick}ms)`,
+          );
+          currentRegion.endMs = click.timestampMs + ZOOM_DURATION_MS;
+          // Keep focal point at first click's location
+        } else {
+          // Create new region
+          if (currentRegion) {
+            newZooms.push(currentRegion);
+            console.log(
+              `[ZoomPanel] Finalized region ${currentRegion.id} (${currentRegion.startMs}-${currentRegion.endMs}ms)`,
+            );
+          }
+
+          // Normalize coordinates to 0-1 range
+          const focalX = Math.max(0, Math.min(1, click.x / videoWidth));
+          const focalY = Math.max(0, Math.min(1, click.y / videoHeight));
+
+          console.log(
+            `[ZoomPanel] Creating new region for click at ${click.timestampMs}ms at (${click.x}, ${click.y}) -> (${focalX.toFixed(3)}, ${focalY.toFixed(3)})`,
+          );
+
+          currentRegion = {
+            id: crypto.randomUUID(),
+            startMs: Math.max(0, click.timestampMs - PRE_CLICK_LEAD_MS),
+            endMs: click.timestampMs + ZOOM_DURATION_MS,
+            zoomLevel: DEFAULT_ZOOM_LEVEL,
+            focalX,
+            focalY,
+            easeDurationMs: 300,
+          };
+        }
+
+        lastClickTime = click.timestampMs;
+      }
+
+      // Don't forget the last region
+      if (currentRegion) {
+        newZooms.push(currentRegion);
+      }
+
+      // Add all new zoom regions
+      for (const zoom of newZooms) {
+        await addZoom(zoom.startMs, zoom.endMs);
+      }
+
+      console.log(
+        `[ZoomPanel] Generated ${newZooms.length} zoom regions from ${clicks.length} clicks`,
+      );
+    } catch (error) {
+      console.error('[ZoomPanel] Failed to generate zooms:', error);
+    } finally {
+      setIsGenerating(false);
+    }
+  }, [project, addZoom]);
+
   if (!selectedZoom) {
     return (
-      <div className="flex items-center justify-center h-fit text-sm text-muted-foreground">
-        Select a zoom region on the timeline to edit its settings.
+      <div className="space-y-4">
+        <div className="flex items-center justify-center h-fit text-sm text-muted-foreground">
+          Select a zoom region on the timeline to edit its settings.
+        </div>
+
+        {/* Generate Auto-Zooms button - always visible */}
+        <div className="pt-4 border-t border-border">
+          <Button
+            variant="outline"
+            onClick={generateZoomsFromClicks}
+            disabled={isGenerating || !project}
+            className="w-full"
+          >
+            <Zap className="size-4 mr-2" />
+            {isGenerating ? 'Generating...' : 'Generate Auto-Zooms'}
+          </Button>
+          <p className="text-xs text-muted-foreground mt-2 text-center">
+            Creates zoom regions for each mouse click
+          </p>
+        </div>
       </div>
     );
   }
@@ -111,6 +237,22 @@ export function ZoomPanel() {
           </Button>
         </div>
       )}
+
+      {/* Generate Auto-Zooms button */}
+      <div className="pt-4 border-t border-border">
+        <Button
+          variant="outline"
+          onClick={generateZoomsFromClicks}
+          disabled={isGenerating || !project}
+          className="w-full"
+        >
+          <Zap className="size-4 mr-2" />
+          {isGenerating ? 'Generating...' : 'Generate Auto-Zooms'}
+        </Button>
+        <p className="text-xs text-muted-foreground mt-2 text-center">
+          Creates zoom regions for each mouse click
+        </p>
+      </div>
     </div>
   );
 }

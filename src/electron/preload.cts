@@ -230,6 +230,19 @@ electron.contextBridge.exposeInMainWorld('electron', {
         easeDurationMs: number;
       }[],
     ) => electron.ipcRenderer.invoke('editor:update-zoom-regions', zooms),
+
+    /** Get mouse events for the active project's recording */
+    getMouseEvents: (): Promise<
+      {
+        id: number;
+        recordingId: string;
+        timestampMs: number;
+        x: number;
+        y: number;
+        eventType: 'click' | 'mousemove';
+        button?: 'left' | 'right' | 'middle';
+      }[]
+    > => electron.ipcRenderer.invoke('editor:get-mouse-events'),
   },
 
   // Exporter

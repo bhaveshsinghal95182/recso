@@ -11,6 +11,7 @@
 import { ipcMain } from 'electron';
 
 import * as editorService from '../services/editor.service.js';
+import { mouseTrackerService } from '../services/mouse-tracker.service.js';
 import * as projectStorage from '../services/project-storage.service.js';
 import type { CutRegion } from '../types/cut.types.js';
 import type { CursorConfig, ZoomConfig } from '../types/project.types.js';
@@ -158,6 +159,13 @@ export function registerEditorHandlers(): void {
   // Update multiple zoom regions at once (bulk update)
   ipcMain.handle('editor:update-zoom-regions', async (_event, zooms: ZoomRegion[]) => {
     return editorService.updateZoomRegions(zooms);
+  });
+
+  // Get mouse events for the active project's recording
+  ipcMain.handle('editor:get-mouse-events', async () => {
+    const project = editorService.getActiveProject();
+    if (!project) return [];
+    return mouseTrackerService.getEventsForRecording(project.recordingId);
   });
 
   console.log('[EditorIPC] Handlers registered');
