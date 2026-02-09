@@ -31,6 +31,17 @@ import type {
 // Tabs for the properties panel
 export type PropertiesTab = 'general' | 'zoom' | 'export';
 
+// Mouse event interface (matching backend)
+interface MouseEvent {
+  id?: number;
+  recordingId: string;
+  timestampMs: number;
+  x: number;
+  y: number;
+  eventType: 'click' | 'mousemove';
+  button?: 'left' | 'right' | 'middle';
+}
+
 // Editor state interface
 interface EditorState {
   project: Project | null;
@@ -52,6 +63,8 @@ interface EditorState {
   selectedZoomId: string | null;
   // Focal point editing mode
   isEditingFocalPoint: boolean;
+  // Mouse events (for local cursor calculation)
+  mouseEvents: MouseEvent[];
 }
 
 // Editor actions interface
@@ -103,6 +116,7 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [frameState, setFrameState] = useState<FrameState | null>(null);
+  const [mouseEvents, setMouseEvents] = useState<MouseEvent[]>([]);
 
   // Active properties tab (default to 'general')
   const [activePropertiesTab, setActivePropertiesTab] = useState<PropertiesTab>('general');
@@ -138,21 +152,57 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
     };
   }, [recordingId]);
 
-  // Update frame state when time changes
+  /**
+   * Calculate cursor position at a specific time locally
+   * Logic ported from editor.service.ts
+   */
+  const getCursorAtTime = useCallback(
+    (timeMs: number): TransformedCursorPosition | null => {
+      if (!mouseEvents || mouseEvents.length === 0) {
+        return null;
+      }
+
+      // Find a click within 500ms window
+      const windowMs = 500;
+      const nearbyClick = mouseEvents.find(
+        (click) =>
+          click.eventType === 'click' &&
+          click.timestampMs >= timeMs - windowMs &&
+          click.timestampMs <= timeMs + windowMs,
+      );
+
+      if (!nearbyClick) {
+        return null;
+      }
+
+      // Calculate fade based on distance from click time
+      const distance = Math.abs(nearbyClick.timestampMs - timeMs);
+      const fadeProgress = distance / windowMs; // 0 at click, 1 at edge
+
+      return {
+        x: nearbyClick.x,
+        y: nearbyClick.y,
+        visible: true,
+        eventType: 'click',
+        button: nearbyClick.button,
+        isInterpolated: false,
+        fadeProgress, // For animation
+      };
+    },
+    [mouseEvents],
+  );
+
+  // Update frame state when time changes (sync)
   useEffect(() => {
     if (!project) return;
 
-    const updateFrameState = async () => {
-      try {
-        const state = await window.electron.editor.getFrameState(currentTime);
-        setFrameState(state);
-      } catch (err) {
-        console.error('[EditorContext] Failed to get frame state:', err);
-      }
-    };
-
-    updateFrameState();
-  }, [currentTime, project]);
+    // Sync update for frame state to avoid lag
+    const cursor = getCursorAtTime(currentTime);
+    setFrameState({
+      timeMs: currentTime,
+      cursor,
+    });
+  }, [currentTime, project, getCursorAtTime]);
 
   // Playback loop
   useEffect(() => {
@@ -208,7 +258,20 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
       setSelectedCut(null);
       setZoomRegions(proj.zoomRegions || []);
       setSelectedZoom(null);
+      setZoomRegions(proj.zoomRegions || []);
+      setSelectedZoom(null);
       setCurrentTime(0);
+
+      // Load mouse events
+      try {
+        const events = await window.electron.editor.getMouseEvents();
+        setMouseEvents(events || []);
+        console.log('[EditorContext] Loaded mouse events:', events?.length);
+      } catch (err) {
+        console.error('[EditorContext] Failed to load mouse events:', err);
+        setMouseEvents([]);
+      }
+
       setIsLoading(false);
       return true;
     } catch (err) {
@@ -236,6 +299,7 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
     setCurrentTime(0);
     setDuration(0);
     setFrameState(null);
+    setMouseEvents([]);
     window.electron.editor.closeProject();
   }, []);
 
@@ -572,6 +636,7 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
     zoomRegions,
     selectedZoomId,
     isEditingFocalPoint,
+    mouseEvents,
     loadProject,
     saveProject,
     closeProject,
