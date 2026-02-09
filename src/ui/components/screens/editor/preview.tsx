@@ -138,7 +138,7 @@ export function MinimalPreview() {
       if (project.backgroundColor === 'transparent') {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
       } else {
-        ctx.fillStyle = project.backgroundColor || '#1a1a2e';
+        ctx.fillStyle = project.backgroundColor || '#000000';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
       }
 

@@ -56,7 +56,7 @@ export interface CompositorConfig {
 /** Default compositor configuration */
 export const DEFAULT_COMPOSITOR_CONFIG: CompositorConfig = {
   backgroundPath: null,
-  backgroundColor: '#1a1a2e',
+  backgroundColor: '#000000',
   canvasSize: { width: 1920, height: 1080 },
   layout: {
     padding: 0.05,
