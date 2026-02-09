@@ -78,6 +78,7 @@ interface EditorActions {
   removeZoom: (zoomId: string) => Promise<void>;
   updateZoom: (zoom: ZoomRegion) => Promise<void>;
   updateZoomRegions: (zooms: ZoomRegion[]) => Promise<void>;
+  replaceZoomRegions: (zooms: ZoomRegion[]) => Promise<void>;
   setSelectedZoom: (zoomId: string | null) => void;
 }
 
@@ -510,6 +511,35 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
     [project],
   );
 
+  /**
+   * Completely replace all zoom regions (not a merge — used by Smart Pan)
+   */
+  const replaceZoomRegions = useCallback(
+    async (zooms: ZoomRegion[]) => {
+      if (!project) return;
+
+      try {
+        // Sync to backend
+        // First remove all existing, then add all new
+        const currentZooms = await window.electron.editor.getZoomRegions();
+        for (const z of currentZooms) {
+          await window.electron.editor.removeZoomRegion(z.id);
+        }
+        for (const z of zooms) {
+          await window.electron.editor.addZoomRegion(z);
+        }
+
+        // Update local state
+        const sorted = [...zooms].sort((a, b) => a.startMs - b.startMs);
+        setZoomRegions(sorted);
+        setProject((prev) => (prev ? { ...prev, zoomRegions: sorted } : null));
+      } catch (err) {
+        console.error('[EditorContext] replaceZoomRegions error:', err);
+      }
+    },
+    [project],
+  );
+
   const value: EditorContextValue = {
     project,
     isLoading,
@@ -542,6 +572,7 @@ export function EditorProvider({ children, recordingId }: EditorProviderProps) {
     removeZoom,
     updateZoom,
     updateZoomRegions,
+    replaceZoomRegions,
     setSelectedZoom,
   };
 
