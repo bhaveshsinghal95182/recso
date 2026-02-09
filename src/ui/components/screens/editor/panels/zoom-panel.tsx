@@ -420,7 +420,7 @@ export function ZoomPanel() {
       </div>
 
       {zoomRegions.length > 1 && (
-        <div className="pt-4 border-t border-border">
+        <div className="pt-2">
           <Button variant="outline" onClick={handleApplyToAll} className="w-full">
             <Copy className="size-4 mr-2" />
             Apply to All ({zoomRegions.length} regions)
