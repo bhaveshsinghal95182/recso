@@ -3,7 +3,6 @@ import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 
-import { CursorPanel } from './panels/cursor-panel';
 import { GeneralPanel } from './panels/general-panel';
 import { ZoomPanel } from './panels/zoom-panel';
 import { useEditor } from '../../../context/editor-context';
@@ -22,7 +21,6 @@ export function PropertiesPanel() {
   // Tab title mapping
   const tabTitles: Record<typeof activePropertiesTab, string> = {
     general: 'General',
-    cursor: 'Cursor',
     zoom: 'Zoom',
     export: 'Export',
   };
@@ -36,9 +34,6 @@ export function PropertiesPanel() {
 
         {/* General Tab */}
         {activePropertiesTab === 'general' && <GeneralPanel />}
-
-        {/* Cursor Tab */}
-        {activePropertiesTab === 'cursor' && <CursorPanel />}
 
         {/* Zoom Tab */}
         {activePropertiesTab === 'zoom' && <ZoomPanel />}

@@ -29,7 +29,7 @@ import type {
 } from '../types';
 
 // Tabs for the properties panel
-export type PropertiesTab = 'general' | 'cursor' | 'zoom' | 'export';
+export type PropertiesTab = 'general' | 'zoom' | 'export';
 
 // Editor state interface
 interface EditorState {
