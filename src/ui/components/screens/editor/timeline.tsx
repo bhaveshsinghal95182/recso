@@ -59,6 +59,7 @@ export function Timeline() {
     updateZoom,
     removeZoom,
     setSelectedZoom,
+    setActivePropertiesTab,
   } = useEditor();
   const containerRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -280,7 +281,10 @@ export function Timeline() {
                 variant="zoom"
                 label={`${zoom.zoomLevel.toFixed(1)}x`}
                 isSelected={selectedZoomId === zoom.id}
-                onSelect={() => setSelectedZoom(zoom.id)}
+                onSelect={() => {
+                  setSelectedZoom(zoom.id);
+                  setActivePropertiesTab('zoom');
+                }}
                 onUpdate={updateZoom}
                 onDelete={() => removeZoom(zoom.id)}
               />

@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 
 import { CursorPanel } from './panels/cursor-panel';
 import { GeneralPanel } from './panels/general-panel';
+import { ZoomPanel } from './panels/zoom-panel';
 import { useEditor } from '../../../context/editor-context';
 import { ExportModal } from './export-modal';
 
@@ -22,6 +23,7 @@ export function PropertiesPanel() {
   const tabTitles: Record<typeof activePropertiesTab, string> = {
     general: 'General',
     cursor: 'Cursor',
+    zoom: 'Zoom',
     export: 'Export',
   };
 
@@ -37,6 +39,9 @@ export function PropertiesPanel() {
 
         {/* Cursor Tab */}
         {activePropertiesTab === 'cursor' && <CursorPanel />}
+
+        {/* Zoom Tab */}
+        {activePropertiesTab === 'zoom' && <ZoomPanel />}
       </div>
 
       {/* Export buttons - always at bottom */}

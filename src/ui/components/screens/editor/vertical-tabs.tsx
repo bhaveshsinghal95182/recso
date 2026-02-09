@@ -1,4 +1,4 @@
-import { MousePointer2, Settings } from 'lucide-react';
+import { MousePointer2, Settings, ZoomIn } from 'lucide-react';
 import { useMemo } from 'react';
 
 import { type PropertiesTab, useEditor } from '../../../context/editor-context';
@@ -39,6 +39,7 @@ export function VerticalTabs() {
     () => [
       { id: 'general', label: 'General', Icon: Settings },
       { id: 'cursor', label: 'Cursor', Icon: MousePointer2 },
+      { id: 'zoom', label: 'Zoom', Icon: ZoomIn },
     ],
     [],
   );
