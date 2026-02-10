@@ -274,6 +274,9 @@ async function runFFmpegPipeline(
       }
     });
 
+    let lastEmitTime = 0;
+    const THROTTLE_MS = 200;
+
     // Handle progress
     child.stderr.on('data', (data) => {
       const output = data.toString();
@@ -296,7 +299,13 @@ async function runFFmpegPipeline(
           fps,
           eta: calculateETA(percent, currentJob.startedAt),
         };
-        exporterEvents.emit('progress', currentJob.progress);
+
+        // Throttle updates to renderer to avoid UI lag
+        const now = Date.now();
+        if (now - lastEmitTime >= THROTTLE_MS || percent === 100) {
+          exporterEvents.emit('progress', currentJob.progress);
+          lastEmitTime = now;
+        }
       }
     });
 

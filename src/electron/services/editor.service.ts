@@ -24,6 +24,7 @@ import type {
 } from '../types/project.types.js';
 import { DEFAULT_CURSOR_CONFIG, DEFAULT_ZOOM_CONFIG } from '../types/project.types.js';
 import type { ZoomRegion } from '../types/zoom.types.js';
+import { findClosestEventInWindow } from '../util.js';
 import * as CompositorService from './compositor.service.js';
 import { getRecording } from './database.service.js';
 import * as ffmpegService from './ffmpeg.service.js';
@@ -373,9 +374,7 @@ export function getCursorAtTime(timeMs: number): TransformedCursorPosition | nul
 
   // Find a click within 500ms window
   const windowMs = 500;
-  const nearbyClick = clicks.find(
-    (click) => click.timestampMs >= timeMs - windowMs && click.timestampMs <= timeMs + windowMs,
-  );
+  const nearbyClick = findClosestEventInWindow(clicks, timeMs, windowMs);
 
   if (!nearbyClick) {
     return null;

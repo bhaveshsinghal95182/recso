@@ -6,7 +6,7 @@
  */
 
 import { Scissors, ZoomIn } from 'lucide-react';
-import { useCallback, useRef } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 
 import { useEditor } from '../../../context/editor-context';
 import { TimelineRegion } from './timeline-region';
@@ -67,13 +67,16 @@ export function Timeline() {
   const { major: majorInterval, minor: minorInterval } = getTickInterval(duration);
 
   // Generate tick marks based on duration
-  const ticks: { time: number; isMajor: boolean }[] = [];
-  for (let t = 0; t <= duration; t += minorInterval) {
-    ticks.push({
-      time: t,
-      isMajor: t % majorInterval === 0,
-    });
-  }
+  const ticks = useMemo<{ time: number; isMajor: boolean }[]>(() => {
+    const t: { time: number; isMajor: boolean }[] = [];
+    for (let i = 0; i <= duration; i += minorInterval) {
+      t.push({
+        time: i,
+        isMajor: i % majorInterval === 0,
+      });
+    }
+    return t;
+  }, [duration, majorInterval, minorInterval]);
 
   // Convert time to percentage position
   const timeToPercent = (time: number) => (duration > 0 ? (time / duration) * 100 : 0);
