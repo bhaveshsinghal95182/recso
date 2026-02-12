@@ -23,7 +23,7 @@ export interface RecordingConfig {
   outputDir: string;
   fileName: string;
   /** File extension without dot (e.g., 'mp4', 'webm'). Defaults to 'webm' */
-  fileExtension?: 'mp4' | 'webm';
+  fileExtension?: 'mp4' | 'webm' | 'mkv';
   options?: RecordingOptions;
 }
 

@@ -50,7 +50,7 @@ export interface RecordingConfig {
   outputDir: string;
   fileName: string;
   /** File extension without dot (e.g., 'mp4', 'webm'). Defaults to 'webm' */
-  fileExtension?: 'mp4' | 'webm';
+  fileExtension?: 'mp4' | 'webm' | 'mkv';
   options?: RecordingOptions;
 }
 
@@ -65,18 +65,6 @@ export interface StopRecordingResult {
   success: boolean;
   filePath?: string;
   error?: string;
-}
-
-export interface Statistics {
-  cpu: number;
-  ram: number;
-  storage: number;
-}
-
-export interface StaticData {
-  totalStorage: number;
-  cpuModel: string;
-  totalRAM: number;
 }
 
 export interface OrphanedRecording {

@@ -70,6 +70,7 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
       fileName,
       videoBitrate,
       format,
+      formats.find((f) => f.value === format)?.extension,
     );
     setIsStarting(false);
 

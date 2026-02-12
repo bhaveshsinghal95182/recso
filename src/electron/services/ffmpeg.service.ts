@@ -131,3 +131,48 @@ export async function probeVideo(filePath: string): Promise<VideoMetadata> {
     });
   });
 }
+
+/**
+ * Remux video to fix metadata (e.g. infinite duration)
+ * Uses -c copy for instant processing
+ */
+export async function remuxVideo(inputPath: string, outputPath: string): Promise<void> {
+  await ensureInitialized();
+
+  if (!ffmpegPath) {
+    throw new Error('FFmpeg not initialized');
+  }
+
+  return new Promise((resolve, reject) => {
+    console.log('[FFmpegService] Remuxing video:', inputPath, '->', outputPath);
+
+    const ffmpeg = spawn(ffmpegPath!, [
+      '-i',
+      inputPath,
+      '-c',
+      'copy',
+      '-y', // Overwrite output if exists
+      outputPath,
+    ]);
+
+    let stderr = '';
+    ffmpeg.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    ffmpeg.on('close', (code) => {
+      if (code === 0) {
+        console.log('[FFmpegService] Remux code 0 (success)');
+        resolve();
+      } else {
+        console.error('[FFmpegService] Remux failed:', stderr);
+        reject(new Error(`FFmpeg remux exited with code ${code}`));
+      }
+    });
+
+    ffmpeg.on('error', (err) => {
+      console.error('[FFmpegService] FFmpeg spawn error:', err);
+      reject(err);
+    });
+  });
+}

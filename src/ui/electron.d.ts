@@ -13,8 +13,6 @@ import type {
   RecordingConfig,
   SpritesheetMeta,
   StartRecordingResult,
-  StaticData,
-  Statistics,
   StopRecordingResult,
   TransformedCursorPosition,
   ZoomConfig,
@@ -36,12 +34,6 @@ interface ElectronAPI {
     hideToTray: () => void;
     isMaximized: () => Promise<boolean>;
     onMaximizeChange: (callback: (isMaximized: boolean) => void) => () => void;
-  };
-
-  stats: {
-    /** Subscribe to live statistics. Returns an unsubscribe function. */
-    subscribe: (callback: (stats: Statistics) => void) => () => void;
-    getStatic: () => Promise<StaticData>;
   };
 
   recorder: {

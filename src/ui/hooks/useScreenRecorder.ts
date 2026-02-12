@@ -127,6 +127,7 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
       fileName: string,
       videoBitrate: number = 8000000,
       mimeType: string = 'video/mp4;codecs=avc1',
+      fileExtension?: 'mp4' | 'webm' | 'mkv',
     ) => {
       try {
         setError(null);
@@ -152,10 +153,15 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         streamRef.current = stream;
 
-        // Determine extension based on mimeType
-        let extension: 'mp4' | 'webm' = 'webm';
-        if (mimeType.includes('mp4')) {
-          extension = 'mp4';
+        // Determine extension: prefer passed arg, otherwise derive, default to webm
+        let extension: 'mp4' | 'webm' | 'mkv' = fileExtension || 'webm';
+        if (!fileExtension) {
+          if (mimeType.includes('mp4')) {
+            extension = 'mp4';
+          }
+          if (mimeType.includes('mkv')) {
+            extension = 'mkv';
+          }
         }
 
         console.log(`[Recorder] Starting with mimeType: ${mimeType}, extension: ${extension}`);

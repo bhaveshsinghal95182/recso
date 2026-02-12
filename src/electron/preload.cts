@@ -1,6 +1,5 @@
 const electron = require('electron');
 import type { IpcRendererEvent } from 'electron';
-import type { Statistics, StaticData } from './services/stats.service';
 import type {
   DesktopSource,
   RecordingConfig,
@@ -29,13 +28,6 @@ electron.contextBridge.exposeInMainWorld('electron', {
     isMaximized: (): Promise<boolean> => electron.ipcRenderer.invoke('is-window-maximized'),
     onMaximizeChange: (callback: (isMaximized: boolean) => void) =>
       createSubscription('window-maximized', callback),
-  },
-
-  // Statistics
-  stats: {
-    subscribe: (callback: (stats: Statistics) => void) =>
-      createSubscription('statistics', callback),
-    getStatic: (): Promise<StaticData> => electron.ipcRenderer.invoke('get-static-data'),
   },
 
   // Recording

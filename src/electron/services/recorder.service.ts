@@ -33,7 +33,7 @@ interface ActiveRecording {
   tempPath: string;
   outputDir: string;
   fileName: string;
-  fileExtension: 'mp4' | 'webm';
+  fileExtension: 'mp4' | 'webm' | 'mkv';
   writeStream: fs.WriteStream;
   state: RecordingState;
   startedAt: number;
@@ -219,7 +219,18 @@ export async function stopRecording(recordingId: string): Promise<StopRecordingR
     const finalPath = path.join(recordingFolderPath, `${folderName}${ext}`);
 
     // Move temp file to final location
-    fs.renameSync(activeRecording.tempPath, finalPath);
+    // If it's MKV or MP4, we remux to fix metadata (like duration)
+    // Otherwise we just rename
+    if (activeRecording.fileExtension === 'mkv' || activeRecording.fileExtension === 'mp4') {
+      console.log('[RecorderService] Remuxing to fix metadata...');
+      const ffmpegService = await import('./ffmpeg.service.js');
+      await ffmpegService.remuxVideo(activeRecording.tempPath, finalPath);
+
+      // Clean up temp file
+      fs.unlinkSync(activeRecording.tempPath);
+    } else {
+      fs.renameSync(activeRecording.tempPath, finalPath);
+    }
 
     // Update database
     completeRecording(recordingId, finalPath);
