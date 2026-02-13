@@ -118,7 +118,7 @@ export async function probeVideo(filePath: string): Promise<VideoMetadata> {
             width,
             height,
           });
-        } catch (err) {
+        } catch {
           reject(new Error('Failed to parse ffprobe output'));
         }
       } else {

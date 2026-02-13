@@ -2,10 +2,10 @@ import { Download, FolderOpen } from 'lucide-react';
 import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
+import { useEditor } from '@/context/editor-context';
 
 import { GeneralPanel } from './panels/general-panel';
 import { ZoomPanel } from './panels/zoom-panel';
-import { useEditor } from '../../../context/editor-context';
 import { ExportModal } from './export-modal';
 
 export function PropertiesPanel() {
@@ -40,15 +40,14 @@ export function PropertiesPanel() {
       </div>
 
       {/* Export buttons - always at bottom */}
-      <div className="pt-4 border-t border-border space-y-3">
-        <Button onClick={() => setExportModalOpen(true)} className="w-full">
+      <div className="pt-4 border-t border-border space-y-3 gap-2 flex justify-between w-full">
+        <Button onClick={() => setExportModalOpen(true)} className="w-5/6">
           <Download className="size-4" />
-          Export Video
+          Export
         </Button>
 
-        <Button variant="outline" onClick={handleOpenExportsFolder} className="w-full">
+        <Button variant="outline" onClick={handleOpenExportsFolder} className="w-1/6">
           <FolderOpen className="size-4" />
-          Open Exports Folder
         </Button>
       </div>
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 
-import { useEditor } from '../../../context/editor-context';
+import { useEditor } from '@/context/editor-context';
+
 import { EditorLayout } from './editor-layout';
 import { MinimalPreview } from './preview';
 import { PropertiesPanel } from './properties-panel';

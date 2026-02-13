@@ -1,12 +1,12 @@
 import { RefreshCcw } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
 import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-
-import { useEditor } from '../../../../context/editor-context';
+import { useEditor } from '@/context/editor-context';
 
 const PASTEL_COLORS = [
   '#FFADAD',
@@ -76,7 +76,7 @@ export function GeneralPanel() {
   };
 
   return (
-    <div className="space-y-4 overflow-x-hidden">
+    <motion.div className="space-y-4 overflow-hidden overflow-y-hidden">
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <label htmlFor="bg-color" className="text-sm font-medium">
@@ -84,60 +84,55 @@ export function GeneralPanel() {
           </label>
           <Switch checked={isBackgroundEnabled} onCheckedChange={handleBackgroundToggle} />
         </div>
-        {isBackgroundEnabled && (
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground w-12">Hex</span>
-              <Input
-                value={project.backgroundColor || '#000000'}
-                onChange={(e) => updateBackgroundColor(e.target.value)}
-                className="font-mono text-xs h-8"
-                placeholder="#000000"
-              />
-              <Input
-                type="color"
-                value={project.backgroundColor || '#000000'}
-                onChange={(e) => updateBackgroundColor(e.target.value)}
-                className="h-8 w-14"
-              />
-            </div>
-            <div className="space-y-2 mt-4">
-              <div className="flex items-center justify-between">
-                <Label>Preset Colors</Label>
-                <Button size="sm" variant={'outline'} onClick={handleRefreshColors}>
-                  <RefreshCcw />
-                </Button>
-              </div>
-              <div className="grid grid-cols-4 gap-2 w-fit mx-auto">
-                {presetColors.map((color) => (
-                  <div
-                    key={color}
-                    className="h-8 w-8 rounded-sm border border-black/20"
-                    style={{ backgroundColor: color }}
-                    onClick={() => updateBackgroundColor(color)}
+        <AnimatePresence initial={false}>
+          {isBackgroundEnabled && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              className="overflow-hidden"
+            >
+              <div className="space-y-2 pt-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground w-12">Hex</span>
+                  <Input
+                    value={project.backgroundColor || '#000000'}
+                    onChange={(e) => updateBackgroundColor(e.target.value)}
+                    className="font-mono text-xs h-8"
+                    placeholder="#000000"
                   />
-                ))}
-              </div>
-            </div>
-
-            <div className="space-y-2 mt-4">
-              <div className="flex items-center justify-between">
-                <Label>Preset Backgrounds</Label>
-              </div>
-              <div className="grid grid-cols-4 gap-2 w-fit mx-auto">
-                {presetColors.map((color) => (
-                  <div
-                    key={color}
-                    className="h-8 w-8 rounded-sm border border-black/20"
-                    style={{ backgroundColor: color }}
-                    onClick={() => updateBackgroundColor(color)}
+                  <Input
+                    type="color"
+                    value={project.backgroundColor || '#000000'}
+                    onChange={(e) => updateBackgroundColor(e.target.value)}
+                    className="h-8 w-14"
                   />
-                ))}
+                </div>
+                <div className="space-y-2 mt-4">
+                  <div className="flex items-center justify-between">
+                    <Label>Preset Colors</Label>
+                    <Button size="sm" variant={'outline'} onClick={handleRefreshColors}>
+                      <RefreshCcw className="size-4" />
+                    </Button>
+                  </div>
+                  <motion.div layout className="grid grid-cols-4 gap-2 w-fit mx-auto">
+                    {presetColors.map((color) => (
+                      <motion.div
+                        key={color}
+                        whileHover={{ scale: 1.1 }}
+                        whileTap={{ scale: 0.9 }}
+                        className="h-8 w-8 rounded-sm border border-black/20 cursor-pointer"
+                        style={{ backgroundColor: color }}
+                        onClick={() => updateBackgroundColor(color)}
+                      />
+                    ))}
+                  </motion.div>
+                </div>
               </div>
-            </div>
-          </div>
-        )}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
-    </div>
+    </motion.div>
   );
 }

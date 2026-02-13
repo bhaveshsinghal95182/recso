@@ -23,8 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-
-import { useEditorPlayback, useEditorState } from '../../../context/editor-context';
+import { useEditorPlayback, useEditorState } from '@/context/editor-context';
 import type {
   ExportConfig,
   ExportFormat,
@@ -33,7 +32,7 @@ import type {
   ExportQuality,
   ExportResolution,
   ExportResult,
-} from '../../../types';
+} from '@/types';
 
 interface ExportModalProps {
   open: boolean;

@@ -1,7 +1,7 @@
 import { Settings, ZoomIn } from 'lucide-react';
 import { useMemo } from 'react';
 
-import { type PropertiesTab, useEditor } from '../../../context/editor-context';
+import { type PropertiesTab, useEditor } from '@/context/editor-context';
 
 function TabButton({
   label,

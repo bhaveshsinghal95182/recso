@@ -1,9 +1,9 @@
 import { useState } from 'react';
 
-import { RootLayout } from './components/layouts/root-layout';
-import { EditorScreen } from './components/screens/editor';
-import ScreenRecorder from './components/screens/screen-recorder';
-import { WelcomeScreen } from './components/screens/welcome/welcome-screen';
+import { RootLayout } from '@/layouts/root-layout';
+import { EditorScreen } from '@/screens/editor';
+import ScreenRecorder from '@/screens/screen-recorder';
+import { WelcomeScreen } from '@/screens/welcome/welcome-screen';
 
 type Screen = 'welcome' | 'recorder' | 'editor';
 

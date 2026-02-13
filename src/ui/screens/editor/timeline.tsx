@@ -8,8 +8,8 @@
 import { Scissors, ZoomIn } from 'lucide-react';
 import { useCallback, useMemo, useRef } from 'react';
 
-import { useEditor } from '../../../context/editor-context';
-import { TimelineRegion } from './timeline-region';
+import { useEditor } from '@/context/editor-context';
+import { TimelineRegion } from '@/screens/editor/timeline-region';
 
 /**
  * Format milliseconds to MM:SS format
@@ -183,22 +183,20 @@ export function Timeline() {
         <button
           type="button"
           onClick={handleAddCut}
-          className="flex items-center gap-1.5 px-2 py-1 text-xs rounded bg-muted hover:bg-muted-foreground/20 transition-colors"
+          className="flex items-center py-1 rotate-270 cursor-pointer"
           title="Add cut at playhead"
         >
-          <Scissors className="w-3.5 h-3.5" />
-          <span>Add Cut</span>
+          <Scissors className="w-4 h-4" />
         </button>
 
         {/* Add Zoom button */}
         <button
           type="button"
           onClick={handleAddZoom}
-          className="flex items-center gap-1.5 px-2 py-1 text-xs rounded bg-muted hover:bg-muted-foreground/20 transition-colors"
+          className="flex items-center py-1 cursor-pointer"
           title="Add zoom at playhead"
         >
-          <ZoomIn className="w-3.5 h-3.5" />
-          <span>Add Zoom</span>
+          <ZoomIn className="w-4 h-4" />
         </button>
 
         {/* Cut count indicator */}

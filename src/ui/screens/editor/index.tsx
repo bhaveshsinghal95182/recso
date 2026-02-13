@@ -1,4 +1,4 @@
-import { EditorProvider } from '../../../context/editor-context';
+import { EditorProvider } from '../../context/editor-context';
 import { EditorContent } from './content';
 
 interface EditorScreenProps {

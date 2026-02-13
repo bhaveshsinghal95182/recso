@@ -1,8 +1,9 @@
 import { Pause, Play } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { useEditor } from '../../../context/editor-context';
-import type { ZoomRegion } from '../../../types';
+import { useEditor } from '@/context/editor-context';
+import type { ZoomRegion } from '@/types';
+
 import { FocalPointOverlay } from './focal-point-overlay';
 import { VerticalTabs } from './vertical-tabs';
 

@@ -1,7 +1,6 @@
-import { AppWindow, ArrowLeft, Monitor } from 'lucide-react';
+import { AppWindow, Monitor } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
-import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { formats } from '@/constants';
 import { useScreenRecorder } from '@/hooks/useScreenRecorder';
@@ -55,11 +54,6 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
     setView('ready');
   };
 
-  const handleBack = () => {
-    setView('selection');
-    setSelectedSourceId(null);
-  };
-
   const handleStart = async () => {
     if (!selectedSourceId || !outputDir || !fileName) return;
 
@@ -102,23 +96,6 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
   return (
     <div className="flex flex-col h-full bg-background animate-in fade-in duration-300">
       <div className="flex-1 flex flex-col p-6 gap-6 overflow-y-auto">
-        {/* Top Header Area */}
-        <div className="flex items-center justify-between min-h-[40px]">
-          {view === 'ready' && !isRecording && !isPaused && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleBack}
-              className="gap-2 -ml-2 text-muted-foreground hover:text-foreground"
-            >
-              <ArrowLeft size={16} />
-              Back to Sources
-            </Button>
-          )}
-          {/* Placeholder for symmetry or other controls */}
-          <div />
-        </div>
-
         {/* Header Text */}
         <Header
           isRecording={isRecording}
@@ -164,7 +141,7 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
             </div>
           ) : (
             /* View 2: Ready / Settings */
-            <div className="w-full max-w-4xl flex flex-col md:flex-row gap-8 items-start justify-center h-full max-h-[500px]">
+            <div className="w-full max-w-4xl flex flex-col md:flex-row gap-8 items-start justify-center h-full max-h-200">
               {/* Left: Monitor Info */}
               <div className="flex-1 w-full h-full flex flex-col gap-4">
                 <Card className="flex-1 overflow-hidden border-2 border-primary/20 relative group bg-card/50">

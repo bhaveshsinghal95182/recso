@@ -7,9 +7,7 @@ export function WelcomeScreen({ onNewRecording, onOpenProject }: WelcomeScreenPr
   return (
     <div className="flex-1 flex flex-col items-center justify-center select-none">
       <div className="mb-12 text-center animate-in fade-in slide-in-from-bottom-4 duration-700">
-        <h1 className="text-6xl font-bold tracking-tighter mb-4 bg-linear-to-br from-white to-white/50 bg-clip-text text-transparent">
-          RecSO
-        </h1>
+        <h1 className="text-6xl font-bold tracking-tighter mb-4">RECSO</h1>
         <p className="text-muted-foreground text-lg">Screen Recorder & Editor</p>
       </div>
 

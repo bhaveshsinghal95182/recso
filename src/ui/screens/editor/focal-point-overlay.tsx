@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { ZoomRegion } from '../../../types';
+import type { ZoomRegion } from '@/types';
 
 interface FocalPointOverlayProps {
   /** Video native dimensions */

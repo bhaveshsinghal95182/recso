@@ -9,7 +9,7 @@
  * - Customizable styling per region type
  */
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export type RegionVariant = 'cut' | 'zoom';
 
@@ -73,16 +73,42 @@ export function TimelineRegion<T extends BaseRegion>({
   onDelete,
 }: TimelineRegionProps<T>) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const [localRegion, setLocalRegion] = useState<T>(region);
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState<'left' | 'right' | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Sync with prop when not interacting
+  useEffect(() => {
+    if (!isDragging && !isResizing) {
+      setLocalRegion(region);
+    }
+  }, [region, isDragging, isResizing]);
+
+  // Clean up debounce on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, []);
 
   const styles = variantStyles[variant];
 
   // Convert time to percentage
   const timeToPercent = (time: number) => (duration > 0 ? (time / duration) * 100 : 0);
 
-  const left = timeToPercent(region.startMs);
-  const width = timeToPercent(region.endMs - region.startMs);
+  const left = timeToPercent(localRegion.startMs);
+  const width = timeToPercent(localRegion.endMs - localRegion.startMs);
+
+  const debouncedUpdate = useCallback(
+    (newRegion: T) => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => {
+        onUpdate(newRegion);
+      }, 100);
+    },
+    [onUpdate],
+  );
 
   // Handle drag to move
   const handleMouseDown = useCallback(
@@ -95,10 +121,12 @@ export function TimelineRegion<T extends BaseRegion>({
 
       const startX = e.clientX;
       const rect = parent.getBoundingClientRect();
-      const originalStart = region.startMs;
-      const regionDuration = region.endMs - region.startMs;
+      const originalStart = localRegion.startMs;
+      const regionDuration = localRegion.endMs - localRegion.startMs;
 
       setIsDragging(true);
+
+      let currentRegion = localRegion;
 
       const handleMouseMove = (moveEvent: MouseEvent) => {
         const deltaX = moveEvent.clientX - startX;
@@ -114,15 +142,23 @@ export function TimelineRegion<T extends BaseRegion>({
           newStart = newEnd - regionDuration;
         }
 
-        onUpdate({
-          ...region,
+        const updated = {
+          ...currentRegion,
           startMs: Math.round(newStart),
           endMs: Math.round(newEnd),
-        });
+        };
+        currentRegion = updated;
+        setLocalRegion(updated);
+        debouncedUpdate(updated);
       };
 
       const handleMouseUp = () => {
         setIsDragging(false);
+        if (debounceRef.current) {
+          clearTimeout(debounceRef.current);
+          debounceRef.current = null;
+        }
+        onUpdate(currentRegion);
         window.removeEventListener('mousemove', handleMouseMove);
         window.removeEventListener('mouseup', handleMouseUp);
       };
@@ -130,7 +166,7 @@ export function TimelineRegion<T extends BaseRegion>({
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
     },
-    [region, duration, onSelect, onUpdate],
+    [localRegion, duration, onSelect, onUpdate, debouncedUpdate],
   );
 
   // Handle resize from edges
@@ -144,38 +180,50 @@ export function TimelineRegion<T extends BaseRegion>({
 
       const startX = e.clientX;
       const rect = parent.getBoundingClientRect();
-      const originalStartMs = region.startMs;
-      const originalEndMs = region.endMs;
+      const originalStartMs = localRegion.startMs;
+      const originalEndMs = localRegion.endMs;
 
       setIsResizing(edge);
+
+      let currentRegion = localRegion;
 
       const handleMouseMove = (moveEvent: MouseEvent) => {
         const deltaX = moveEvent.clientX - startX;
         const deltaPercent = deltaX / rect.width;
         const deltaMs = deltaPercent * duration;
 
+        let updated: T;
         if (edge === 'left') {
           const newStart = Math.max(0, Math.min(originalEndMs - 100, originalStartMs + deltaMs));
-          onUpdate({
-            ...region,
+          updated = {
+            ...currentRegion,
             startMs: Math.round(newStart),
             endMs: originalEndMs,
-          });
+          };
         } else {
           const newEnd = Math.min(
             duration,
             Math.max(originalStartMs + 100, originalEndMs + deltaMs),
           );
-          onUpdate({
-            ...region,
+          updated = {
+            ...currentRegion,
             startMs: originalStartMs,
             endMs: Math.round(newEnd),
-          });
+          };
         }
+
+        currentRegion = updated;
+        setLocalRegion(updated);
+        debouncedUpdate(updated);
       };
 
       const handleMouseUp = () => {
         setIsResizing(null);
+        if (debounceRef.current) {
+          clearTimeout(debounceRef.current);
+          debounceRef.current = null;
+        }
+        onUpdate(currentRegion);
         window.removeEventListener('mousemove', handleMouseMove);
         window.removeEventListener('mouseup', handleMouseUp);
       };
@@ -183,7 +231,7 @@ export function TimelineRegion<T extends BaseRegion>({
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
     },
-    [region, duration, onSelect, onUpdate],
+    [localRegion, duration, onSelect, onUpdate, debouncedUpdate],
   );
 
   // Handle keyboard delete
