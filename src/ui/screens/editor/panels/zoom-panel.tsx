@@ -12,13 +12,14 @@ import {
   PRE_CLICK_LEAD_MS,
   ZOOM_DURATION_MS,
 } from '@/constants';
-import { useEditor } from '@/context/editor-context';
 import { smartPanSingleRegion } from '@/lib/calculations/pan';
+import { useProjectStore } from '@/store/project-store';
+import { useTimelineStore } from '@/store/timeline-store';
 import type { ZoomRegion } from '@/types';
 
 export function ZoomPanel() {
+  const { project } = useProjectStore();
   const {
-    project,
     zoomRegions,
     selectedZoomId,
     addZoom,
@@ -27,7 +28,7 @@ export function ZoomPanel() {
     replaceZoomRegions,
     isEditingFocalPoint,
     setIsEditingFocalPoint,
-  } = useEditor();
+  } = useTimelineStore();
 
   const selectedZoom = zoomRegions.find((z) => z.id === selectedZoomId);
 

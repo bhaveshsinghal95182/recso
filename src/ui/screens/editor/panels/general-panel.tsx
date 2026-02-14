@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import { useEditor } from '@/context/editor-context';
+import { useProjectStore } from '@/store/project-store';
 
 const PASTEL_COLORS = [
   '#FFADAD',
@@ -33,7 +33,7 @@ function hslToHex(h: number, s: number, l: number) {
 }
 
 export function GeneralPanel() {
-  const { project, updateBackgroundColor } = useEditor();
+  const { project, updateBackgroundColor } = useProjectStore();
   const [presetColors, setPresetColors] = useState<string[]>(PASTEL_COLORS);
 
   if (!project) return null;

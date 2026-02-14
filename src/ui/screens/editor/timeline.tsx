@@ -8,8 +8,10 @@
 import { Scissors, ZoomIn } from 'lucide-react';
 import { useCallback, useMemo, useRef } from 'react';
 
-import { useEditor } from '@/context/editor-context';
 import { TimelineRegion } from '@/screens/editor/timeline-region';
+import { usePlaybackStore } from '@/store/playback-store';
+import { useTimelineStore } from '@/store/timeline-store';
+import { useUIStore } from '@/store/ui-store';
 
 /**
  * Format milliseconds to MM:SS format
@@ -43,10 +45,8 @@ function getTickInterval(durationMs: number): { major: number; minor: number } {
 }
 
 export function Timeline() {
+  const { duration, currentTime, seek } = usePlaybackStore();
   const {
-    duration,
-    currentTime,
-    seek,
     cuts,
     selectedCutId,
     addCut,
@@ -59,8 +59,8 @@ export function Timeline() {
     updateZoom,
     removeZoom,
     setSelectedZoom,
-    setActivePropertiesTab,
-  } = useEditor();
+  } = useTimelineStore();
+  const { setActivePropertiesTab } = useUIStore();
   const containerRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
 

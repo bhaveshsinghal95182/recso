@@ -23,7 +23,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { useEditorPlayback, useEditorState } from '@/context/editor-context';
+import { usePlaybackStore } from '@/store/playback-store';
+import { useProjectStore } from '@/store/project-store';
 import type {
   ExportConfig,
   ExportFormat,
@@ -67,8 +68,7 @@ const FPS_OPTIONS: { value: ExportFPS; label: string }[] = [
 ];
 
 export function ExportModal({ open, onOpenChange }: ExportModalProps) {
-  const { project } = useEditorState();
-  const { isPlaying, pause } = useEditorPlayback();
+  const { project } = useProjectStore();
 
   // Export configuration state
   const [resolution, setResolution] = useState<ExportResolution>('1080p');
@@ -93,11 +93,12 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
       setResult(null);
       // Pause playback to prevent high-frequency re-renders from currentTime updates
       // This fixes input lag in the modal
+      const { isPlaying, pause } = usePlaybackStore.getState();
       if (isPlaying) {
         pause();
       }
     }
-  }, [open, isPlaying, pause]);
+  }, [open]);
 
   // Subscribe to progress updates
   useEffect(() => {

@@ -1,4 +1,7 @@
-import { EditorProvider } from '../../context/editor-context';
+import { useEffect } from 'react';
+
+import { useProjectStore } from '@/store/project-store';
+
 import { EditorContent } from './content';
 
 interface EditorScreenProps {
@@ -6,12 +9,21 @@ interface EditorScreenProps {
 }
 
 export function EditorScreen({ recordingId }: EditorScreenProps) {
+  const { loadProject, closeProject } = useProjectStore();
+
+  useEffect(() => {
+    if (recordingId) {
+      loadProject(recordingId);
+    }
+    return () => {
+      closeProject();
+    };
+  }, [recordingId, loadProject, closeProject]);
+
   return (
-    <EditorProvider recordingId={recordingId}>
-      <div className="w-full h-screen bg-background overflow-hidden">
-        <EditorContent />
-      </div>
-    </EditorProvider>
+    <div className="w-full h-screen bg-background overflow-hidden">
+      <EditorContent />
+    </div>
   );
 }
 

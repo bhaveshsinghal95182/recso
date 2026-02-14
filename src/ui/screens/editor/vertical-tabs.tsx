@@ -1,7 +1,8 @@
 import { Settings, ZoomIn } from 'lucide-react';
 import { useMemo } from 'react';
 
-import { type PropertiesTab, useEditor } from '@/context/editor-context';
+import { useUIStore } from '@/store/ui-store';
+import type { PropertiesTab } from '@/types';
 
 function TabButton({
   label,
@@ -29,7 +30,7 @@ function TabButton({
 }
 
 export function VerticalTabs() {
-  const { activePropertiesTab, setActivePropertiesTab } = useEditor();
+  const { activePropertiesTab, setActivePropertiesTab } = useUIStore();
 
   const tabs: {
     id: PropertiesTab;

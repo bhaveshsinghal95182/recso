@@ -2,14 +2,16 @@ import { Download, FolderOpen } from 'lucide-react';
 import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
-import { useEditor } from '@/context/editor-context';
+import { useProjectStore } from '@/store/project-store';
+import { useUIStore } from '@/store/ui-store';
 
 import { GeneralPanel } from './panels/general-panel';
 import { ZoomPanel } from './panels/zoom-panel';
 import { ExportModal } from './export-modal';
 
 export function PropertiesPanel() {
-  const { project, activePropertiesTab } = useEditor();
+  const { project } = useProjectStore();
+  const { activePropertiesTab } = useUIStore();
   const [exportModalOpen, setExportModalOpen] = useState(false);
 
   if (!project) return null;

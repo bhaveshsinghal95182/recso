@@ -37,6 +37,8 @@ export interface UseScreenRecorderOptions {
   /** Include system audio */
   audio?: boolean;
 }
+// --- UI Types ---
+export type PropertiesTab = 'general' | 'zoom' | 'export';
 
 // --- Types mirrored from Backend ---
 

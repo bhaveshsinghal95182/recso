@@ -1,6 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 
-import { useEditor } from '@/context/editor-context';
+import { usePlaybackStore } from '@/store/playback-store';
+import { useProjectStore } from '@/store/project-store';
 
 import { EditorLayout } from './editor-layout';
 import { MinimalPreview } from './preview';
@@ -8,14 +9,7 @@ import { PropertiesPanel } from './properties-panel';
 import { Timeline } from './timeline';
 
 export function EditorContent() {
-  const { project, isLoading, error, isPlaying, play, pause } = useEditor();
-
-  // Use a ref to access current state in event listener without re-binding
-  const playbackRef = useRef({ isPlaying, play, pause });
-
-  useEffect(() => {
-    playbackRef.current = { isPlaying, play, pause };
-  }, [isPlaying, play, pause]);
+  const { project, isLoading, error } = useProjectStore();
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -32,7 +26,7 @@ export function EditorContent() {
 
         if (!isInput) {
           e.preventDefault();
-          const { isPlaying, play, pause } = playbackRef.current;
+          const { isPlaying, play, pause } = usePlaybackStore.getState();
           if (isPlaying) {
             pause();
           } else {

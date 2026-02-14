@@ -1,7 +1,9 @@
 import { Pause, Play } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { useEditor } from '@/context/editor-context';
+import { usePlaybackStore } from '@/store/playback-store';
+import { useProjectStore } from '@/store/project-store';
+import { useTimelineStore } from '@/store/timeline-store';
 import type { ZoomRegion } from '@/types';
 
 import { FocalPointOverlay } from './focal-point-overlay';
@@ -41,18 +43,9 @@ function calculateZoomLevel(
 }
 
 export function MinimalPreview() {
-  const {
-    project,
-    isPlaying,
-    currentTime,
-    play,
-    pause,
-    updateDuration,
-    zoomRegions,
-    isEditingFocalPoint,
-    selectedZoomId,
-    updateZoom,
-  } = useEditor();
+  const { project, updateDuration } = useProjectStore();
+  const { zoomRegions, isEditingFocalPoint, selectedZoomId, updateZoom } = useTimelineStore();
+  const { isPlaying, currentTime, play, pause } = usePlaybackStore();
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
