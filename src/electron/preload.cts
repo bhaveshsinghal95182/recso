@@ -193,6 +193,7 @@ electron.contextBridge.exposeInMainWorld('electron', {
       focalX: number;
       focalY: number;
       easeDurationMs: number;
+      focalKeyframes?: { timestampMs: number; focalX: number; focalY: number }[];
     }) => electron.ipcRenderer.invoke('editor:add-zoom-region', zoom),
 
     /** Remove a zoom region by ID */
@@ -208,6 +209,7 @@ electron.contextBridge.exposeInMainWorld('electron', {
       focalX: number;
       focalY: number;
       easeDurationMs: number;
+      focalKeyframes?: { timestampMs: number; focalX: number; focalY: number }[];
     }) => electron.ipcRenderer.invoke('editor:update-zoom-region', zoom),
 
     /** Update multiple zoom regions at once (bulk) */
@@ -220,6 +222,7 @@ electron.contextBridge.exposeInMainWorld('electron', {
         focalX: number;
         focalY: number;
         easeDurationMs: number;
+        focalKeyframes?: { timestampMs: number; focalX: number; focalY: number }[];
       }[],
     ) => electron.ipcRenderer.invoke('editor:update-zoom-regions', zooms),
 

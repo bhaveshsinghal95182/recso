@@ -1,226 +1,177 @@
+import { Player, type PlayerRef } from '@remotion/player';
 import { Pause, Play } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 
 import { usePlaybackStore } from '@/store/playback-store';
 import { useProjectStore } from '@/store/project-store';
 import { useTimelineStore } from '@/store/timeline-store';
-import type { ZoomRegion } from '@/types';
 
+import { MainComposition } from '../../../remotion/Composition';
+import type { RemotionInputProps } from '../../../remotion/types';
 import { FocalPointOverlay } from './focal-point-overlay';
 import { VerticalTabs } from './vertical-tabs';
 
+const PREVIEW_FPS = 30;
+
 /**
- * Calculate the current zoom level based on time within a zoom region
- * Uses ease-in at the start and ease-out at the end
+ * Preview component using @remotion/player.
+ *
+ * Renders the exact same MainComposition used for export,
+ * giving a true WYSIWYG preview. The Player handles scaling
+ * the composition to fit the container.
  */
-function calculateZoomLevel(
-  timeMs: number,
-  region: ZoomRegion,
-): { scale: number; focalX: number; focalY: number } {
-  const regionDuration = region.endMs - region.startMs;
-  const timeInRegion = timeMs - region.startMs;
-  const easeDuration = Math.min(region.easeDurationMs, regionDuration / 2);
-
-  let progress: number;
-
-  if (timeInRegion < easeDuration) {
-    // Ease in phase
-    progress = timeInRegion / easeDuration;
-    // Smooth easing using cosine
-    progress = (1 - Math.cos(progress * Math.PI)) / 2;
-  } else if (timeInRegion > regionDuration - easeDuration) {
-    // Ease out phase
-    const timeFromEnd = regionDuration - timeInRegion;
-    progress = timeFromEnd / easeDuration;
-    progress = (1 - Math.cos(progress * Math.PI)) / 2;
-  } else {
-    // Fully zoomed in
-    progress = 1;
-  }
-
-  const scale = 1 + (region.zoomLevel - 1) * progress;
-  return { scale, focalX: region.focalX, focalY: region.focalY };
-}
-
 export function MinimalPreview() {
-  const { project, updateDuration } = useProjectStore();
+  const { project } = useProjectStore();
   const { zoomRegions, isEditingFocalPoint, selectedZoomId, updateZoom } = useTimelineStore();
-  const { isPlaying, currentTime, play, pause } = usePlaybackStore();
+  const { isPlaying, currentTime, play, pause, tick, setDuration } = usePlaybackStore();
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const [videoLoaded, setVideoLoaded] = useState(false);
+  const playerRef = useRef<PlayerRef>(null);
 
-  // Refs to prevent flickering during scrubbing
-  const seekTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastSeekTimeRef = useRef<number>(0);
+  // Calculate composition dimensions from project
+  const canvasWidth = 1920;
+  const canvasHeight = 1080;
 
-  // Initialize video element
+  // Calculate video layout — "fullscreen" approach: video fills the canvas
+  // with letterboxing/pillarboxing to maintain aspect ratio
+  const layout = useMemo(() => {
+    if (!project?.videoDimensions) {
+      return { x: 0, y: 0, width: canvasWidth, height: canvasHeight, scale: 1 };
+    }
+
+    const { width: videoW, height: videoH } = project.videoDimensions;
+    const videoAspect = videoW / videoH;
+    const canvasAspect = canvasWidth / canvasHeight;
+
+    let drawWidth: number;
+    let drawHeight: number;
+
+    // Fit video within canvas maintaining aspect ratio (with 85% fill like old preview)
+    const maxWidth = canvasWidth * 0.85;
+    const maxHeight = canvasHeight * 0.85;
+
+    if (videoAspect > canvasAspect) {
+      drawWidth = maxWidth;
+      drawHeight = drawWidth / videoAspect;
+    } else {
+      drawHeight = maxHeight;
+      drawWidth = drawHeight * videoAspect;
+    }
+
+    const x = Math.round((canvasWidth - drawWidth) / 2);
+    const y = Math.round((canvasHeight - drawHeight) / 2);
+
+    return {
+      x,
+      y,
+      width: Math.round(drawWidth),
+      height: Math.round(drawHeight),
+      scale: drawWidth / videoW,
+    };
+  }, [project?.videoDimensions, canvasWidth, canvasHeight]);
+
+  // Duration in frames
+  const durationMs = project?.timeline?.duration || 0;
+  const durationInFrames = Math.max(1, Math.ceil((durationMs / 1000) * PREVIEW_FPS));
+
+  // Update playback store duration when project loads
   useEffect(() => {
-    if (!project?.rawVideoPath || !videoRef.current) return;
+    if (durationMs > 0) {
+      setDuration(durationMs);
+    }
+  }, [durationMs, setDuration]);
 
-    const video = videoRef.current;
-    const normalizedPath = project.rawVideoPath.replace(/\\/g, '/');
-    const finalUrl = `file:///${normalizedPath}`;
-    video.src = finalUrl;
-    video.muted = true;
+  // Build input props for the composition
+  const inputProps: RemotionInputProps = useMemo(() => {
+    const videoPath = project?.rawVideoPath?.replace(/\\/g, '/') || '';
+    const videoSrc = videoPath ? `file:///${videoPath}` : '';
 
-    const handleLoadedMetadata = () => {
-      if (video.duration && !isNaN(video.duration)) {
-        updateDuration(video.duration * 1000);
-      }
-      setVideoLoaded(true);
+    const props = {
+      videoSrc,
+      backgroundColor: project?.backgroundColor || '#000000',
+      backgroundPath: project?.backgroundPath,
+      layout,
+      canvasWidth,
+      canvasHeight,
+      zoomRegions: zoomRegions.map((z) => ({
+        id: z.id,
+        startMs: z.startMs,
+        endMs: z.endMs,
+        zoomLevel: z.zoomLevel,
+        focalX: z.focalX,
+        focalY: z.focalY,
+        easeDurationMs: z.easeDurationMs,
+        focalKeyframes: z.focalKeyframes,
+      })),
     };
 
-    video.addEventListener('loadedmetadata', handleLoadedMetadata);
-    return () => video.removeEventListener('loadedmetadata', handleLoadedMetadata);
-  }, [project?.rawVideoPath, updateDuration]);
+    return props;
+  }, [project, layout, canvasWidth, canvasHeight, zoomRegions]);
 
-  // Sync video time with editor state - debounced to prevent flicker during scrubbing
+  // Sync: Playback Store → Player (only when NOT playing, i.e. user scrubs timeline)
+  // During playback, the Player is the source of truth — we don't seek from the store.
   useEffect(() => {
-    if (!videoRef.current || !videoLoaded) return;
-    const video = videoRef.current;
-    const videoTime = currentTime / 1000;
+    const player = playerRef.current;
+    if (!player || isPlaying) return;
 
-    // Skip if difference is minimal (prevents unnecessary seeks)
-    if (Math.abs(video.currentTime - videoTime) <= 0.05) return;
+    const targetFrame = Math.round((currentTime / 1000) * PREVIEW_FPS);
+    const currentPlayerFrame = player.getCurrentFrame();
+    if (currentPlayerFrame !== null && Math.abs(currentPlayerFrame - targetFrame) > 1) {
+      player.seekTo(targetFrame);
+    }
+  }, [currentTime, isPlaying]);
 
-    // During playback, sync immediately
+  // Sync: Play/Pause state → Player
+  useEffect(() => {
+    const player = playerRef.current;
+    if (!player) return;
+
     if (isPlaying) {
-      if (Math.abs(video.currentTime - videoTime) > 0.15) {
-        video.currentTime = videoTime;
-      }
-      return;
+      player.play();
+    } else {
+      player.pause();
     }
+  }, [isPlaying]);
 
-    // During scrubbing (not playing), debounce the seek to prevent flicker
-    if (seekTimeoutRef.current) {
-      clearTimeout(seekTimeoutRef.current);
-    }
+  // Sync: Player → Playback Store (frame updates during playback)
+  useEffect(() => {
+    const player = playerRef.current;
+    if (!player) return;
 
-    // Store target time for the canvas to use immediately
-    lastSeekTimeRef.current = videoTime;
+    const handleFrameUpdate = (e: { detail: { frame: number } }) => {
+      // Only sync from Player to store during playback
+      if (!usePlaybackStore.getState().isPlaying) return;
+      const timeMs = (e.detail.frame / PREVIEW_FPS) * 1000;
+      tick(timeMs, 'absolute');
+    };
 
-    // Debounce actual video seek to reduce flickering
-    seekTimeoutRef.current = setTimeout(() => {
-      if (
-        videoRef.current &&
-        Math.abs(videoRef.current.currentTime - lastSeekTimeRef.current) > 0.05
-      ) {
-        videoRef.current.currentTime = lastSeekTimeRef.current;
+    const handlePlay = () => {
+      if (!usePlaybackStore.getState().isPlaying) {
+        play();
       }
-    }, 50);
+    };
+
+    const handlePause = () => {
+      if (usePlaybackStore.getState().isPlaying) {
+        pause();
+      }
+    };
+
+    const handleEnded = () => {
+      pause();
+    };
+
+    player.addEventListener('frameupdate', handleFrameUpdate);
+    player.addEventListener('play', handlePlay);
+    player.addEventListener('pause', handlePause);
+    player.addEventListener('ended', handleEnded);
 
     return () => {
-      if (seekTimeoutRef.current) {
-        clearTimeout(seekTimeoutRef.current);
-      }
+      player.removeEventListener('frameupdate', handleFrameUpdate);
+      player.removeEventListener('play', handlePlay);
+      player.removeEventListener('pause', handlePause);
+      player.removeEventListener('ended', handleEnded);
     };
-  }, [currentTime, videoLoaded, isPlaying]);
-
-  // Control video playback
-  useEffect(() => {
-    if (!videoRef.current || !videoLoaded) return;
-    const video = videoRef.current;
-    if (isPlaying) {
-      video.play().catch(() => {});
-    } else {
-      video.pause();
-    }
-  }, [isPlaying, videoLoaded]);
-
-  // Keep zoom regions in a ref so the render loop doesn't restart when they change
-  const zoomRegionsRef = useRef(zoomRegions);
-  useEffect(() => {
-    zoomRegionsRef.current = zoomRegions;
-  }, [zoomRegions]);
-
-  // Render loop — runs at ~60fps, reads time imperatively to stay stable.
-  // During playback it reads from the video element and syncs back to the store.
-  // During scrubbing it reads from the store (updated by seek).
-  useEffect(() => {
-    if (!canvasRef.current || !videoRef.current || !project) return;
-
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const video = videoRef.current;
-    let animId: number;
-
-    const render = () => {
-      // Determine current time: while playing, use the video's native time
-      // for smooth, jitter-free updates; otherwise read from the store.
-      const playbackState = usePlaybackStore.getState();
-      let timeMs: number;
-
-      if (playbackState.isPlaying) {
-        timeMs = video.currentTime * 1000;
-        // Sync video time back to the store so the timeline playhead moves
-        // Only update if there is a meaningful difference to avoid redundant sets
-        if (Math.abs(playbackState.currentTime - timeMs) > 5) {
-          playbackState.tick(timeMs, 'absolute');
-        }
-      } else {
-        timeMs = playbackState.currentTime;
-      }
-
-      // Draw background
-      if (project.backgroundColor === 'transparent') {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-      } else {
-        ctx.fillStyle = project.backgroundColor || '#000000';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-      }
-
-      // Draw video frame centered
-      if (videoLoaded && video.readyState >= 2) {
-        const videoAspect = video.videoWidth / video.videoHeight;
-        const canvasAspect = canvas.width / canvas.height;
-
-        let drawWidth: number;
-        let drawHeight: number;
-        const maxWidth = canvas.width * 0.85;
-        const maxHeight = canvas.height * 0.85;
-
-        if (videoAspect > canvasAspect) {
-          drawWidth = maxWidth;
-          drawHeight = drawWidth / videoAspect;
-        } else {
-          drawHeight = maxHeight;
-          drawWidth = drawHeight * videoAspect;
-        }
-
-        const offsetX = (canvas.width - drawWidth) / 2;
-        const offsetY = (canvas.height - drawHeight) / 2;
-
-        // Check for active zoom region using imperative time
-        const regions = zoomRegionsRef.current;
-        const activeZoom = regions.find((z) => timeMs >= z.startMs && timeMs <= z.endMs);
-
-        if (activeZoom) {
-          const { scale, focalX, focalY } = calculateZoomLevel(timeMs, activeZoom);
-
-          const focalCanvasX = offsetX + drawWidth * focalX;
-          const focalCanvasY = offsetY + drawHeight * focalY;
-
-          ctx.save();
-          ctx.translate(focalCanvasX, focalCanvasY);
-          ctx.scale(scale, scale);
-          ctx.translate(-focalCanvasX, -focalCanvasY);
-          ctx.drawImage(video, offsetX, offsetY, drawWidth, drawHeight);
-          ctx.restore();
-        } else {
-          ctx.drawImage(video, offsetX, offsetY, drawWidth, drawHeight);
-        }
-      }
-
-      animId = requestAnimationFrame(render);
-    };
-
-    animId = requestAnimationFrame(render);
-    return () => cancelAnimationFrame(animId);
-  }, [project, videoLoaded]);
+  }, [tick, play, pause]);
 
   const handlePlayPause = useCallback(() => {
     if (isPlaying) pause();
@@ -231,13 +182,20 @@ export function MinimalPreview() {
 
   return (
     <div className="relative w-full h-full flex items-center justify-center bg-background">
-      <video ref={videoRef} className="hidden" playsInline preload="auto" />
-
-      <canvas
-        ref={canvasRef}
-        className="max-w-full max-h-full rounded-lg shadow-2xl"
-        width={960}
-        height={540}
+      <Player
+        ref={playerRef}
+        component={MainComposition}
+        inputProps={inputProps}
+        durationInFrames={durationInFrames}
+        compositionWidth={canvasWidth}
+        compositionHeight={canvasHeight}
+        fps={PREVIEW_FPS}
+        style={{
+          width: '100%',
+          maxHeight: '100%',
+          aspectRatio: `${canvasWidth} / ${canvasHeight}`,
+        }}
+        className="rounded-lg shadow-2xl"
       />
 
       {/* Play/Pause button overlay */}

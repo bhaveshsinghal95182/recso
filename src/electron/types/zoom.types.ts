@@ -5,6 +5,16 @@
  * zoom effects during video export.
  */
 
+/** A timestamped focal-point change within a zoom region */
+export interface FocalKeyframe {
+  /** Absolute time (ms from video start) when the focal point reaches this position */
+  timestampMs: number;
+  /** Focal point X (0-1, normalised to video area) */
+  focalX: number;
+  /** Focal point Y (0-1, normalised to video area) */
+  focalY: number;
+}
+
 /**
  * A region of the video where zoom is applied
  */
@@ -23,6 +33,11 @@ export interface ZoomRegion {
   focalY: number;
   /** Duration of ease in/out animation in milliseconds */
   easeDurationMs: number;
+  /**
+   * Optional focal-point keyframes produced by smart pan.
+   * Sorted by timestampMs ascending.
+   */
+  focalKeyframes?: FocalKeyframe[];
 }
 
 /**

@@ -19,7 +19,7 @@ export interface Rectangle {
 
 /** Layout configuration options */
 export interface LayoutConfig {
-  /** Padding around the video as a percentage (0-1). Default: 0.05 (5%) */
+  /** Padding around the video as a percentage (0-1). Default: 0.04 (4%) */
   padding: number;
   /** Maximum scale factor when window is smaller than canvas. Default: 0.9 */
   maxScale: number;
@@ -59,7 +59,7 @@ export const DEFAULT_COMPOSITOR_CONFIG: CompositorConfig = {
   backgroundColor: '#000000',
   canvasSize: { width: 1920, height: 1080 },
   layout: {
-    padding: 0.05,
+    padding: 0.04,
     maxScale: 0.9,
     scaleUp: true,
   },

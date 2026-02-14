@@ -84,7 +84,7 @@ Replace the current FFmpeg-only rendering pipeline that struggles with complex e
 4. **Performance**: Complex filters can be slow and resource-intensive in FFmpeg
 5. **Future Limitations**: Adding features like text, masks, or advanced transitions is extremely difficult
 
-### New Architecture (Remotion + FFmpeg)
+### New Architecture (Bundled Remotion)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -104,18 +104,18 @@ Replace the current FFmpeg-only rendering pipeline that struggles with complex e
 │            (remotion-renderer.service.ts)                    │
 │                                                              │
 │  1. Bundle React composition (cached)                        │
-│  2. Calculate layout using compositor.service               │
-│  3. Pass Project data as inputProps                         │
-│  4. Render via headless Chrome (Puppeteer)                  │
+│  2. Resolve Bundled Chrome Path (no download needed)         │
+│  3. Pass Project data as inputProps                          │
+│  4. Render via `renderMedia` (Frame-Accurate)                │
 │                                                              │
 │  Composition Layers:                                         │
-│  ├─ BackgroundLayer (solid color or image)                  │
-│  ├─ VideoLayer (positioned raw video)                       │
-│  ├─ ZoomEffect (animated transforms)                        │
-│  └─ CursorLayer (future: mouse/click animations)            │
+│  ├─ BackgroundLayer (solid color or image)                   │
+│  ├─ VideoLayer (positioned raw video)                        │
+│  ├─ ZoomEffect (animated transforms)                         │
+│  └─ CursorLayer (future: mouse/click animations)             │
 │                                                              │
-│  Output: temp/remotion-{uuid}.mp4                           │
-│  Progress: 0% → 60%                                         │
+│  Output: temp/remotion-{uuid}.mp4                            │
+│  Progress: 0% → 60%                                          │
 └─────────────────────┬───────────────────────────────────────┘
                       │
                       ▼
@@ -123,14 +123,14 @@ Replace the current FFmpeg-only rendering pipeline that struggles with complex e
 │            STAGE 2: FFmpeg Post-Processor                    │
 │          (exporter.service.ts - modified)                    │
 │                                                              │
-│  Input: Remotion's temp file                                │
+│  Input: Remotion's temp file                                 │
 │                                                              │
 │  Filters Applied:                                            │
-│  ├─ Cut filter (remove unwanted segments)                   │
-│  └─ Scaling filter (upscale to target resolution)           │
+│  ├─ Cut filter (remove unwanted segments)                    │
+│  └─ Scaling filter (upscale to target resolution)            │
 │                                                              │
-│  Output: exports/{filename}.mp4                             │
-│  Progress: 60% → 100%                                       │
+│  Output: exports/{filename}.mp4                              │
+│  Progress: 60% → 100%                                        │
 └─────────────────────┬───────────────────────────────────────┘
                       │
                       ▼
@@ -142,11 +142,12 @@ Replace the current FFmpeg-only rendering pipeline that struggles with complex e
 
 **Key Improvements:**
 
-1. **Separation of Concerns**: Visual effects handled by React, post-processing by FFmpeg
-2. **Easier Debugging**: Can preview Remotion composition independently
-3. **Better Quality**: Frame-by-frame rendering with precise control
-4. **Maintainability**: React component code is more readable than FFmpeg filters
-5. **Extensibility**: Adding new effects is as simple as adding React components
+1.  **Stability**: Uses Remotion's frame-accurate rendering pipeline (no race conditions)
+2.  **Offline Ready**: Bundles Chrome executable within the app (no runtime download)
+3.  **Separation of Concerns**: Visual effects handled by React, post-processing by FFmpeg
+4.  **Easier Debugging**: Can preview Remotion composition independently
+5.  **Maintainability**: React component code is more readable than FFmpeg filters
+6.  **Extensibility**: Adding new effects is as simple as adding React components
 
 ---
 
@@ -242,34 +243,25 @@ Use each tool for what it does best:
 
 This gives us the best of both worlds while minimizing complexity.
 
-### Why Headless Browser Rendering?
+### Chrome Resolution via `chrome-resolver.service.ts`
 
-Remotion uses Puppeteer (headless Chrome) to render your React composition frame by frame.
+Rather than bundling a Chrome executable at build time, we use Remotion's built-in `ensureBrowser()` API via our `chrome-resolver.service.ts`:
 
 **How It Works:**
 
-1. Remotion bundles your React components with Webpack
-2. Launches headless Chrome with the bundle
-3. Navigates to each frame (frame 0, frame 1, frame 2, ...)
-4. Takes a screenshot of the rendered canvas for each frame
-5. Encodes all screenshots into a video using FFmpeg
+1. **First Export**: `ensureBrowser()` downloads the correct Chrome version (~150-200MB) and caches it.
+2. **Subsequent Exports**: Returns the cached path instantly (no re-download).
+3. **Version Matching**: Remotion handles pinning the correct Chrome version internally.
 
 **Why This Approach:**
 
-- **Pixel-Perfect**: Uses the same rendering engine as the browser
-- **Full Web APIs**: Access to Canvas, WebGL, CSS transforms, everything
-- **No Backend Dependencies**: No need for native video libraries
-- **Cross-Platform**: Chrome/Puppeteer works on Windows, Mac, Linux
-- **Debuggable**: Can open Chrome DevTools during preview
+- **Stability**: Uses Remotion's proven, frame-accurate rendering pipeline (`renderMedia`).
+- **Zero Configuration**: Users don't need to install Chrome or set environment variables.
+- **Predictable**: Remotion controls the exact version of Chrome used.
+- **Simpler Build**: No `postinstall` script or `extraResources` config needed.
+- **Smaller Initial Install**: Chrome is downloaded on demand, not bundled in the installer.
 
-**Performance Considerations:**
-
-- **Slower than native**: Rendering each frame in Chrome is slower than FFmpeg filters
-- **Memory Usage**: Chrome uses more RAM than FFmpeg
-- **Mitigation**:
-  - Remotion supports concurrency (render multiple frames in parallel)
-  - Only rendering effects once (Stage 1), not re-encoding multiple times
-  - Can cache bundles to skip bundling step
+**Trade-off**: Requires internet on first export. Subsequent exports use the cached Chrome.
 
 **For our use case**, this trade-off is worth it because:
 
@@ -311,9 +303,27 @@ pnpm add @remotion/renderer @remotion/bundler remotion
 pnpm add puppeteer
 ```
 
-- **Why**: Remotion uses Puppeteer to launch headless Chrome for rendering
-- **Size Warning**: Puppeteer downloads Chromium (~200MB), but this is necessary
-- **Alternative**: Can use `puppeteer-core` and point to system Chrome, but that adds configuration complexity
+**Chrome Resolution (Already Implemented):**
+
+Chrome is resolved at runtime via `chrome-resolver.service.ts`, which uses Remotion's `ensureBrowser()` API. No `postinstall` script or `electron-builder` `extraResources` config is needed.
+
+**File**: `src/electron/services/chrome-resolver.service.ts` ✅ (already exists)
+
+```typescript
+import { ensureBrowser } from '@remotion/renderer';
+
+let cachedChromePath: string | null = null;
+
+export async function ensureChromeBrowser(): Promise<string> {
+  if (cachedChromePath) return cachedChromePath;
+  const status = await ensureBrowser({ logLevel: 'info' });
+  if (status.type === 'no-browser' || status.type === 'version-mismatch') {
+    throw new Error(`Failed to ensure Chrome browser. Status: ${status.type}`);
+  }
+  cachedChromePath = status.path;
+  return cachedChromePath;
+}
+```
 
 **React Dependencies:**
 
@@ -1059,6 +1069,7 @@ import { renderMedia, selectComposition, getCompositions } from '@remotion/rende
 import path from 'path';
 import { randomUUID } from 'crypto';
 import fs from 'fs';
+import { app } from 'electron';
 import type { Project } from '../types/project.types';
 import type { ExportConfig } from '../types/exporter.types';
 import type { RemotionRenderProgress, RemotionRenderResult } from '../types/remotion.types';
@@ -1067,25 +1078,12 @@ import * as ffmpegService from './ffmpeg.service';
 
 /**
  * Cache for bundled composition.
- *
- * Bundling is slow (5-10 seconds) because Webpack must:
- * 1. Resolve all imports
- * 2. Transpile TypeScript
- * 3. Bundle React and dependencies
- * 4. Optimize for production
- *
- * We cache the bundle path to skip this on subsequent renders.
- * Only needs to be done once per app session (or when code changes).
  */
 let bundleCache: string | null = null;
-
-/**
- * Cancellation flag.
- *
- * Remotion doesn't provide a cancel method, so we use this flag
- * to throw an error during the onProgress callback, which stops rendering.
- */
 let isCancelled = false;
+
+// Chrome resolution is handled by chrome-resolver.service.ts
+import { ensureChromeBrowser } from './chrome-resolver.service';
 ```
 
 **Why Cache the Bundle:**
@@ -1130,151 +1128,82 @@ Remotion catches the error and stops rendering.
 ##### Part 2: Main Render Function
 
 ```typescript
-/**
- * Render a project using Remotion.
- *
- * This is the main entry point called by the exporter service.
- *
- * @param project - The project to render
- * @param config - Export configuration
- * @param onProgress - Progress callback (optional)
- * @returns Render result with temp file path
- */
 export async function renderWithRemotion(
   project: Project,
   config: ExportConfig,
-  onProgress?: (progress: RemotionRenderProgress) => void,
+  onProgress: (progress: RemotionRenderProgress) => void,
 ): Promise<RemotionRenderResult> {
-  // Reset cancellation flag
   isCancelled = false;
+  const runId = randomUUID();
+  const tempDir = path.join(process.cwd(), 'temp', runId);
+  fs.mkdirSync(tempDir, { recursive: true });
 
   try {
-    // === STEP 1: Bundle Composition ===
+    // 1. Bundle the composition (or use cache)
     if (!bundleCache) {
-      console.log('[RemotionRenderer] Bundling composition...');
-      const entryPoint = path.join(__dirname, '../remotion/index.js');
-
-      bundleCache = await bundle({
-        entryPoint,
-        // Webpack options (use defaults)
+      console.log('Bundling Remotion composition...');
+      const bundled = await bundle({
+        entryPoint: path.join(process.cwd(), 'src/remotion/index.ts'),
+        // Webpack config adjustments if needed
       });
-
-      console.log('[RemotionRenderer] Bundle cached at:', bundleCache);
-    } else {
-      console.log('[RemotionRenderer] Using cached bundle');
+      bundleCache = bundled;
     }
 
-    // === STEP 2: Probe Video ===
-    const metadata = await ffmpegService.probeVideo(project.rawVideoPath);
-    const durationInSeconds = metadata.duration;
-    const durationInFrames = Math.ceil(durationInSeconds * config.fps);
+    // 2. Resolve Composition
+    const compositions = await getCompositions(bundleCache, {
+      inputProps: { project, config, layout: {} as any }, // Partial props for discovery
+    });
+    const composition = compositions.find((c) => c.id === 'main');
+    if (!composition) throw new Error('Composition not found');
 
-    console.log('[RemotionRenderer] Video duration:', durationInSeconds, 's');
-    console.log('[RemotionRenderer] Frames to render:', durationInFrames);
+    // 3. Prepare Layout & Props
+    const durationInFrames = Math.ceil(project.duration * config.fps);
+    const layout = compositorService.calculateLayout(project, config.width, config.height);
 
-    // === STEP 3: Calculate Layout ===
-    const canvasSize = compositorService.getCanvasSize();
-    const layout = compositorService.calculateLayout(project.videoDimensions, canvasSize);
-
-    console.log('[RemotionRenderer] Canvas size:', canvasSize);
-    console.log('[RemotionRenderer] Video layout:', layout);
-
-    // === STEP 4: Prepare Input Props ===
     const inputProps = {
       project,
       config,
-      layout: {
-        videoX: layout.x,
-        videoY: layout.y,
-        videoWidth: layout.width,
-        videoHeight: layout.height,
-        canvasWidth: canvasSize.width,
-        canvasHeight: canvasSize.height,
-      },
+      layout,
     };
 
-    // === STEP 5: Select Composition ===
-    const compositions = await getCompositions(bundleCache, {
-      inputProps,
-    });
+    // 4. Render
+    const tempOutputPath = path.join(tempDir, 'output.mp4');
+    const browserExecutable = getBrowserExecutable();
 
-    const composition = compositions.find((c) => c.id === 'main');
-    if (!composition) {
-      throw new Error('Composition "main" not found in bundle');
-    }
-
-    console.log('[RemotionRenderer] Composition loaded:', composition.id);
-
-    // === STEP 6: Prepare Output Path ===
-    const tempDir = path.join(project.projectFolderPath, '.temp');
-    if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir, { recursive: true });
-    }
-    const tempOutputPath = path.join(tempDir, `remotion-${randomUUID()}.mp4`);
-
-    // === STEP 7: Render ===
-    console.log('[RemotionRenderer] Starting render to:', tempOutputPath);
+    console.log(
+      `[Remotion] Starting render with executable: ${browserExecutable || 'SYSTEM DEFAULT'}`,
+    );
 
     await renderMedia({
       composition: {
         ...composition,
-        // Override with actual values
         durationInFrames,
         fps: config.fps,
-        width: canvasSize.width,
-        height: canvasSize.height,
+        width: config.width,
+        height: config.height,
       },
       serveUrl: bundleCache,
       codec: 'h264',
       outputLocation: tempOutputPath,
       inputProps,
-
-      // Quality settings
-      crf: 15, // High quality (lower = better, 0-51 range)
-      pixelFormat: 'yuv420p', // Standard format
-
-      // Puppeteer options
+      browserExecutable: browserExecutable || undefined, // undefined lets Remotion find it
       chromiumOptions: {
         headless: true,
         args: ['--no-sandbox', '--disable-setuid-sandbox'],
       },
-
-      // Progress tracking
       onProgress: ({ renderedFrames, encodedFrames, encodedDoneIn }) => {
-        // Check for cancellation
-        if (isCancelled) {
-          throw new Error('Render cancelled by user');
-        }
+        if (isCancelled) throw new Error('Render cancelled');
 
-        const percent = Math.round((renderedFrames / durationInFrames) * 100);
-
-        console.log(
-          `[RemotionRenderer] Progress: ${renderedFrames}/${durationInFrames} ` +
-            `(${percent}%) - Encoded: ${encodedFrames}`,
-        );
-
-        // Emit progress to callback
-        onProgress?.({
+        onProgress({
           renderedFrames,
           totalFrames: durationInFrames,
-          percent,
+          percent: (renderedFrames / durationInFrames) * 100,
           encodedFrames,
           encodedDoneIn,
         });
       },
     });
 
-    // Check if cancelled during final encoding
-    if (isCancelled) {
-      if (fs.existsSync(tempOutputPath)) {
-        fs.unlinkSync(tempOutputPath);
-      }
-      return { success: false, error: 'Render cancelled' };
-    }
-
-    console.log('[RemotionRenderer] Render complete!');
-
-    // === STEP 8: Return Result ===
     return {
       success: true,
       outputPath: tempOutputPath,

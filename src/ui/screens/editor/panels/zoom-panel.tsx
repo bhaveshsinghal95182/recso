@@ -22,7 +22,6 @@ export function ZoomPanel() {
   const {
     zoomRegions,
     selectedZoomId,
-    addZoom,
     updateZoom,
     updateZoomRegions,
     replaceZoomRegions,
@@ -91,8 +90,8 @@ export function ZoomPanel() {
 
   /**
    * Apply smart panning to one or many zoom regions.
-   * If `selectedZoom` is set, only that region is processed.
-   * Otherwise all regions are processed.
+   * Adds focal-point keyframes that follow the mouse cursor
+   * instead of splitting the region into many sub-regions.
    */
   const handleSmartPan = useCallback(async () => {
     if (!project) return;
@@ -104,7 +103,7 @@ export function ZoomPanel() {
       const allEvents = await window.electron.editor.getMouseEvents();
       const videoDuration = project.timeline.duration;
 
-      // Filter to moves within video duration (clicks not needed for pan detection)
+      // Filter to moves within video duration
       const moves = allEvents
         .filter((e) => e.timestampMs <= videoDuration)
         .sort((a, b) => a.timestampMs - b.timestampMs);
@@ -119,28 +118,23 @@ export function ZoomPanel() {
 
       // 2. Determine which regions to process
       const regionsToProcess = selectedZoom ? [selectedZoom] : [...zoomRegions];
-      const untouchedRegions = selectedZoom
-        ? zoomRegions.filter((z) => z.id !== selectedZoom.id)
-        : [];
 
-      // 3. Process each region → split into sub-regions
-      const newRegions: ZoomRegion[] = [];
-      const idsToRemove: string[] = [];
+      // 3. Process each region → add focalKeyframes (no splitting)
+      const updatedRegions: ZoomRegion[] = [];
 
       for (const region of regionsToProcess) {
-        const subRegions = smartPanSingleRegion(region, moves, videoWidth, videoHeight);
-
-        idsToRemove.push(region.id);
-        newRegions.push(...subRegions);
+        const updated = smartPanSingleRegion(region, moves, videoWidth, videoHeight);
+        updatedRegions.push(updated);
       }
 
-      // 4. Build final array and do a full replacement
-      const allNewRegions = [...untouchedRegions, ...newRegions].sort(
-        (a, b) => a.startMs - b.startMs,
-      );
+      // 4. Merge updated regions back with untouched ones
+      const processedIds = new Set(regionsToProcess.map((r) => r.id));
+      const untouched = zoomRegions.filter((z) => !processedIds.has(z.id));
+
+      const allRegions = [...untouched, ...updatedRegions].sort((a, b) => a.startMs - b.startMs);
 
       // Full state replacement (syncs to backend and updates local state)
-      await replaceZoomRegions(allNewRegions);
+      await replaceZoomRegions(allRegions);
     } catch (error) {
       // Failed to smart pan
     } finally {
@@ -221,16 +215,14 @@ export function ZoomPanel() {
         newZooms.push(currentRegion);
       }
 
-      // Add all new zoom regions
-      for (const zoom of newZooms) {
-        await addZoom(zoom.startMs, zoom.endMs);
-      }
+      // Replace all zoom regions with the generated ones (preserves focal points)
+      await replaceZoomRegions(newZooms);
     } catch (error) {
       // Failed to generate zooms
     } finally {
       setIsGenerating(false);
     }
-  }, [project, addZoom]);
+  }, [project, replaceZoomRegions]);
 
   const smartPanButton = (
     <div className="pt-4 border-t border-border">

@@ -29,6 +29,9 @@ importers:
       '@remotion/bundler':
         specifier: 4.0.422
         version: 4.0.422(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      '@remotion/player':
+        specifier: ^4.0.422
+        version: 4.0.422(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
       '@remotion/renderer':
         specifier: 4.0.422
         version: 4.0.422(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
