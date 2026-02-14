@@ -129,7 +129,15 @@ export function MinimalPreview() {
     }
   }, [isPlaying, videoLoaded]);
 
-  // Render loop
+  // Keep zoom regions in a ref so the render loop doesn't restart when they change
+  const zoomRegionsRef = useRef(zoomRegions);
+  useEffect(() => {
+    zoomRegionsRef.current = zoomRegions;
+  }, [zoomRegions]);
+
+  // Render loop — runs at ~60fps, reads time imperatively to stay stable.
+  // During playback it reads from the video element and syncs back to the store.
+  // During scrubbing it reads from the store (updated by seek).
   useEffect(() => {
     if (!canvasRef.current || !videoRef.current || !project) return;
 
@@ -138,9 +146,26 @@ export function MinimalPreview() {
     if (!ctx) return;
 
     const video = videoRef.current;
+    let animId: number;
 
     const render = () => {
-      // Draw background or clear if transparent
+      // Determine current time: while playing, use the video's native time
+      // for smooth, jitter-free updates; otherwise read from the store.
+      const playbackState = usePlaybackStore.getState();
+      let timeMs: number;
+
+      if (playbackState.isPlaying) {
+        timeMs = video.currentTime * 1000;
+        // Sync video time back to the store so the timeline playhead moves
+        // Only update if there is a meaningful difference to avoid redundant sets
+        if (Math.abs(playbackState.currentTime - timeMs) > 5) {
+          playbackState.tick(timeMs, 'absolute');
+        }
+      } else {
+        timeMs = playbackState.currentTime;
+      }
+
+      // Draw background
       if (project.backgroundColor === 'transparent') {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
       } else {
@@ -169,19 +194,16 @@ export function MinimalPreview() {
         const offsetX = (canvas.width - drawWidth) / 2;
         const offsetY = (canvas.height - drawHeight) / 2;
 
-        // Check for active zoom region
-        const activeZoom = zoomRegions.find(
-          (z) => currentTime >= z.startMs && currentTime <= z.endMs,
-        );
+        // Check for active zoom region using imperative time
+        const regions = zoomRegionsRef.current;
+        const activeZoom = regions.find((z) => timeMs >= z.startMs && timeMs <= z.endMs);
 
         if (activeZoom) {
-          const { scale, focalX, focalY } = calculateZoomLevel(currentTime, activeZoom);
+          const { scale, focalX, focalY } = calculateZoomLevel(timeMs, activeZoom);
 
-          // Calculate focal point in canvas coordinates (relative to video area)
           const focalCanvasX = offsetX + drawWidth * focalX;
           const focalCanvasY = offsetY + drawHeight * focalY;
 
-          // Apply zoom transform around focal point
           ctx.save();
           ctx.translate(focalCanvasX, focalCanvasY);
           ctx.scale(scale, scale);
@@ -193,12 +215,12 @@ export function MinimalPreview() {
         }
       }
 
-      requestAnimationFrame(render);
+      animId = requestAnimationFrame(render);
     };
 
-    const animId = requestAnimationFrame(render);
+    animId = requestAnimationFrame(render);
     return () => cancelAnimationFrame(animId);
-  }, [project, videoLoaded, zoomRegions, currentTime]);
+  }, [project, videoLoaded]);
 
   const handlePlayPause = useCallback(() => {
     if (isPlaying) pause();
