@@ -12,6 +12,8 @@
  * 5. Handles cancellation and cleanup
  */
 
+import { app } from 'electron';
+
 import { bundle } from '@remotion/bundler';
 import { renderMedia, selectComposition } from '@remotion/renderer';
 import { randomUUID } from 'crypto';
@@ -133,11 +135,14 @@ export async function renderWithRemotion(
   const runId = randomUUID();
 
   // Create temporary directory for this render
-  const tempDir = path.join(process.cwd(), 'temp', runId);
+  // Create temporary directory for this render
+  // Use app.getPath('temp') to avoid issues with process.cwd() in production (e.g. System32)
+  const tempDir = path.join(app.getPath('temp'), 'recso-render', runId);
   fs.mkdirSync(tempDir, { recursive: true });
 
   const tempOutputPath = path.join(tempDir, 'output.mp4');
   let linkedVideoPath: string | null = null;
+  let binariesDirectory: string | null = null;
 
   try {
     console.log('[RemotionRenderer] ====== Starting Remotion Render ======');
@@ -147,33 +152,72 @@ export async function renderWithRemotion(
     // ========================================================
     // Step 1: Bundle the composition (or use cache)
     // ========================================================
-    if (!bundleCache) {
-      console.log('[RemotionRenderer] Bundling Remotion composition...');
-      const startBundle = Date.now();
 
-      // Resolve path to entry point
-      const entryPoint = path.resolve(path.join(process.cwd(), 'src', 'remotion', 'index.tsx'));
+    // Check if we are running in production (packaged)
+    const isProduction = app.isPackaged;
 
-      if (!fs.existsSync(entryPoint)) {
-        throw new Error(`Remotion entry point not found: ${entryPoint}`);
+    if (isProduction) {
+      console.log('[RemotionRenderer] Running in PRODUCTION mode');
+      // In production, use the pre-bundled assets in resources/dist-remotion
+      // Electron unpacks extraResources to resources/ directory next to the executable
+      const resourcesPath = process.resourcesPath;
+      const preBundledPath = path.join(resourcesPath, 'dist-remotion');
+
+      console.log('[RemotionRenderer] Checking for pre-bundled assets at:', preBundledPath);
+
+      if (fs.existsSync(preBundledPath)) {
+        console.log('[RemotionRenderer] Using pre-bundled Remotion composition');
+        bundleCache = preBundledPath;
+
+        // Configure Remotion to use unpacked binaries from app.asar.unpacked
+        // The path structure is: resources-path/app.asar.unpacked/node_modules/@remotion/compositor-win32-x64-msvc
+        const unpackedBinariesDir = path.join(
+          process.resourcesPath,
+          'app.asar.unpacked',
+          'node_modules',
+          '@remotion',
+          'compositor-win32-x64-msvc',
+        );
+
+        console.log('[RemotionRenderer] Setting binaries directory to:', unpackedBinariesDir);
+        binariesDirectory = unpackedBinariesDir;
+      } else {
+        console.error('[RemotionRenderer] pre-bundled assets NOT FOUND at:', preBundledPath);
+        // Fallback or throw error? For now, throw error as we expect it to be there
+        throw new Error(`Remotion bundle not found in resources: ${preBundledPath}`);
       }
-
-      console.log('[RemotionRenderer] Entry point:', entryPoint);
-
-      // Bundle using Webpack
-      const bundled = await bundle({
-        entryPoint,
-        webpackOverride: (config) => config,
-      });
-
-      bundleCache = bundled;
-
-      const bundleTime = ((Date.now() - startBundle) / 1000).toFixed(2);
-      console.log(`[RemotionRenderer] Bundle complete in ${bundleTime}s`);
-      console.log('[RemotionRenderer] Bundle path:', bundleCache);
     } else {
-      console.log('[RemotionRenderer] Using cached bundle');
-      console.log('[RemotionRenderer] Bundle path:', bundleCache);
+      // Development mode: Runtime bundling
+      if (!bundleCache) {
+        console.log(
+          '[RemotionRenderer] Running in DEVELOPMENT mode - Bundling Remotion composition...',
+        );
+        const startBundle = Date.now();
+
+        // Resolve path to entry point
+        const entryPoint = path.resolve(path.join(process.cwd(), 'src', 'remotion', 'index.tsx'));
+
+        if (!fs.existsSync(entryPoint)) {
+          throw new Error(`Remotion entry point not found: ${entryPoint}`);
+        }
+
+        console.log('[RemotionRenderer] Entry point:', entryPoint);
+
+        // Bundle using Webpack
+        const bundled = await bundle({
+          entryPoint,
+          webpackOverride: (config) => config,
+        });
+
+        bundleCache = bundled;
+
+        const bundleTime = ((Date.now() - startBundle) / 1000).toFixed(2);
+        console.log(`[RemotionRenderer] Bundle complete in ${bundleTime}s`);
+        console.log('[RemotionRenderer] Bundle path:', bundleCache);
+      } else {
+        console.log('[RemotionRenderer] Using cached bundle');
+        console.log('[RemotionRenderer] Bundle path:', bundleCache);
+      }
     }
 
     // ========================================================
@@ -287,9 +331,10 @@ export async function renderWithRemotion(
     // ========================================================
     console.log('[RemotionRenderer] Selecting composition...');
     const composition = await selectComposition({
-      serveUrl: bundleCache,
+      serveUrl: bundleCache!,
       id: 'main',
       inputProps,
+      binariesDirectory,
     });
 
     console.log('[RemotionRenderer] Composition selected:', composition.id);
@@ -317,7 +362,7 @@ export async function renderWithRemotion(
       encodingMaxRate: '20M', // Bitrate cap for speed
       encodingBufferSize: '20M', // Required when maxRate is set
       imageFormat: 'jpeg', // Faster than PNG, no transparency needed
-      jpegQuality: 80, // Good enough for intermediate
+      jpegQuality: 100, // Good enough for intermediate
       concurrency: Math.max(1, Math.floor(os.cpus().length / 2)),
       outputLocation: tempOutputPath,
       inputProps,
@@ -325,6 +370,7 @@ export async function renderWithRemotion(
       // Configure Puppeteer to allow local file access
       // This is necessary for Chromium to load file:// URLs in the browser context
       puppeteerInstance: undefined,
+      binariesDirectory, // <--- Pass the binaries directory here!
       // Note: We use renderMedia's built-in Puppeteer which should handle file access
       onProgress: ({ renderedFrames, encodedFrames, encodedDoneIn }) => {
         // Check if render was cancelled

@@ -18,9 +18,10 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier . --write",
     "transpile:electron": "tsc -p src/electron/tsconfig.json",
-    "dist:mac": "pnpm run transpile:electron && pnpm run build && electron-builder --mac --arm64",
-    "dist:win": "pnpm run transpile:electron && pnpm run build && electron-builder --win --x64",
-    "dist:linux": "pnpm run transpile:electron && pnpm run build && electron-builder --linux --x64",
+    "bundle:remotion": "node scripts/bundle-remotion.js",
+    "dist:mac": "pnpm run transpile:electron && pnpm run bundle:remotion && pnpm run build && electron-builder --mac --arm64",
+    "dist:win": "pnpm run transpile:electron && pnpm run bundle:remotion && pnpm run build && electron-builder --win --x64",
+    "dist:linux": "pnpm run transpile:electron && pnpm run bundle:remotion && pnpm run build && electron-builder --linux --x64",
     "cleanup:db": "npx electron scripts/cleanup-db.js"
   },
   "dependencies": {
@@ -31,6 +32,7 @@
     "@radix-ui/react-slot": "^1.2.4",
     "@radix-ui/react-tooltip": "^1.2.8",
     "@remotion/bundler": "4.0.422",
+    "@remotion/compositor-win32-x64-msvc": "^4.0.422",
     "@remotion/media": "4.0.422",
     "@remotion/player": "^4.0.422",
     "@remotion/renderer": "4.0.422",

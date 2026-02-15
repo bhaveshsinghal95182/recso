@@ -29,6 +29,9 @@ importers:
       '@remotion/bundler':
         specifier: 4.0.422
         version: 4.0.422(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      '@remotion/compositor-win32-x64-msvc':
+        specifier: ^4.0.422
+        version: 4.0.422
       '@remotion/media':
         specifier: 4.0.422
         version: 4.0.422(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
@@ -6759,8 +6762,7 @@ snapshots:
   '@remotion/compositor-linux-x64-musl@4.0.422':
     optional: true
 
-  '@remotion/compositor-win32-x64-msvc@4.0.422':
-    optional: true
+  '@remotion/compositor-win32-x64-msvc@4.0.422': {}
 
   '@remotion/licensing@4.0.422': {}
 
