@@ -8,19 +8,29 @@
 import type { ExportConfig } from '../../../types/exporter.types.js';
 import { RESOLUTION_MAP } from '../../../types/exporter.types.js';
 import type { Project } from '../../../types/project.types.js';
-import { backgroundFilter } from './background-filter.js';
+// Kept for reference/fallback, but not used in pipeline:
+// import { backgroundFilter } from './background-filter.js';
+// import { zoomFilter } from './zoom-filter.js';
 import type { ExportFilter, FilterContext } from './base-filter.js';
 import { cutFilter } from './cut-filter.js';
 import { scalingFilter } from './scaling-filter.js';
-import { zoomFilter } from './zoom-filter.js';
 
 /**
  * All registered filters.
  * Add new filters to this array to include them in exports.
+ *
+ * IMPORTANT: Background and zoom filters are NOT applied here because:
+ * - Remotion already applies them during rendering with WYSIWYG accuracy
+ * - Applying them again in FFmpeg post-processing would double-process
+ * - The filter code (backgroundFilter, zoomFilter) is kept for reference/fallback
+ *
+ * Active filters (post-processing only):
+ * - cutFilter: Remove unwanted segments (must happen after effects)
+ * - scalingFilter: Upscale to target resolution
  */
 const filters: ExportFilter[] = [
-  backgroundFilter, // Priority 10 - Apply background at original resolution
-  zoomFilter, // Priority 30 - Zoom AFTER background, before cut
+  // backgroundFilter, // DISABLED - Remotion handles this
+  // zoomFilter, // DISABLED - Remotion handles this
   cutFilter, // Priority 50 - Cut AFTER compositing to avoid duration issues
   scalingFilter, // Priority 90 - Scale to output resolution last
 ];

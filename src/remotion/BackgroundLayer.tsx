@@ -10,32 +10,29 @@ import type { RemotionInputProps } from './types';
  * - Solid color (backgroundColor)
  * - Image (backgroundPath) using Remotion's frame-safe <Img>
  */
-export const BackgroundLayer: React.FC<RemotionInputProps> = ({
-  backgroundPath,
-  backgroundColor,
-  canvasWidth,
-  canvasHeight,
-}) => {
-  if (backgroundPath) {
+export const BackgroundLayer: React.FC<RemotionInputProps> = React.memo(
+  ({ backgroundPath, backgroundColor, canvasWidth, canvasHeight }) => {
+    if (backgroundPath) {
+      return (
+        <Img
+          src={backgroundPath}
+          style={{
+            width: canvasWidth,
+            height: canvasHeight,
+            objectFit: 'cover',
+          }}
+        />
+      );
+    }
+
     return (
-      <Img
-        src={backgroundPath}
+      <div
         style={{
           width: canvasWidth,
           height: canvasHeight,
-          objectFit: 'cover',
+          backgroundColor: backgroundColor || '#1a1a2e',
         }}
       />
     );
-  }
-
-  return (
-    <div
-      style={{
-        width: canvasWidth,
-        height: canvasHeight,
-        backgroundColor: backgroundColor || '#1a1a2e',
-      }}
-    />
-  );
-};
+  },
+);

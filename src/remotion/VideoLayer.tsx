@@ -1,18 +1,17 @@
+import { Video } from '@remotion/media';
 import React from 'react';
-import { Video } from 'remotion';
+import { staticFile } from 'remotion';
 
 import type { RemotionInputProps } from './types';
 
-/**
- * VideoLayer: Renders the source video at the calculated layout position.
- *
- * Layout is pre-calculated, ensuring WYSIWYG consistency between
- * the editor preview and exported video.
- */
-export const VideoLayer: React.FC<RemotionInputProps> = ({ videoSrc, layout }) => {
+export const VideoLayer: React.FC<RemotionInputProps> = React.memo(({ videoSrc, layout }) => {
+  // If videoSrc is a URL (http/file) use as is, otherwise treat as static file
+  const src =
+    videoSrc.startsWith('http') || videoSrc.startsWith('file:') ? videoSrc : staticFile(videoSrc);
+
   return (
     <Video
-      src={videoSrc}
+      src={src}
       style={{
         position: 'absolute',
         left: layout.x,
@@ -22,4 +21,4 @@ export const VideoLayer: React.FC<RemotionInputProps> = ({ videoSrc, layout }) =
       }}
     />
   );
-};
+});

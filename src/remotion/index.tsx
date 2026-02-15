@@ -1,4 +1,4 @@
-import { Composition } from 'remotion';
+import { Composition, registerRoot } from 'remotion';
 
 import { MainComposition } from './Composition';
 import type { RemotionInputProps } from './types';
@@ -7,13 +7,14 @@ import type { RemotionInputProps } from './types';
  * Remotion Entry Point.
  *
  * This file is loaded by @remotion/bundler when bundling.
- * It must export a default component with <Composition> definitions.
+ * It must export a default component with <Composition> definitions
+ * and call registerRoot() for bundler to recognize it.
  *
  * Note: All placeholder values (width, height, fps, durationInFrames)
  * are overridden at render time via inputProps and composition overrides
  * in the remotion-renderer service.
  */
-export default function RemotionRoot() {
+function RemotionRoot() {
   return (
     <>
       <Composition
@@ -38,6 +39,9 @@ export default function RemotionRoot() {
   );
 }
 
-// Named export for direct imports
+// Register composition with Remotion bundler
+registerRoot(RemotionRoot);
+
+// Named exports for direct imports
 export { MainComposition };
 export type { RemotionInputProps };

@@ -18,6 +18,7 @@ interface VideoMetadata {
   duration: number;
   width: number;
   height: number;
+  fps: number;
 }
 
 /**
@@ -93,7 +94,7 @@ export async function probeVideo(filePath: string): Promise<VideoMetadata> {
       '-v',
       'error',
       '-show_entries',
-      'format=duration:stream=width,height',
+      'format=duration:stream=width,height,r_frame_rate',
       '-of',
       'json',
       filePath,
@@ -113,10 +114,24 @@ export async function probeVideo(filePath: string): Promise<VideoMetadata> {
           const width = Number(videoStream?.width) || 1920;
           const height = Number(videoStream?.height) || 1080;
 
+          // Parse r_frame_rate (e.g. "30/1" or "30000/1001")
+          let fps = 30;
+          const rawFps = videoStream?.r_frame_rate;
+          if (rawFps && typeof rawFps === 'string' && rawFps.includes('/')) {
+            const [num, den] = rawFps.split('/').map(Number);
+            if (den && !isNaN(num) && !isNaN(den)) {
+              fps = Math.round((num / den) * 100) / 100;
+            }
+          } else if (rawFps) {
+            const parsed = parseFloat(rawFps);
+            if (!isNaN(parsed)) fps = parsed;
+          }
+
           resolve({
             duration: isNaN(duration) ? 0 : duration,
             width,
             height,
+            fps,
           });
         } catch {
           reject(new Error('Failed to parse ffprobe output'));

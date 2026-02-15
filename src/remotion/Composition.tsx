@@ -17,7 +17,7 @@ import { ZoomEffect } from './ZoomEffect';
  *
  * Each layer is independent and can be developed/tested separately.
  */
-export const MainComposition: React.FC<RemotionInputProps> = (props) => {
+export const MainComposition: React.FC<RemotionInputProps> = React.memo((props) => {
   return (
     <AbsoluteFill>
       {/* Layer 1: Background fills entire canvas */}
@@ -31,4 +31,4 @@ export const MainComposition: React.FC<RemotionInputProps> = (props) => {
       {/* Future layers (cursor, text overlays) go here */}
     </AbsoluteFill>
   );
-};
+});
