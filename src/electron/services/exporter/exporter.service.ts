@@ -105,6 +105,8 @@ export async function startExport(config: ExportConfig): Promise<ExportResult> {
       totalFrames: 0,
       fps: 0,
       eta: 0,
+      stage: 'composition',
+      stagePercent: 0,
     },
     startedAt: Date.now(),
   };
@@ -273,6 +275,8 @@ async function runTwoStagePipeline(
           totalFrames: progress.totalFrames,
           fps: config.fps,
           eta: calculateETA(totalPercent, currentJob.startedAt),
+          stage: 'composition',
+          stagePercent: progress.percent,
         };
 
         // Emit to renderer process
@@ -405,14 +409,12 @@ async function runFFmpegPostProcessing(
     // Collect video filters for post-processing
     const videoFilters: string[] = [];
 
-    // FPS conversion via minterpolate (motion interpolation)
-    // Only applies when Remotion rendered at source FPS < target FPS
+    // FPS conversion via minterpolate removed due to extreme performance cost.
+    // FFmpeg's default -r flag (added in getOutputSettingsArgs) handles frame duplication/dropping
+    // which is standard behavior and much faster.
     if (sourceFps && sourceFps < config.fps) {
       console.log(
-        `[ExporterService] FPS conversion: ${sourceFps} → ${config.fps} via minterpolate`,
-      );
-      videoFilters.push(
-        `minterpolate=fps=${config.fps}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1`,
+        `[ExporterService] FPS conversion: ${sourceFps} → ${config.fps} (standard duplication)`,
       );
     }
 
@@ -481,6 +483,8 @@ async function runFFmpegPostProcessing(
           totalFrames,
           fps,
           eta: calculateETA(totalPercent, currentJob.startedAt),
+          stage: 'export',
+          stagePercent: stagePercent,
         };
 
         // Throttle updates to avoid overwhelming UI

@@ -127,7 +127,15 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
     };
 
     setStep('exporting');
-    setProgress({ percent: 0, currentFrame: 0, totalFrames: 0, fps: 0, eta: 0 });
+    setProgress({
+      percent: 0,
+      currentFrame: 0,
+      totalFrames: 0,
+      fps: 0,
+      eta: 0,
+      stage: 'composition',
+      stagePercent: 0,
+    });
 
     try {
       const exportResult = await window.electron.exporter.start(config);
@@ -344,16 +352,40 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
           {/* Exporting Step */}
           {step === 'exporting' && progress && (
             <div className="space-y-4">
-              {/* Progress bar */}
+              {/* Composition Progress */}
               <div className="space-y-2">
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Progress</span>
-                  <span className="font-medium">{Math.round(progress.percent)}%</span>
+                  <span className="text-muted-foreground">Composition</span>
+                  <span className="font-medium">
+                    {progress.stage === 'composition'
+                      ? `${Math.round(progress.stagePercent)}%`
+                      : '100%'}
+                  </span>
                 </div>
                 <div className="h-2 bg-muted rounded-full overflow-hidden">
                   <div
                     className="h-full bg-primary transition-all duration-300 ease-out"
-                    style={{ width: `${progress.percent}%` }}
+                    style={{
+                      width: `${progress.stage === 'composition' ? progress.stagePercent : 100}%`,
+                    }}
+                  />
+                </div>
+              </div>
+
+              {/* Export Progress */}
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Exporting</span>
+                  <span className="font-medium">
+                    {progress.stage === 'export' ? `${Math.round(progress.stagePercent)}%` : '0%'}
+                  </span>
+                </div>
+                <div className="h-2 bg-muted rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-primary transition-all duration-300 ease-out"
+                    style={{
+                      width: `${progress.stage === 'export' ? progress.stagePercent : 0}%`,
+                    }}
                   />
                 </div>
               </div>

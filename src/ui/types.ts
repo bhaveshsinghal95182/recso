@@ -259,6 +259,10 @@ export interface ExportProgress {
   fps: number;
   /** Estimated seconds remaining */
   eta: number;
+  /** Current export stage */
+  stage: 'composition' | 'export';
+  /** Progress percentage of the current stage (0-100) */
+  stagePercent: number;
 }
 
 /** Export result */
