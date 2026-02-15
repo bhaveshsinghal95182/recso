@@ -355,12 +355,10 @@ export async function renderWithRemotion(
       },
       serveUrl: bundleCache,
       codec: 'h264',
-      // === Performance: Fast intermediate encode ===
-      // Since FFmpeg Stage 2 re-encodes at the user's target quality,
-      // we use a fast, lower-quality encode here to avoid double-encoding.
-      crf: 30, // Lower quality OK — FFmpeg re-encodes
-      encodingMaxRate: '20M', // Bitrate cap for speed
-      encodingBufferSize: '20M', // Required when maxRate is set
+      // === Performance: High quality intermediate encode ===
+      // Encode at high quality to minimize generation loss before FFmpeg stage 2.
+      crf: 10, // Very high quality for intermediate
+      // encodingMaxRate and encodingBufferSize removed to uncap bitrate
       imageFormat: 'jpeg', // Faster than PNG, no transparency needed
       jpegQuality: 100, // Good enough for intermediate
       concurrency: Math.max(1, Math.floor(os.cpus().length / 2)),
