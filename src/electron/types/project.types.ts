@@ -1,20 +1,18 @@
-import type { CutRegion } from './cut.types.js';
-import type { SpritesheetMeta } from './spritesheet.types.js';
-import type { ZoomRegion } from './zoom.types.js';
-
 /**
  * Project Types for the Editor Service
  *
  * Defines the structure of an editing project, including timeline,
  * cursor configuration, and zoom settings.
  */
-
 /**
  * Cursor style options for rendering
  */
-export type CursorStyle = 'default' | 'pointer' | 'crosshair' | 'custom';
+import type { BackgroundPatternConfig } from '../../remotion/patterns.js';
+import type { CutRegion } from './cut.types.js';
+import type { SpritesheetMeta } from './spritesheet.types.js';
+import type { ZoomRegion } from './zoom.types.js';
 
-export type BackgroundPattern = 'none' | 'gradient-blobs' | 'diagonal-lines';
+export type CursorStyle = 'default' | 'pointer' | 'crosshair' | 'custom';
 
 /**
  * Configuration for cursor/click rendering
@@ -113,7 +111,7 @@ export interface Project {
   /** Background color (hex) */
   backgroundColor: string;
   /** Optional background pattern */
-  backgroundPattern?: BackgroundPattern;
+  backgroundPattern?: BackgroundPatternConfig | null;
   /** Cut regions to exclude from export */
   cuts: CutRegion[];
   /** Zoom regions for zoom effects during export */

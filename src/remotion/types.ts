@@ -9,7 +9,8 @@
  * so this interface is compatible with either source.
  */
 
-export type BackgroundPattern = 'none' | 'gradient-blobs' | 'diagonal-lines';
+import type { BackgroundPatternConfig } from './patterns';
+export type { BackgroundPatternConfig };
 
 /** Layout information for positioning the video on the canvas */
 export interface CompositionLayout {
@@ -71,7 +72,7 @@ export interface RemotionInputProps {
    * Patterns can define their own container styles (bg color, text color),
    * which can be overridden by `backgroundColor` if needed.
    */
-  backgroundPattern?: BackgroundPattern;
+  backgroundPattern?: BackgroundPatternConfig;
 
   /** Pre-calculated layout for video positioning on canvas */
   layout: CompositionLayout;

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 
+import type { BackgroundPatternConfig } from '../../remotion/patterns';
 import { debounce } from '../lib/utils';
 import type { CursorConfig, Project, RecordedMouseEvent, ZoomConfig } from '../types';
 import { usePlaybackStore } from './playback-store';
@@ -18,7 +19,7 @@ interface ProjectState {
   updateCursorConfig: (config: Partial<CursorConfig>) => Promise<void>;
   updateZoomConfig: (config: Partial<ZoomConfig>) => Promise<void>;
   updateBackgroundColor: (color: string) => void;
-  updateBackgroundPattern: (pattern: string) => void;
+  updateBackgroundPattern: (pattern: BackgroundPatternConfig | null) => void;
   updateDuration: (durationMs: number) => Promise<void>;
 
   // Setters for syncing from other stores (if needed) or internal updates
@@ -149,7 +150,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     debouncedUpdateBackgroundColor(color);
   },
 
-  updateBackgroundPattern: (pattern: string) => {
+  updateBackgroundPattern: (pattern: BackgroundPatternConfig | null) => {
     const { project } = get();
     if (!project) return;
 
@@ -158,7 +159,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       project: state.project
         ? {
             ...state.project,
-            backgroundPattern: pattern as 'none' | 'gradient-blobs' | 'diagonal-lines',
+            backgroundPattern: pattern,
           }
         : null,
     }));

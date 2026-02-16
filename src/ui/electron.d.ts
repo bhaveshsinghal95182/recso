@@ -1,3 +1,4 @@
+import type { BackgroundPatternConfig } from '../remotion/patterns';
 import type {
   CursorConfig,
   CutRegion,
@@ -182,7 +183,7 @@ interface ElectronAPI {
     updateBackgroundColor: (color: string) => Promise<boolean>;
 
     /** Update background pattern */
-    updateBackgroundPattern: (pattern: string) => Promise<boolean>;
+    updateBackgroundPattern: (pattern: BackgroundPatternConfig | null) => Promise<boolean>;
 
     /** Check if a project exists for recording directory */
     projectExists: (recordingDir: string) => Promise<boolean>;

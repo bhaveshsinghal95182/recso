@@ -174,6 +174,8 @@ export interface ZoomRegion {
   focalKeyframes?: FocalKeyframe[];
 }
 
+import type { BackgroundPatternConfig } from '../remotion/patterns';
+
 export interface Project {
   id: string;
   name: string;
@@ -190,7 +192,7 @@ export interface Project {
   spritesheetMeta: SpritesheetMeta | null;
   backgroundPath?: string;
   backgroundColor: string;
-  backgroundPattern?: 'none' | 'gradient-blobs' | 'diagonal-lines';
+  backgroundPattern?: BackgroundPatternConfig | null;
   cuts: CutRegion[];
   zoomRegions: ZoomRegion[];
   createdAt: number;

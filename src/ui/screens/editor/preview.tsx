@@ -89,7 +89,7 @@ export function MinimalPreview() {
       videoSrc,
       backgroundColor: project?.backgroundColor || '#000000',
       backgroundPath: project?.backgroundPath,
-      backgroundPattern: project?.backgroundPattern,
+      backgroundPattern: project?.backgroundPattern ?? undefined,
       layout,
       canvasWidth,
       canvasHeight,

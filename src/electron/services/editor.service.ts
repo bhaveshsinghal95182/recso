@@ -13,8 +13,8 @@ import { randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
+import { type BackgroundPatternConfig, patternPresets } from '../../remotion/patterns.js';
 import type { CutRegion } from '../types/cut.types.js';
-import type { BackgroundPattern } from '../types/project.types.js';
 import type {
   CursorConfig,
   FrameState,
@@ -84,7 +84,7 @@ export async function createProject(recordingId: string): Promise<Project | null
     zoomConfig: { ...DEFAULT_ZOOM_CONFIG },
     spritesheetMeta,
     backgroundColor: '#000000',
-    backgroundPattern: 'none',
+    backgroundPattern: patternPresets.none,
     cuts: [],
     zoomRegions: [],
     createdAt: Date.now(),
@@ -205,7 +205,7 @@ export function updateBackgroundColor(color: string): boolean {
 /**
  * Update project background pattern
  */
-export function updateBackgroundPattern(pattern: BackgroundPattern): boolean {
+export function updateBackgroundPattern(pattern: BackgroundPatternConfig | null): boolean {
   if (!activeProject) return false;
 
   activeProject.backgroundPattern = pattern;

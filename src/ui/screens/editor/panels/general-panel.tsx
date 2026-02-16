@@ -2,11 +2,17 @@ import { RefreshCcw } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useState } from 'react';
 
+import { PaginatedGrid } from '@/components/paginated-grid';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { useProjectStore } from '@/store/project-store';
+
+import {
+  type BackgroundPatternConfig,
+  patternPresets as patterns,
+} from '../../../../remotion/patterns';
 
 const PASTEL_COLORS = [
   '#FFADAD',
@@ -75,6 +81,10 @@ export function GeneralPanel() {
     setPresetColors(newColors);
   };
 
+  const patternItems = Object.entries(patterns).map(([, config]) => ({
+    ...config,
+  }));
+
   return (
     <motion.div className="space-y-4 overflow-hidden overflow-y-hidden">
       <div className="space-y-4">
@@ -92,66 +102,99 @@ export function GeneralPanel() {
               exit={{ height: 0, opacity: 0 }}
               className="overflow-hidden"
             >
-              <div className="space-y-4 pt-2">
+              <div className="space-y-6 pt-2">
+                {/* 1. Reusable Filters Section */}
                 <div className="space-y-2">
-                  <Label>Pattern</Label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {[
-                      { id: 'none', label: 'None' },
-                      { id: 'gradient-blobs', label: 'Blobs' },
-                      { id: 'diagonal-lines', label: 'Lines' },
-                    ].map((pattern) => (
-                      <Button
-                        key={pattern.id}
-                        variant={project.backgroundPattern === pattern.id ? 'default' : 'outline'}
-                        size="sm"
-                        onClick={() => updateBackgroundPattern(pattern.id)}
-                        className="text-xs"
-                      >
-                        {pattern.label}
-                      </Button>
-                    ))}
+                  <Label>Filters</Label>
+                  {/* Placeholder for future filters */}
+                  <div className="text-xs text-muted-foreground italic">
+                    No filters available yet.
                   </div>
                 </div>
 
-                <div className="space-y-2">
-                  <Label>Base Color</Label>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground w-12">Hex</span>
-                    <Input
-                      value={project.backgroundColor || '#000000'}
-                      onChange={(e) => updateBackgroundColor(e.target.value)}
-                      className="font-mono text-xs h-8"
-                      placeholder="#000000"
-                    />
-                    <Input
-                      type="color"
-                      value={project.backgroundColor || '#000000'}
-                      onChange={(e) => updateBackgroundColor(e.target.value)}
-                      className="h-8 w-14"
-                    />
-                  </div>
-                </div>
-
+                {/* 2. Preset Colors Section */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
-                    <Label>Preset Colors</Label>
-                    <Button size="sm" variant={'outline'} onClick={handleRefreshColors}>
-                      <RefreshCcw className="size-4" />
+                    <Label>Base Color</Label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        value={project.backgroundColor || '#000000'}
+                        onChange={(e) => updateBackgroundColor(e.target.value)}
+                        className="font-mono text-xs h-6 w-20"
+                        placeholder="#000000"
+                      />
+                      <Input
+                        type="color"
+                        value={project.backgroundColor || '#000000'}
+                        onChange={(e) => updateBackgroundColor(e.target.value)}
+                        className="h-6 w-8 p-0 border-0"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between mt-2">
+                    <Label className="text-xs text-muted-foreground">Presets</Label>
+                    <Button
+                      size="icon"
+                      variant={'ghost'}
+                      className="h-6 w-6"
+                      onClick={handleRefreshColors}
+                    >
+                      <RefreshCcw className="size-3" />
                     </Button>
                   </div>
+
                   <motion.div layout className="grid grid-cols-4 gap-2 w-fit mx-auto">
                     {presetColors.map((color) => (
                       <motion.div
                         key={color}
                         whileHover={{ scale: 1.1 }}
                         whileTap={{ scale: 0.9 }}
-                        className="h-8 w-8 rounded-sm border border-black/20 cursor-pointer"
+                        className="h-8 w-8 rounded-sm border border-black/20 cursor-pointer shadow-sm"
                         style={{ backgroundColor: color }}
                         onClick={() => updateBackgroundColor(color)}
                       />
                     ))}
                   </motion.div>
+                </div>
+
+                {/* 3. Paginated Background Patterns */}
+                <div className="space-y-2">
+                  <Label>Patterns</Label>
+                  <PaginatedGrid<BackgroundPatternConfig>
+                    items={patternItems}
+                    itemsPerPage={8}
+                    gridClassName="grid-cols-2"
+                    className="w-full"
+                    disableAnimation
+                    renderItem={(pattern) => (
+                      <div
+                        className={`
+                          cursor-pointer rounded-md border-2 overflow-hidden relative aspect-square
+                          ${project.backgroundPattern?.id === pattern.id ? 'border-primary' : 'border-border hover:border-primary/50'}
+                        `}
+                        onClick={() => updateBackgroundPattern(pattern)}
+                        title={pattern.label}
+                      >
+                        <div
+                          className="absolute inset-0"
+                          style={{
+                            backgroundColor: project.backgroundColor || '#ffffff',
+                            ...pattern.containerStyle,
+                          }}
+                        >
+                          {pattern.id !== 'none' && (
+                            <div className="absolute inset-0" style={pattern.style} />
+                          )}
+                          {pattern.id === 'none' && (
+                            <div className="absolute inset-0 flex items-center justify-center">
+                              <div className="w-full h-[1px] bg-red-500 rotate-45 transform absolute" />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  />
                 </div>
               </div>
             </motion.div>

@@ -4,9 +4,21 @@ import prettierPlugin from 'eslint-plugin-prettier';
 import simpleImportSort from 'eslint-plugin-simple-import-sort';
 
 export default [
+  // Global ignores
+  {
+    ignores: [
+      'dist',
+      'build',
+      'out',
+      'coverage',
+      'node_modules',
+      'dist-electron',
+      'dist-react',
+      'dist-remotion',
+    ],
+  },
   {
     files: ['**/*.{ts,tsx}'],
-    ignores: ['dist', 'build', 'out', 'coverage', 'node_modules'],
     languageOptions: {
       parser: tsParser,
       parserOptions: {
