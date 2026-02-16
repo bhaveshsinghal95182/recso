@@ -6,7 +6,12 @@
     "node_modules/ffprobe-static/**",
     "node_modules/@remotion/compositor-*/**"
   ],
-  "extraResources": ["dist-electron/preload.cjs", "public/**/*", "dist-remotion/**/*"],
+  "extraResources": [
+    "dist-electron/preload.cjs",
+    "public/**/*",
+    "dist-remotion/**/*",
+    "resources/chrome/**/*"
+  ],
   "icon": "./public/R.png",
   "mac": {
     "target": "dmg"

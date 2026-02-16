@@ -19,9 +19,10 @@
     "format": "prettier . --write",
     "transpile:electron": "tsc -p src/electron/tsconfig.json",
     "bundle:remotion": "node scripts/bundle-remotion.js",
-    "dist:mac": "pnpm run transpile:electron && pnpm run bundle:remotion && pnpm run build && electron-builder --mac --arm64",
-    "dist:win": "pnpm run transpile:electron && pnpm run bundle:remotion && pnpm run build && electron-builder --win --x64",
-    "dist:linux": "pnpm run transpile:electron && pnpm run bundle:remotion && pnpm run build && electron-builder --linux --x64",
+    "bundle:chrome": "node scripts/download-chrome.js",
+    "dist:mac": "pnpm run transpile:electron && pnpm run bundle:remotion && pnpm run bundle:chrome && pnpm run build && electron-builder --mac --arm64",
+    "dist:win": "pnpm run transpile:electron && pnpm run bundle:remotion && pnpm run bundle:chrome && pnpm run build && electron-builder --win --x64",
+    "dist:linux": "pnpm run transpile:electron && pnpm run bundle:remotion && pnpm run bundle:chrome && pnpm run build && electron-builder --linux --x64",
     "cleanup:db": "npx electron scripts/cleanup-db.js"
   },
   "dependencies": {

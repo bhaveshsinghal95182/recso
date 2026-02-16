@@ -13,6 +13,7 @@ dist-ssr
 dist-react
 dist-*
 *.local
+resources/chrome
 
 # Editor directories and files
 .vscode/*
