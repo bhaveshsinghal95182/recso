@@ -190,6 +190,7 @@ export interface Project {
   spritesheetMeta: SpritesheetMeta | null;
   backgroundPath?: string;
   backgroundColor: string;
+  backgroundPattern?: 'none' | 'gradient-blobs' | 'diagonal-lines';
   cuts: CutRegion[];
   zoomRegions: ZoomRegion[];
   createdAt: number;

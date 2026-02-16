@@ -156,6 +156,10 @@ electron.contextBridge.exposeInMainWorld('electron', {
     updateBackgroundColor: (color: string) =>
       electron.ipcRenderer.invoke('editor:update-background-color', color),
 
+    /** Update background pattern */
+    updateBackgroundPattern: (pattern: string) =>
+      electron.ipcRenderer.invoke('editor:update-background-pattern', pattern),
+
     projectExists: (recordingDir: string): Promise<boolean> =>
       electron.ipcRenderer.invoke('editor:project-exists', recordingDir),
 

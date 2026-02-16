@@ -14,6 +14,7 @@ import fs from 'fs';
 import path from 'path';
 
 import type { CutRegion } from '../types/cut.types.js';
+import type { BackgroundPattern } from '../types/project.types.js';
 import type {
   CursorConfig,
   FrameState,
@@ -83,6 +84,7 @@ export async function createProject(recordingId: string): Promise<Project | null
     zoomConfig: { ...DEFAULT_ZOOM_CONFIG },
     spritesheetMeta,
     backgroundColor: '#000000',
+    backgroundPattern: 'none',
     cuts: [],
     zoomRegions: [],
     createdAt: Date.now(),
@@ -194,6 +196,20 @@ export function updateBackgroundColor(color: string): boolean {
   } catch (err) {
     console.warn('[EditorService] Failed to update compositor background color:', err);
   }
+
+  // Auto-save metadata
+  projectStorage.saveProjectMetadata(activeProject);
+  return true;
+}
+
+/**
+ * Update project background pattern
+ */
+export function updateBackgroundPattern(pattern: BackgroundPattern): boolean {
+  if (!activeProject) return false;
+
+  activeProject.backgroundPattern = pattern;
+  activeProject.modifiedAt = Date.now();
 
   // Auto-save metadata
   projectStorage.saveProjectMetadata(activeProject);

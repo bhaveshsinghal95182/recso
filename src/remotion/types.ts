@@ -9,6 +9,8 @@
  * so this interface is compatible with either source.
  */
 
+export type BackgroundPattern = 'none' | 'gradient-blobs' | 'diagonal-lines';
+
 /** Layout information for positioning the video on the canvas */
 export interface CompositionLayout {
   /** X offset on the canvas */
@@ -62,6 +64,14 @@ export interface RemotionInputProps {
 
   /** Optional background image path */
   backgroundPath?: string;
+
+  /**
+   * Optional CSS background pattern.
+   *
+   * Patterns can define their own container styles (bg color, text color),
+   * which can be overridden by `backgroundColor` if needed.
+   */
+  backgroundPattern?: BackgroundPattern;
 
   /** Pre-calculated layout for video positioning on canvas */
   layout: CompositionLayout;

@@ -14,6 +14,8 @@ import type { ZoomRegion } from './zoom.types.js';
  */
 export type CursorStyle = 'default' | 'pointer' | 'crosshair' | 'custom';
 
+export type BackgroundPattern = 'none' | 'gradient-blobs' | 'diagonal-lines';
+
 /**
  * Configuration for cursor/click rendering
  */
@@ -110,6 +112,8 @@ export interface Project {
   backgroundPath?: string;
   /** Background color (hex) */
   backgroundColor: string;
+  /** Optional background pattern */
+  backgroundPattern?: BackgroundPattern;
   /** Cut regions to exclude from export */
   cuts: CutRegion[];
   /** Zoom regions for zoom effects during export */

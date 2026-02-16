@@ -18,6 +18,7 @@ interface ProjectState {
   updateCursorConfig: (config: Partial<CursorConfig>) => Promise<void>;
   updateZoomConfig: (config: Partial<ZoomConfig>) => Promise<void>;
   updateBackgroundColor: (color: string) => void;
+  updateBackgroundPattern: (pattern: string) => void;
   updateDuration: (durationMs: number) => Promise<void>;
 
   // Setters for syncing from other stores (if needed) or internal updates
@@ -146,6 +147,25 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }));
 
     debouncedUpdateBackgroundColor(color);
+  },
+
+  updateBackgroundPattern: (pattern: string) => {
+    const { project } = get();
+    if (!project) return;
+
+    // Optimistic update
+    set((state) => ({
+      project: state.project
+        ? {
+            ...state.project,
+            backgroundPattern: pattern as 'none' | 'gradient-blobs' | 'diagonal-lines',
+          }
+        : null,
+    }));
+
+    window.electron.editor.updateBackgroundPattern(pattern).catch((err) => {
+      console.error('[ProjectStore] updateBackgroundPattern error:', err);
+    });
   },
 
   updateDuration: async (durationMs: number) => {

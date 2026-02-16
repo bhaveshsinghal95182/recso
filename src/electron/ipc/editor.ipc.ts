@@ -14,6 +14,7 @@ import * as editorService from '../services/editor.service.js';
 import { mouseTrackerService } from '../services/mouse-tracker.service.js';
 import * as projectStorage from '../services/project-storage.service.js';
 import type { CutRegion } from '../types/cut.types.js';
+import type { BackgroundPattern } from '../types/project.types.js';
 import type { CursorConfig, ZoomConfig } from '../types/project.types.js';
 import type { ZoomRegion } from '../types/zoom.types.js';
 
@@ -77,6 +78,11 @@ export function registerEditorHandlers(): void {
   // Update background color
   ipcMain.handle('editor:update-background-color', async (_event, color: string) => {
     return editorService.updateBackgroundColor(color);
+  });
+
+  // Update background pattern
+  ipcMain.handle('editor:update-background-pattern', async (_event, pattern: BackgroundPattern) => {
+    return editorService.updateBackgroundPattern(pattern);
   });
 
   // Check if a project exists for recording

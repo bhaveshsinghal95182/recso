@@ -181,6 +181,9 @@ interface ElectronAPI {
     /** Update background color */
     updateBackgroundColor: (color: string) => Promise<boolean>;
 
+    /** Update background pattern */
+    updateBackgroundPattern: (pattern: string) => Promise<boolean>;
+
     /** Check if a project exists for recording directory */
     projectExists: (recordingDir: string) => Promise<boolean>;
 

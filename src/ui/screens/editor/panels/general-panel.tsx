@@ -33,7 +33,7 @@ function hslToHex(h: number, s: number, l: number) {
 }
 
 export function GeneralPanel() {
-  const { project, updateBackgroundColor } = useProjectStore();
+  const { project, updateBackgroundColor, updateBackgroundPattern } = useProjectStore();
   const [presetColors, setPresetColors] = useState<string[]>(PASTEL_COLORS);
 
   if (!project) return null;
@@ -92,23 +92,48 @@ export function GeneralPanel() {
               exit={{ height: 0, opacity: 0 }}
               className="overflow-hidden"
             >
-              <div className="space-y-2 pt-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground w-12">Hex</span>
-                  <Input
-                    value={project.backgroundColor || '#000000'}
-                    onChange={(e) => updateBackgroundColor(e.target.value)}
-                    className="font-mono text-xs h-8"
-                    placeholder="#000000"
-                  />
-                  <Input
-                    type="color"
-                    value={project.backgroundColor || '#000000'}
-                    onChange={(e) => updateBackgroundColor(e.target.value)}
-                    className="h-8 w-14"
-                  />
+              <div className="space-y-4 pt-2">
+                <div className="space-y-2">
+                  <Label>Pattern</Label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {[
+                      { id: 'none', label: 'None' },
+                      { id: 'gradient-blobs', label: 'Blobs' },
+                      { id: 'diagonal-lines', label: 'Lines' },
+                    ].map((pattern) => (
+                      <Button
+                        key={pattern.id}
+                        variant={project.backgroundPattern === pattern.id ? 'default' : 'outline'}
+                        size="sm"
+                        onClick={() => updateBackgroundPattern(pattern.id)}
+                        className="text-xs"
+                      >
+                        {pattern.label}
+                      </Button>
+                    ))}
+                  </div>
                 </div>
-                <div className="space-y-2 mt-4">
+
+                <div className="space-y-2">
+                  <Label>Base Color</Label>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground w-12">Hex</span>
+                    <Input
+                      value={project.backgroundColor || '#000000'}
+                      onChange={(e) => updateBackgroundColor(e.target.value)}
+                      className="font-mono text-xs h-8"
+                      placeholder="#000000"
+                    />
+                    <Input
+                      type="color"
+                      value={project.backgroundColor || '#000000'}
+                      onChange={(e) => updateBackgroundColor(e.target.value)}
+                      className="h-8 w-14"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <Label>Preset Colors</Label>
                     <Button size="sm" variant={'outline'} onClick={handleRefreshColors}>
