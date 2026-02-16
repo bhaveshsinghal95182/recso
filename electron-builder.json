@@ -16,6 +16,12 @@
     "category": "Utility"
   },
   "win": {
-    "target": ["nsis"]
+    "target": ["nsis"],
+    "icon": "public/R.png"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "license": "build/license.txt"
   }
 }
