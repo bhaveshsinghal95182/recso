@@ -1,7 +1,7 @@
 import { Download, FolderOpen } from 'lucide-react';
-import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
+import { useExportStore } from '@/store/export-store';
 import { useProjectStore } from '@/store/project-store';
 import { useUIStore } from '@/store/ui-store';
 
@@ -12,7 +12,7 @@ import { ExportModal } from './export-modal';
 export function PropertiesPanel() {
   const { project } = useProjectStore();
   const { activePropertiesTab } = useUIStore();
-  const [exportModalOpen, setExportModalOpen] = useState(false);
+  const { isModalOpen, setModalOpen } = useExportStore();
 
   if (!project) return null;
 
@@ -43,7 +43,7 @@ export function PropertiesPanel() {
 
       {/* Export buttons - always at bottom */}
       <div className="pt-4 border-t border-border space-y-3 gap-2 flex justify-between w-full">
-        <Button onClick={() => setExportModalOpen(true)} className="w-5/6">
+        <Button onClick={() => setModalOpen(true)} className="w-5/6">
           <Download className="size-4" />
           Export
         </Button>
@@ -54,7 +54,7 @@ export function PropertiesPanel() {
       </div>
 
       {/* Export Modal */}
-      <ExportModal open={exportModalOpen} onOpenChange={setExportModalOpen} />
+      <ExportModal open={isModalOpen} onOpenChange={setModalOpen} />
     </div>
   );
 }

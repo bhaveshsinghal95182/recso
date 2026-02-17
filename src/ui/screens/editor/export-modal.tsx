@@ -23,6 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { useExportStore } from '@/store/export-store';
 import { usePlaybackStore } from '@/store/playback-store';
 import { useProjectStore } from '@/store/project-store';
 import type {
@@ -32,7 +33,6 @@ import type {
   ExportProgress,
   ExportQuality,
   ExportResolution,
-  ExportResult,
 } from '@/types';
 
 interface ExportModalProps {
@@ -69,6 +69,26 @@ const FPS_OPTIONS: { value: ExportFPS; label: string }[] = [
 
 export function ExportModal({ open, onOpenChange }: ExportModalProps) {
   const { project } = useProjectStore();
+  const {
+    state: exportState,
+    progress,
+    result,
+    setExportState,
+    setProgress,
+    setResult,
+    setModalOpen,
+    reset,
+  } = useExportStore();
+
+  // Map export store state to modal step
+  const step: ExportStep =
+    exportState === 'idle'
+      ? 'configure'
+      : exportState === 'exporting'
+        ? 'exporting'
+        : exportState === 'complete'
+          ? 'complete'
+          : 'error';
 
   // Export configuration state
   const [resolution, setResolution] = useState<ExportResolution>('1080p');
@@ -80,17 +100,18 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
   const [fileName, setFileName] = useState<string>('');
   const [outputFolder, setOutputFolder] = useState<string>('');
 
-  // Export state
-  const [step, setStep] = useState<ExportStep>('configure');
-  const [progress, setProgress] = useState<ExportProgress | null>(null);
-  const [result, setResult] = useState<ExportResult | null>(null);
+  // Sync modal open state with store
+  useEffect(() => {
+    setModalOpen(open);
+  }, [open, setModalOpen]);
 
   // Reset state and pause playback when modal opens
   useEffect(() => {
     if (open) {
-      setStep('configure');
-      setProgress(null);
-      setResult(null);
+      // Only reset if not currently exporting
+      if (exportState !== 'exporting') {
+        reset();
+      }
       // Pause playback to prevent high-frequency re-renders from currentTime updates
       // This fixes input lag in the modal
       const { isPlaying, pause } = usePlaybackStore.getState();
@@ -98,18 +119,16 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
         pause();
       }
     }
-  }, [open]);
+  }, [open, exportState, reset]);
 
-  // Subscribe to progress updates
+  // Subscribe to progress updates (always, not just when modal is open)
   useEffect(() => {
-    if (step !== 'exporting') return;
-
     const unsubscribe = window.electron.exporter.onProgress((prog: ExportProgress) => {
       setProgress(prog);
     });
 
     return unsubscribe;
-  }, [step]);
+  }, [setProgress]);
 
   const handleExport = useCallback(async () => {
     if (!project) return;
@@ -126,7 +145,7 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
       outputFilename: fileName || undefined,
     };
 
-    setStep('exporting');
+    setExportState('exporting');
     setProgress({
       percent: 0,
       currentFrame: 0,
@@ -140,20 +159,33 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
     try {
       const exportResult = await window.electron.exporter.start(config);
       setResult(exportResult);
-      setStep(exportResult.success ? 'complete' : 'error');
+      setExportState(exportResult.success ? 'complete' : 'error');
     } catch (err) {
       setResult({
         success: false,
         error: err instanceof Error ? err.message : 'Export failed',
       });
-      setStep('error');
+      setExportState('error');
     }
-  }, [project, resolution, customWidth, customHeight, format, quality, fps]);
+  }, [
+    project,
+    resolution,
+    customWidth,
+    customHeight,
+    format,
+    quality,
+    fps,
+    fileName,
+    outputFolder,
+    setExportState,
+    setProgress,
+    setResult,
+  ]);
 
   const handleCancel = useCallback(async () => {
     await window.electron.exporter.cancel();
-    setStep('configure');
-  }, []);
+    reset();
+  }, [reset]);
 
   const handleOpenFolder = useCallback(async () => {
     if (result?.outputPath) {
@@ -209,10 +241,7 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
               {step === 'complete' && 'Export Complete'}
               {step === 'error' && 'Export Failed'}
             </Dialog.Title>
-            <Dialog.Close
-              className="text-muted-foreground hover:text-foreground transition-colors"
-              disabled={step === 'exporting'}
-            >
+            <Dialog.Close className="text-muted-foreground hover:text-foreground transition-colors">
               <X className="size-5" />
             </Dialog.Close>
           </div>
@@ -451,7 +480,7 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
                 <p className="text-sm text-muted-foreground">{result.error || 'Unknown error'}</p>
               </div>
 
-              <Button onClick={() => setStep('configure')} className="w-full">
+              <Button onClick={() => reset()} className="w-full">
                 Try Again
               </Button>
             </div>

@@ -1,5 +1,7 @@
 import { useState } from 'react';
 
+import { ExportProgressToast } from '@/components/export-progress-toast';
+import { Toaster } from '@/components/ui/sonner';
 import { RootLayout } from '@/layouts/root-layout';
 import { EditorScreen } from '@/screens/editor';
 import ScreenRecorder from '@/screens/screen-recorder';
@@ -60,6 +62,8 @@ function App() {
       return (
         <RootLayout>
           <WelcomeScreen onNewRecording={goToRecorder} onOpenProject={handleOpenProject} />
+          <Toaster />
+          <ExportProgressToast />
         </RootLayout>
       );
 
@@ -69,6 +73,8 @@ function App() {
         return (
           <RootLayout>
             <WelcomeScreen onNewRecording={goToRecorder} onOpenProject={handleOpenProject} />
+            <Toaster />
+            <ExportProgressToast />
           </RootLayout>
         );
       }
@@ -82,6 +88,8 @@ function App() {
             ← Home
           </button>
           <EditorScreen recordingId={state.recordingId} />
+          <Toaster />
+          <ExportProgressToast />
         </RootLayout>
       );
 
@@ -96,6 +104,8 @@ function App() {
             ← Home
           </button>
           <ScreenRecorder onOpenEditor={openEditor} />
+          <Toaster />
+          <ExportProgressToast />
         </RootLayout>
       );
   }
