@@ -10,7 +10,7 @@
 
 import { ipcMain } from 'electron';
 
-import type { BackgroundPatternConfig } from '../../remotion/patterns.js';
+import type { BackgroundPatternConfig } from '../remotion/patterns.js';
 import * as editorService from '../services/editor.service.js';
 import { mouseTrackerService } from '../services/mouse-tracker.service.js';
 import * as projectStorage from '../services/project-storage.service.js';

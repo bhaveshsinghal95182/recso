@@ -343,6 +343,16 @@ export async function renderWithRemotion(
     // Step 8: Render composition to video file
     // ========================================================
     console.log('[RemotionRenderer] Starting render...');
+    const glRendererLabel = config.glRenderer || 'null';
+    console.log(
+      '[RemotionRenderer] GL Renderer:',
+      glRendererLabel,
+      glRendererLabel === 'angle'
+        ? '(GPU-accelerated)'
+        : glRendererLabel === 'null'
+          ? '(Chrome auto-select)'
+          : '',
+    );
     const renderStart = Date.now();
 
     await renderMedia({
@@ -369,6 +379,10 @@ export async function renderWithRemotion(
       // This is necessary for Chromium to load file:// URLs in the browser context
       puppeteerInstance: undefined,
       binariesDirectory, // <--- Pass the binaries directory here!
+      // Configure GL renderer backend for GPU usage
+      chromiumOptions: {
+        gl: config.glRenderer ?? null, // Use configured GL renderer or default (null)
+      },
       // Note: We use renderMedia's built-in Puppeteer which should handle file access
       onProgress: ({ renderedFrames, encodedFrames, encodedDoneIn }) => {
         // Check if render was cancelled

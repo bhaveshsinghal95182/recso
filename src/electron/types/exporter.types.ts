@@ -15,6 +15,27 @@ export type ExportQuality = 'low' | 'medium' | 'high' | 'lossless';
 /** Supported frame rates */
 export type ExportFPS = 24 | 30 | 60;
 
+/**
+ * GL renderer backends for Chromium/Remotion video rendering.
+ *
+ * Recommendations:
+ * - null: Default, lets Chrome decide (recommended for most cases)
+ * - angle: Recommended for WebGL/Three.js on desktop with GPU
+ * - angle-egl: Recommended for cloud instances with GPU
+ * - swangle: Recommended for Lambda or machines without GPU (slower)
+ * - swiftshader: Software rendering fallback
+ * - vulkan: Vulkan backend (requires Remotion v4.0.41+)
+ * - egl: EGL backend
+ */
+export type GLRenderer =
+  | null
+  | 'angle'
+  | 'egl'
+  | 'swiftshader'
+  | 'vulkan'
+  | 'angle-egl'
+  | 'swangle';
+
 /** Resolution dimensions lookup */
 export const RESOLUTION_MAP: Record<
   Exclude<ExportResolution, 'custom'>,
@@ -53,6 +74,15 @@ export interface ExportConfig {
   outputFolder?: string;
   /** Optional explicit output filename */
   outputFilename?: string;
+  /**
+   * GL renderer backend for Chromium/Remotion.
+   * Controls GPU usage during video composition.
+   * - null: Let Chrome decide (default)
+   * - angle: Use GPU on desktop (recommended for WebGL)
+   * - angle-egl: Use GPU on cloud/Linux
+   * - swangle: Software rendering (no GPU required)
+   */
+  glRenderer?: GLRenderer;
 }
 
 /** Export progress event */
@@ -117,4 +147,5 @@ export const DEFAULT_EXPORT_CONFIG: ExportConfig = {
   quality: 'high',
   fps: 30,
   backgroundColor: '#000000',
+  glRenderer: 'angle', // Use GPU acceleration (ANGLE backend for best performance with NVIDIA)
 };
