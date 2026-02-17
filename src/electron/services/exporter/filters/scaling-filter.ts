@@ -16,11 +16,15 @@ export const scalingFilter: ExportFilter = {
   priority: 90, // Applied last - scales the final composed video
 
   isEnabled(context: FilterContext): boolean {
-    const { project, outputWidth, outputHeight } = context;
-    const { width: videoWidth, height: videoHeight } = project.videoDimensions;
+    const { project, outputWidth, outputHeight, inputWidth, inputHeight } = context;
+
+    // Use actual input dimensions from Remotion render if available,
+    // otherwise fallback to original video dimensions
+    const sourceWidth = inputWidth ?? project.videoDimensions.width;
+    const sourceHeight = inputHeight ?? project.videoDimensions.height;
 
     // Only enable if output resolution differs from source resolution
-    return outputWidth !== videoWidth || outputHeight !== videoHeight;
+    return outputWidth !== sourceWidth || outputHeight !== sourceHeight;
   },
 
   getVideoFilters(context: FilterContext): string[] {

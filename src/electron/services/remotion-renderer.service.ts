@@ -42,6 +42,34 @@ let bundleCache: string | null = null;
 let isCancelled = false;
 
 /**
+ * Calculate intermediate encoding quality settings based on export quality preset.
+ * Intermediate renders need high quality to avoid generation loss, but we can
+ * still scale appropriately while balancing encoding speed.
+ *
+ * @param exportQuality - Quality preset from export config
+ * @returns Object with CRF and JPEG quality values
+ */
+function getIntermediateQuality(exportQuality: string): { crf: number; jpegQuality: number } {
+  switch (exportQuality) {
+    case 'low':
+      // Low: Faster encoding, acceptable quality loss
+      return { crf: 20, jpegQuality: 90 };
+    case 'medium':
+      // Medium: Balanced quality and speed
+      return { crf: 18, jpegQuality: 93 };
+    case 'high':
+      // High: High quality intermediate, minimal loss
+      return { crf: 15, jpegQuality: 96 };
+    case 'lossless':
+      // Lossless: Near-lossless intermediate to preserve maximum quality
+      return { crf: 10, jpegQuality: 98 };
+    default:
+      // Fallback to medium
+      return { crf: 18, jpegQuality: 93 };
+  }
+}
+
+/**
  * Start a simple HTTP file server to serve the video file.
  * This is necessary because Chromium/Puppeteer blocks file:// URLs for security reasons.
  *
@@ -97,6 +125,58 @@ function getCanvasDimensions(config: ExportConfig): { width: number; height: num
   return {
     width: resolution.width,
     height: resolution.height,
+  };
+}
+
+/**
+ * Calculate optimal intermediate render resolution.
+ *
+ * Strategy:
+ * - 720p: Render at 720p (no change)
+ * - 1080p: Render at 1080p (no change)
+ * - 4K: Render at 1080p, upscale in FFmpeg (saves ~75% render time)
+ * - Custom: Smart scaling based on size
+ *
+ * This optimization dramatically improves 4K render performance while maintaining
+ * output quality since FFmpeg uses high-quality Lanczos upscaling.
+ *
+ * @param config - Export configuration
+ * @returns Intermediate render dimensions and final target dimensions
+ */
+function getIntermediateRenderDimensions(config: ExportConfig): {
+  intermediate: { width: number; height: number };
+  final: { width: number; height: number };
+} {
+  const finalDimensions = getCanvasDimensions(config);
+
+  // For 4K exports, render at 1080p intermediate
+  if (config.resolution === '4k') {
+    return {
+      intermediate: { width: 1920, height: 1080 },
+      final: finalDimensions,
+    };
+  }
+
+  // For custom resolutions larger than 1080p, cap intermediate at 1080p
+  if (config.resolution === 'custom') {
+    const maxDimension = Math.max(finalDimensions.width, finalDimensions.height);
+    if (maxDimension > 1920) {
+      // Scale down to 1080p while maintaining aspect ratio
+      const scale = 1920 / maxDimension;
+      return {
+        intermediate: {
+          width: Math.round(finalDimensions.width * scale),
+          height: Math.round(finalDimensions.height * scale),
+        },
+        final: finalDimensions,
+      };
+    }
+  }
+
+  // For 720p and 1080p, render at native resolution
+  return {
+    intermediate: finalDimensions,
+    final: finalDimensions,
   };
 }
 
@@ -258,10 +338,30 @@ export async function renderWithRemotion(
     console.log('[RemotionRenderer] Total frames:', durationInFrames);
 
     // ========================================================
-    // Step 4: Get canvas dimensions from config
+    // Step 4: Calculate intermediate and final dimensions
     // ========================================================
-    const canvasDimensions = getCanvasDimensions(config);
-    console.log('[RemotionRenderer] Canvas dimensions:', canvasDimensions);
+    const dimensions = getIntermediateRenderDimensions(config);
+    const canvasDimensions = dimensions.intermediate;
+
+    console.log('[RemotionRenderer] Target resolution:', config.resolution);
+    console.log('[RemotionRenderer] Final dimensions:', dimensions.final);
+    console.log('[RemotionRenderer] Intermediate render dimensions:', canvasDimensions);
+
+    if (
+      canvasDimensions.width !== dimensions.final.width ||
+      canvasDimensions.height !== dimensions.final.height
+    ) {
+      const pixelReduction = (
+        (1 -
+          (canvasDimensions.width * canvasDimensions.height) /
+            (dimensions.final.width * dimensions.final.height)) *
+        100
+      ).toFixed(1);
+      console.log(
+        `[RemotionRenderer] Performance optimization: Rendering at lower resolution, ` +
+          `will upscale in FFmpeg stage (${pixelReduction}% fewer pixels to render)`,
+      );
+    }
 
     // ========================================================
     // Step 5: Calculate layout information
@@ -317,6 +417,7 @@ export async function renderWithRemotion(
       videoSrc: videoFileName, // Relative name for staticFile()
       backgroundColor: config.backgroundColor,
       backgroundPath: compositorService.getBackground(),
+      backgroundPattern: project.backgroundPattern,
       layout,
       canvasWidth: canvasDimensions.width,
       canvasHeight: canvasDimensions.height,
@@ -325,6 +426,9 @@ export async function renderWithRemotion(
 
     console.log('[RemotionRenderer] Input props prepared');
     console.log('[RemotionRenderer] Video source:', videoFileName);
+    console.log('[RemotionRenderer] Background color:', config.backgroundColor);
+    console.log('[RemotionRenderer] Background path:', compositorService.getBackground());
+    console.log('[RemotionRenderer] Background pattern:', project.backgroundPattern?.id || 'none');
 
     // ========================================================
     // Step 8: Select composition metadata
@@ -353,6 +457,15 @@ export async function renderWithRemotion(
           ? '(Chrome auto-select)'
           : '',
     );
+
+    // Calculate intermediate quality based on export quality preset
+    const intermediateQuality = getIntermediateQuality(config.quality);
+    console.log(
+      '[RemotionRenderer] Intermediate quality:',
+      config.quality,
+      `(CRF: ${intermediateQuality.crf}, JPEG: ${intermediateQuality.jpegQuality})`,
+    );
+
     const renderStart = Date.now();
 
     await renderMedia({
@@ -365,13 +478,15 @@ export async function renderWithRemotion(
       },
       serveUrl: bundleCache,
       codec: 'h264',
-      // === Performance: High quality intermediate encode ===
-      // Encode at high quality to minimize generation loss before FFmpeg stage 2.
-      crf: 10, // Very high quality for intermediate
+      // === Performance: Adaptive intermediate encode quality ===
+      // Quality scales with export preset to balance speed and avoid generation loss
+      crf: intermediateQuality.crf,
       // encodingMaxRate and encodingBufferSize removed to uncap bitrate
       imageFormat: 'jpeg', // Faster than PNG, no transparency needed
-      jpegQuality: 100, // Good enough for intermediate
-      concurrency: Math.max(1, Math.floor(os.cpus().length / 2)),
+      jpegQuality: intermediateQuality.jpegQuality,
+      // Use all available cores for maximum performance
+      // Reserve 1 core for system/UI responsiveness on lower-end machines
+      concurrency: Math.max(1, os.cpus().length - 1),
       outputLocation: tempOutputPath,
       inputProps,
       browserExecutable,

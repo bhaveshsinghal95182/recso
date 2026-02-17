@@ -228,6 +228,16 @@ export type ExportQuality = 'low' | 'medium' | 'high' | 'lossless';
 /** Supported frame rates */
 export type ExportFPS = 24 | 30 | 60;
 
+/** GL renderer backends for GPU acceleration */
+export type GLRenderer =
+  | null
+  | 'angle'
+  | 'egl'
+  | 'swiftshader'
+  | 'vulkan'
+  | 'angle-egl'
+  | 'swangle';
+
 /** Export configuration from UI */
 export interface ExportConfig {
   /** Target resolution preset */
@@ -248,6 +258,8 @@ export interface ExportConfig {
   outputFolder?: string;
   /** Optional explicit output filename */
   outputFilename?: string;
+  /** GL renderer backend for GPU acceleration */
+  glRenderer?: GLRenderer;
 }
 
 /** Export progress event */

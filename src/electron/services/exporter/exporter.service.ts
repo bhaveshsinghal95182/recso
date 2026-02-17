@@ -12,6 +12,7 @@ import { type ChildProcess, spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
 import { createFilterContext, getEnabledFilters } from './filters/index.js';
@@ -390,10 +391,20 @@ async function runFFmpegPostProcessing(
   const totalFrames = Math.ceil(videoDuration * config.fps);
 
   console.log('[ExporterService] Post-processing:', totalFrames, 'frames');
+  console.log(
+    '[ExporterService] Intermediate video dimensions:',
+    `${metadata.width}x${metadata.height}`,
+  );
+
+  // Detect best encoder before starting Promise
+  const outputArgs = await getOutputSettingsArgs(config);
 
   return new Promise((resolve, reject) => {
     // Create filter context for post-processing filters only
     const context = createFilterContext(project, config, videoDuration);
+    // Add actual input dimensions from probed Remotion output
+    context.inputWidth = metadata.width;
+    context.inputHeight = metadata.height;
 
     // IMPORTANT: Only use cut and scaling filters
     // Background and zoom were already applied by Remotion
@@ -444,8 +455,7 @@ async function runFFmpegPostProcessing(
       }
     }
 
-    // Apply output settings
-    const outputArgs = getOutputSettingsArgs(config);
+    // Apply output settings (detected earlier)
     args.push(...outputArgs);
 
     // Output path
@@ -535,32 +545,89 @@ async function runFFmpegPostProcessing(
   });
 }
 
-function getOutputSettingsArgs(config: ExportConfig): string[] {
+async function getOutputSettingsArgs(config: ExportConfig): Promise<string[]> {
   const crf = QUALITY_CRF_MAP[config.quality];
   const args: string[] = [];
 
   // FPS
   args.push('-r', config.fps.toString());
 
+  // Use all available CPU threads for encoding
+  const threads = os.cpus().length;
+  args.push('-threads', threads.toString());
+
   // Video codec and settings
   if (config.format === 'mp4') {
-    // H.264 video
-    args.push(
-      '-c:v',
-      'libx264',
-      '-preset',
-      'medium',
-      '-crf',
-      crf.toString(),
-      '-pix_fmt',
-      'yuv420p',
-      '-movflags',
-      '+faststart',
-    );
+    // Detect best available encoder (hardware if available)
+    const encoder = await ffmpegService.getBestEncoder();
+
+    // Hardware encoder settings
+    if (encoder === 'h264_nvenc') {
+      // NVIDIA NVENC - GPU accelerated
+      args.push(
+        '-c:v',
+        'h264_nvenc',
+        '-preset',
+        'p4', // p1 (fastest) to p7 (slowest), p4 = balanced
+        '-cq',
+        crf.toString(),
+        '-pix_fmt',
+        'yuv420p',
+        '-movflags',
+        '+faststart',
+      );
+    } else if (encoder === 'h264_amf') {
+      // AMD AMF - GPU accelerated
+      args.push(
+        '-c:v',
+        'h264_amf',
+        '-quality',
+        'balanced', // speed, balanced, quality
+        '-rc',
+        'cqp',
+        '-qp_i',
+        crf.toString(),
+        '-qp_p',
+        crf.toString(),
+        '-pix_fmt',
+        'yuv420p',
+        '-movflags',
+        '+faststart',
+      );
+    } else if (encoder === 'h264_qsv') {
+      // Intel Quick Sync - GPU accelerated
+      args.push(
+        '-c:v',
+        'h264_qsv',
+        '-preset',
+        'medium',
+        '-global_quality',
+        crf.toString(),
+        '-pix_fmt',
+        'yuv420p',
+        '-movflags',
+        '+faststart',
+      );
+    } else {
+      // CPU fallback - libx264
+      args.push(
+        '-c:v',
+        'libx264',
+        '-preset',
+        'medium',
+        '-crf',
+        crf.toString(),
+        '-pix_fmt',
+        'yuv420p',
+        '-movflags',
+        '+faststart',
+      );
+    }
+
     // AAC audio
     args.push('-c:a', 'aac', '-b:a', '128k');
   } else {
-    // VP9 video
+    // VP9 video (CPU only, no hardware encoders widely available)
     args.push('-c:v', 'libvpx-vp9', '-crf', crf.toString(), '-b:v', '0', '-pix_fmt', 'yuv420p');
     // Opus audio
     args.push('-c:a', 'libopus', '-b:a', '128k');

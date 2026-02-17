@@ -143,6 +143,7 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
       backgroundColor: project.backgroundColor || '#000000',
       outputFolder: outputFolder || undefined,
       outputFilename: fileName || undefined,
+      glRenderer: 'angle', // Enable GPU acceleration
     };
 
     setExportState('exporting');

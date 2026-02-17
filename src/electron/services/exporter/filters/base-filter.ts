@@ -25,6 +25,9 @@ export interface FilterContext {
   outputHeight: number;
   /** Duration of the source video in seconds */
   videoDuration: number;
+  /** Actual input video dimensions (from Remotion intermediate render) */
+  inputWidth?: number;
+  inputHeight?: number;
 }
 
 /**

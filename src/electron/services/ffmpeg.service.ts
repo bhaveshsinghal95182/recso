@@ -21,6 +21,10 @@ interface VideoMetadata {
   fps: number;
 }
 
+export type HardwareEncoder = 'h264_nvenc' | 'h264_amf' | 'h264_qsv' | 'libx264';
+
+let availableEncoder: HardwareEncoder | null = null;
+
 /**
  * Lazily initialize FFmpeg/FFprobe paths
  */
@@ -190,4 +194,61 @@ export async function remuxVideo(inputPath: string, outputPath: string): Promise
       reject(err);
     });
   });
+}
+
+/**
+ * Detect and cache the best available hardware encoder.
+ * Priority: NVIDIA > AMD > Intel > CPU fallback
+ */
+async function detectHardwareEncoder(): Promise<HardwareEncoder> {
+  if (!ffmpegPath) {
+    throw new Error('FFmpeg not initialized');
+  }
+
+  return new Promise((resolve) => {
+    const ffmpeg = spawn(ffmpegPath!, ['-encoders']);
+
+    let output = '';
+    ffmpeg.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    ffmpeg.on('close', () => {
+      // Check for hardware encoders in priority order
+      if (output.includes('h264_nvenc')) {
+        console.log('[FFmpegService] Hardware encoder detected: NVIDIA NVENC');
+        resolve('h264_nvenc');
+      } else if (output.includes('h264_amf')) {
+        console.log('[FFmpegService] Hardware encoder detected: AMD AMF');
+        resolve('h264_amf');
+      } else if (output.includes('h264_qsv')) {
+        console.log('[FFmpegService] Hardware encoder detected: Intel Quick Sync');
+        resolve('h264_qsv');
+      } else {
+        console.log('[FFmpegService] No hardware encoder detected, using CPU: libx264');
+        resolve('libx264');
+      }
+    });
+
+    ffmpeg.on('error', () => {
+      // Fallback to CPU on error
+      console.warn('[FFmpegService] Encoder detection failed, falling back to libx264');
+      resolve('libx264');
+    });
+  });
+}
+
+/**
+ * Get the best available H.264 encoder.
+ * Automatically detects and caches hardware encoder on first call.
+ */
+export async function getBestEncoder(): Promise<HardwareEncoder> {
+  await ensureInitialized();
+
+  if (availableEncoder) {
+    return availableEncoder;
+  }
+
+  availableEncoder = await detectHardwareEncoder();
+  return availableEncoder;
 }
