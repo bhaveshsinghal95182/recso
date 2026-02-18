@@ -1,11 +1,16 @@
-import { Copy, Crosshair, MousePointerClick } from 'lucide-react';
+import { Check } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { AutoZoomButton } from '@/components/auto-zoom-button';
+import Ai from '@/components/icons/ai-chip';
+import CopyIcon from '@/components/icons/copy-icon';
+import FocusIcon from '@/components/icons/focus-icon';
+import type { AnimatedIconHandle } from '@/components/icons/types';
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import {
   DEFAULT_ZOOM_LEVEL,
   GROUP_THRESHOLD_MS,
@@ -30,11 +35,14 @@ export function ZoomPanel() {
   } = useTimelineStore();
 
   const selectedZoom = zoomRegions.find((z) => z.id === selectedZoomId);
+  const focusIconRef = useRef<AnimatedIconHandle>(null);
+  const copyIconRef = useRef<AnimatedIconHandle>(null);
 
   // Local state for debounced slider
   const [localZoomLevel, setLocalZoomLevel] = useState(selectedZoom?.zoomLevel ?? 1.5);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
+  const [isCopied, setIsCopied] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Sync local state when selected zoom changes
@@ -86,6 +94,9 @@ export function ZoomPanel() {
 
     // Use bulk update for efficiency
     updateZoomRegions(updatedZooms);
+
+    setIsCopied(true);
+    setTimeout(() => setIsCopied(false), 2000);
   }, [selectedZoom, zoomRegions, updateZoomRegions]);
 
   /**
@@ -135,7 +146,7 @@ export function ZoomPanel() {
 
       // Full state replacement (syncs to backend and updates local state)
       await replaceZoomRegions(allRegions);
-    } catch (error) {
+    } catch {
       // Failed to smart pan
     } finally {
       setIsPanning(false);
@@ -217,7 +228,7 @@ export function ZoomPanel() {
 
       // Replace all zoom regions with the generated ones (preserves focal points)
       await replaceZoomRegions(newZooms);
-    } catch (error) {
+    } catch {
       // Failed to generate zooms
     } finally {
       setIsGenerating(false);
@@ -225,32 +236,27 @@ export function ZoomPanel() {
   }, [project, replaceZoomRegions]);
 
   const smartPanButton = (
-    <div className="pt-4 border-t border-border">
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant="outline"
-            onClick={handleSmartPan}
-            disabled={isPanning || !project || zoomRegions.length === 0}
-            className="w-full"
-          >
-            <MousePointerClick className="size-4 mr-2" />
-            {isPanning
-              ? 'Panning...'
-              : selectedZoom
-                ? 'Smart Pan This Region'
-                : `Smart Pan All (${zoomRegions.length})`}
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>
-          <p className="">
-            {selectedZoom
-              ? 'Splits current region to follow the mouse cursor'
-              : 'Splits all zoom regions to follow the mouse cursor'}
-          </p>
-        </TooltipContent>
-      </Tooltip>
-    </div>
+    <Card className="p-4 shadow-sm border-2 gap-2">
+      <div className="flex items-center gap-3">
+        <div className="bg-blue-500 p-2 rounded-lg flex items-center justify-center shrink-0">
+          <Ai size="24" />
+        </div>
+        <h3 className="font-semibold text-base">Smart Pan</h3>
+      </div>
+
+      <p className="text-sm text-muted-foreground leading-relaxed">
+        Automatically follows the mouse cursor or active window region within the zoomed area.
+      </p>
+
+      <Button
+        className="w-full font-bold tracking-wide uppercase text-xs h-10 text-blue-500"
+        onClick={handleSmartPan}
+        disabled={isPanning || !project || zoomRegions.length === 0}
+        variant={'outline'}
+      >
+        {isPanning ? 'Panning...' : 'Enable Smart Pan'}
+      </Button>
+    </Card>
   );
 
   if (!selectedZoom) {
@@ -301,21 +307,58 @@ export function ZoomPanel() {
 
       {zoomRegions.length > 1 && (
         <div className="pt-2">
-          <Button variant="outline" onClick={handleApplyToAll} className="w-full">
-            <Copy className="size-4 mr-2" />
+          <Button
+            variant="outline"
+            onClick={handleApplyToAll}
+            onMouseEnter={() => copyIconRef.current?.startAnimation()}
+            onMouseLeave={() => copyIconRef.current?.stopAnimation()}
+            className="w-full"
+          >
+            {/* <Copy className="size-4 mr-2" /> */}
+            <div className="relative size-4 mr-2">
+              <AnimatePresence mode="wait" initial={false}>
+                {isCopied ? (
+                  <motion.div
+                    key="check"
+                    initial={{ opacity: 0, scale: 0.5 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.5 }}
+                    transition={{ duration: 0.2 }}
+                    className="absolute inset-0 flex items-center justify-center"
+                  >
+                    <Check className="size-4 text-green-500" />
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="copy"
+                    initial={{ opacity: 0, scale: 0.5 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.5 }}
+                    transition={{ duration: 0.2 }}
+                    className="absolute inset-0 flex items-center justify-center"
+                  >
+                    <CopyIcon ref={copyIconRef} size={16} />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
             Apply to All ({zoomRegions.length} regions)
           </Button>
         </div>
       )}
 
       {/* Edit Focal Point button */}
-      <div className="pt-2">
+      <div
+        className="pt-2"
+        onMouseEnter={() => focusIconRef.current?.startAnimation()}
+        onMouseLeave={() => focusIconRef.current?.stopAnimation()}
+      >
         <Button
           variant={isEditingFocalPoint ? 'default' : 'outline'}
           onClick={() => setIsEditingFocalPoint(!isEditingFocalPoint)}
           className="w-full"
         >
-          <Crosshair className="size-4 mr-2" />
+          <FocusIcon className="size-4 mr-2" ref={focusIconRef} />
           {isEditingFocalPoint ? 'Done Editing' : 'Edit Focal Point'}
         </Button>
       </div>

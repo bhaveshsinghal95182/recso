@@ -104,16 +104,6 @@ export function GeneralPanel() {
               className="overflow-hidden"
             >
               <div className="space-y-6 pt-2">
-                {/* 1. Reusable Filters Section */}
-                <div className="space-y-2">
-                  <Label>Filters</Label>
-                  {/* Placeholder for future filters */}
-                  <div className="text-xs text-muted-foreground italic">
-                    No filters available yet.
-                  </div>
-                </div>
-
-                {/* 2. Preset Colors Section */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <Label>Base Color</Label>
@@ -189,7 +179,7 @@ export function GeneralPanel() {
                           )}
                           {pattern.id === 'none' && (
                             <div className="absolute inset-0 flex items-center justify-center">
-                              <div className="w-full h-[1px] bg-red-500 rotate-45 transform absolute" />
+                              <div className="w-full h-px bg-red-500 rotate-45 transform absolute" />
                             </div>
                           )}
                         </div>
