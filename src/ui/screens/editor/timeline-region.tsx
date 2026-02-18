@@ -263,6 +263,7 @@ export function TimelineRegion<T extends BaseRegion>({
       style={{
         left: `${left}%`,
         width: `${Math.max(width, 0.5)}%`,
+        zIndex: variant === 'cut' ? 10 : 5,
       }}
       onMouseDown={handleMouseDown}
       onClick={(e) => e.stopPropagation()}
