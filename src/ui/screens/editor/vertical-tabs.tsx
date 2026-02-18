@@ -1,4 +1,4 @@
-import { Settings, ZoomIn } from 'lucide-react';
+import { Settings, Sparkles, ZoomIn } from 'lucide-react';
 import { useMemo } from 'react';
 
 import { useUIStore } from '@/store/ui-store';
@@ -39,6 +39,7 @@ export function VerticalTabs() {
   }[] = useMemo(
     () => [
       { id: 'general', label: 'General', Icon: Settings },
+      { id: 'pattern', label: 'Pattern', Icon: Sparkles },
       { id: 'zoom', label: 'Zoom', Icon: ZoomIn },
     ],
     [],

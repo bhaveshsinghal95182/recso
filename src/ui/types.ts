@@ -38,7 +38,7 @@ export interface UseScreenRecorderOptions {
   audio?: boolean;
 }
 // --- UI Types ---
-export type PropertiesTab = 'general' | 'zoom' | 'export';
+export type PropertiesTab = 'general' | 'zoom' | 'pattern' | 'export';
 
 // --- Types mirrored from Backend ---
 
