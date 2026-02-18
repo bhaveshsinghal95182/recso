@@ -17,7 +17,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier . --write",
-    "transpile:electron": "node scripts/compile-patterns.js && tsc -p src/electron/tsconfig.json",
+    "transpile:electron": "tsc -p src/electron/tsconfig.json",
     "bundle:remotion": "node scripts/bundle-remotion.js",
     "bundle:chrome": "node scripts/download-chrome.js",
     "dist:mac": "pnpm run transpile:electron && pnpm run bundle:remotion && pnpm run bundle:chrome && pnpm run build && electron-builder --mac --arm64",

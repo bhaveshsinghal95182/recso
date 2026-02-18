@@ -9,7 +9,7 @@
  * so this interface is compatible with either source.
  */
 
-import type { BackgroundPatternConfig } from './patterns';
+import type { BackgroundPatternConfig } from '../shared/patterns';
 export type { BackgroundPatternConfig };
 
 /** Layout information for positioning the video on the canvas */

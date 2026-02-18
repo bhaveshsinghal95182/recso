@@ -13,7 +13,7 @@ import { randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
-import { type BackgroundPatternConfig, patternPresets } from '../remotion/patterns.js';
+import { type BackgroundPatternConfig, patternPresets } from '../../shared/patterns.js';
 import type { CutRegion } from '../types/cut.types.js';
 import type {
   CursorConfig,

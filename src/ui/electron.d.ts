@@ -1,4 +1,4 @@
-import type { BackgroundPatternConfig } from '../remotion/patterns';
+import type { BackgroundPatternConfig } from '../shared/patterns';
 import type {
   CursorConfig,
   CutRegion,

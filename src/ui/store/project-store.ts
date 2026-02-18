@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-import type { BackgroundPatternConfig } from '../../remotion/patterns';
+import type { BackgroundPatternConfig } from '../../shared/patterns';
 import { debounce } from '../lib/utils';
 import type { CursorConfig, Project, RecordedMouseEvent, ZoomConfig } from '../types';
 import { usePlaybackStore } from './playback-store';

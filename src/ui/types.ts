@@ -174,7 +174,7 @@ export interface ZoomRegion {
   focalKeyframes?: FocalKeyframe[];
 }
 
-import type { BackgroundPatternConfig } from '../remotion/patterns';
+import type { BackgroundPatternConfig } from '../shared/patterns';
 
 export interface Project {
   id: string;

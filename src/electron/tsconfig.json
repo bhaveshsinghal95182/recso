@@ -3,9 +3,9 @@
     "strict": true,
     "target": "esnext",
     "module": "nodenext",
-    "rootDir": ".",
+    "rootDir": "..",
     "outDir": "../../dist-electron",
     "skipLibCheck": true
   },
-  "include": ["./**/*"]
+  "include": ["./**/*", "../shared/**/*"]
 }

@@ -12,7 +12,7 @@ import { useProjectStore } from '@/store/project-store';
 import {
   type BackgroundPatternConfig,
   patternPresets as patterns,
-} from '../../../../remotion/patterns';
+} from '../../../../shared/patterns';
 
 const PASTEL_COLORS = [
   '#FFADAD',
@@ -51,6 +51,7 @@ export function GeneralPanel() {
       updateBackgroundColor('#000000');
     } else {
       updateBackgroundColor('transparent');
+      updateBackgroundPattern(null); // Clear the pattern when background is disabled
     }
   };
 
