@@ -222,7 +222,8 @@ export function MinimalPreview() {
           onUpdate={(focalX, focalY) => {
             const zoom = zoomRegions.find((z) => z.id === selectedZoomId);
             if (zoom) {
-              updateZoom({ ...zoom, focalX, focalY });
+              // Explicitly clear smart-pan keyframes on manual edit
+              updateZoom({ ...zoom, focalX, focalY, focalKeyframes: undefined });
             }
           }}
         />
