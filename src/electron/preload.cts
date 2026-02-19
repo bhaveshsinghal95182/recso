@@ -152,14 +152,6 @@ electron.contextBridge.exposeInMainWorld('electron', {
     updateProjectDuration: (durationMs: number) =>
       electron.ipcRenderer.invoke('editor:update-project-duration', durationMs),
 
-    /** Update background color */
-    updateBackgroundColor: (color: string) =>
-      electron.ipcRenderer.invoke('editor:update-background-color', color),
-
-    /** Update background pattern */
-    updateBackgroundPattern: (pattern: string) =>
-      electron.ipcRenderer.invoke('editor:update-background-pattern', pattern),
-
     projectExists: (recordingDir: string): Promise<boolean> =>
       electron.ipcRenderer.invoke('editor:project-exists', recordingDir),
 
@@ -242,6 +234,19 @@ electron.contextBridge.exposeInMainWorld('electron', {
         button?: 'left' | 'right' | 'middle';
       }[]
     > => electron.ipcRenderer.invoke('editor:get-mouse-events'),
+  },
+
+  // Background configuration
+  background: {
+    /** Update background color for the active project */
+    updateColor: (color: string) => electron.ipcRenderer.invoke('background:update-color', color),
+
+    /** Update background pattern for the active project */
+    updatePattern: (pattern: Record<string, unknown> | null) =>
+      electron.ipcRenderer.invoke('background:update-pattern', pattern),
+
+    /** Get current background configuration */
+    getConfig: () => electron.ipcRenderer.invoke('background:get-config'),
   },
 
   // Exporter

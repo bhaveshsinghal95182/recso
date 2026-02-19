@@ -179,12 +179,6 @@ interface ElectronAPI {
     /** Update project duration */
     updateProjectDuration: (durationMs: number) => Promise<boolean>;
 
-    /** Update background color */
-    updateBackgroundColor: (color: string) => Promise<boolean>;
-
-    /** Update background pattern */
-    updateBackgroundPattern: (pattern: BackgroundPatternConfig | null) => Promise<boolean>;
-
     /** Check if a project exists for recording directory */
     projectExists: (recordingDir: string) => Promise<boolean>;
 
@@ -226,6 +220,22 @@ interface ElectronAPI {
 
     /** Get mouse events for the active project's recording */
     getMouseEvents: () => Promise<RecordedMouseEvent[]>;
+  };
+
+  background: {
+    /** Update background color for the active project */
+    updateColor: (color: string) => Promise<{ success: boolean; color: string }>;
+
+    /** Update background pattern for the active project */
+    updatePattern: (
+      pattern: BackgroundPatternConfig | null,
+    ) => Promise<{ success: boolean; pattern: BackgroundPatternConfig | null }>;
+
+    /** Get current background configuration */
+    getConfig: () => Promise<{
+      backgroundColor: string;
+      backgroundPattern: BackgroundPatternConfig | null;
+    }>;
   };
 
   exporter: {

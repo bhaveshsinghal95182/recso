@@ -10,7 +10,6 @@
 
 import { ipcMain } from 'electron';
 
-import type { BackgroundPatternConfig } from '../../shared/patterns.js';
 import * as editorService from '../services/editor.service.js';
 import { mouseTrackerService } from '../services/mouse-tracker.service.js';
 import * as projectStorage from '../services/project-storage.service.js';
@@ -74,19 +73,6 @@ export function registerEditorHandlers(): void {
   ipcMain.handle('editor:update-project-duration', async (_event, durationMs: number) => {
     return editorService.updateProjectDuration(durationMs);
   });
-
-  // Update background color
-  ipcMain.handle('editor:update-background-color', async (_event, color: string) => {
-    return editorService.updateBackgroundColor(color);
-  });
-
-  // Update background pattern
-  ipcMain.handle(
-    'editor:update-background-pattern',
-    async (_event, pattern: BackgroundPatternConfig | null) => {
-      return editorService.updateBackgroundPattern(pattern);
-    },
-  );
 
   // Check if a project exists for recording
   ipcMain.handle('editor:project-exists', async (_event, recordingDir: string) => {

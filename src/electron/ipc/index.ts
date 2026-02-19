@@ -1,5 +1,6 @@
 import { type BrowserWindow } from 'electron';
 
+import { registerBackgroundHandlers } from './background.ipc.js';
 import { registerCompositorHandlers } from './compositor.ipc.js';
 import { registerDebugHandlers } from './debug.ipc.js';
 import { registerEditorHandlers } from './editor.ipc.js';
@@ -13,6 +14,7 @@ export function registerAllIpcHandlers() {
   registerCompositorHandlers();
   registerDebugHandlers();
   registerEditorHandlers();
+  registerBackgroundHandlers();
   registerExporterHandlers();
 }
 

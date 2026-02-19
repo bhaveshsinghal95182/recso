@@ -26,14 +26,6 @@ const CopyIcon = forwardRef<AnimatedIconHandle, AnimatedIconProps>(
       };
     });
 
-    const handleHoverStart = () => {
-      start();
-    };
-
-    const handleHoverEnd = () => {
-      stop();
-    };
-
     return (
       <motion.div
         ref={scope}

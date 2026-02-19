@@ -7,7 +7,7 @@
 /**
  * Cursor style options for rendering
  */
-import type { BackgroundPatternConfig } from '../../shared/patterns.js';
+import type { BackgroundPatternConfig } from './background.types.js';
 import type { CutRegion } from './cut.types.js';
 import type { SpritesheetMeta } from './spritesheet.types.js';
 import type { ZoomRegion } from './zoom.types.js';

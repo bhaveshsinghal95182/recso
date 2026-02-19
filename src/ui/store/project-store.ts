@@ -29,7 +29,7 @@ interface ProjectState {
 // Debounced IPC call for background color updates
 const debouncedUpdateBackgroundColor = debounce(async (color: string) => {
   try {
-    await window.electron.editor.updateBackgroundColor(color);
+    await window.electron.background.updateColor(color);
   } catch (err) {
     console.error('[ProjectStore] updateBackgroundColor error:', err);
   }
@@ -164,7 +164,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         : null,
     }));
 
-    window.electron.editor.updateBackgroundPattern(pattern).catch((err) => {
+    window.electron.background.updatePattern(pattern).catch((err) => {
       console.error('[ProjectStore] updateBackgroundPattern error:', err);
     });
   },
