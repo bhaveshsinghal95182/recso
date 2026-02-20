@@ -15,7 +15,7 @@
 import { app } from 'electron';
 
 import { bundle } from '@remotion/bundler';
-import { renderMedia, selectComposition } from '@remotion/renderer';
+import { renderMedia } from '@remotion/renderer';
 import { randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -49,23 +49,80 @@ let isCancelled = false;
  * @param exportQuality - Quality preset from export config
  * @returns Object with CRF and JPEG quality values
  */
-function getIntermediateQuality(exportQuality: string): { crf: number; jpegQuality: number } {
+function getIntermediateQuality(exportQuality: string): {
+  crf: number;
+  jpegQuality: number;
+  preset: string;
+  tune: string;
+  keyframeInterval: number;
+  bFrames: number;
+  x264Params: string;
+} {
+  // Base x264 params shared across all quality levels.
+  // These are tuned for screen-recording content (flat areas, sharp text edges).
+  //
+  // ref        – reference frames for motion compensation (higher = better quality, slower)
+  // me         – motion estimation algorithm (hex = good speed/quality tradeoff)
+  // subme      – sub-pixel motion estimation quality (higher = better, slower)
+  // trellis    – trellis quantization (1 = final MB only, good quality boost)
+  const BASE_X264 = 'me=hex:trellis=1';
+
   switch (exportQuality) {
     case 'low':
-      // Low: Faster encoding, acceptable quality loss
-      return { crf: 20, jpegQuality: 90 };
+      // Low: Prioritize encoding speed, acceptable quality loss
+      return {
+        crf: 20,
+        jpegQuality: 90,
+        preset: 'fast',
+        tune: 'animation', // Good for screen content (flat areas, sharp edges)
+        keyframeInterval: 60,
+        bFrames: 2,
+        x264Params: `ref=2:subme=4:${BASE_X264}`,
+      };
     case 'medium':
-      // Medium: Balanced quality and speed
-      return { crf: 18, jpegQuality: 93 };
+      // Medium: Balanced quality and encoding speed
+      return {
+        crf: 18,
+        jpegQuality: 93,
+        preset: 'medium',
+        tune: 'animation',
+        keyframeInterval: 48,
+        bFrames: 2,
+        x264Params: `ref=3:subme=6:${BASE_X264}`,
+      };
     case 'high':
-      // High: High quality intermediate, minimal loss
-      return { crf: 15, jpegQuality: 96 };
+      // High: High quality intermediate, minimal generation loss
+      return {
+        crf: 15,
+        jpegQuality: 96,
+        preset: 'medium',
+        tune: 'film', // Film for maximum fidelity at high quality
+        keyframeInterval: 30,
+        bFrames: 3,
+        x264Params: `ref=4:subme=7:${BASE_X264}`,
+      };
     case 'lossless':
       // Lossless: Near-lossless intermediate to preserve maximum quality
-      return { crf: 10, jpegQuality: 98 };
+      return {
+        crf: 10,
+        jpegQuality: 98,
+        preset: 'medium',
+        tune: 'film',
+        keyframeInterval: 15,
+        bFrames: 3,
+        x264Params: `ref=5:subme=8:trellis=2:me=umh`, // umh = best motion estimation for quality
+      };
     default:
       // Fallback to medium
-      return { crf: 18, jpegQuality: 93 };
+      return {
+        crf: 18,
+        jpegQuality: 93,
+        preset: 'medium',
+        tune: 'animation',
+        keyframeInterval: 48,
+        bFrames: 2,
+        x264Params: `ref=3:subme=6:${BASE_X264}`,
+      };
   }
 }
 
@@ -91,14 +148,24 @@ function linkVideoToBundle(sourcePath: string, bundleDir: string, targetName: st
   }
 
   try {
-    // Try hard link (fastest, same partition)
+    // Try hard link (fastest, same partition, instant)
     fs.linkSync(sourcePath, targetPath);
-    console.log('[RemotionRenderer] Linked video to bundle:', targetPath);
+    console.log('[RemotionRenderer] Hard-linked video to bundle:', targetPath);
   } catch (err: any) {
     if (err.code === 'EXDEV') {
-      // Cross-device link not allowed, fallback to copy
-      console.log('[RemotionRenderer] Cross-device link failed, copying video to bundle...');
-      fs.copyFileSync(sourcePath, targetPath);
+      // Cross-device: hard link not possible, try symlink (instant, works cross-device)
+      try {
+        fs.symlinkSync(sourcePath, targetPath);
+        console.log('[RemotionRenderer] Symlinked video to bundle (cross-device):', targetPath);
+      } catch {
+        // Symlink may fail on Windows without admin/developer mode
+        // Last resort: full file copy (slow for large videos)
+        console.log(
+          '[RemotionRenderer] Symlink failed, falling back to copy (this may be slow for large files)...',
+        );
+        fs.copyFileSync(sourcePath, targetPath);
+        console.log('[RemotionRenderer] Copied video to bundle:', targetPath);
+      }
     } else {
       throw err;
     }
@@ -301,17 +368,17 @@ export async function renderWithRemotion(
     }
 
     // ========================================================
-    // Step 2: Ensure Chrome browser is available
+    // Step 2 + 3: Resolve Chrome & probe video IN PARALLEL
     // ========================================================
-    console.log('[RemotionRenderer] Ensuring Chrome browser is available...');
-    const browserExecutable = await ensureChromeBrowser();
+    // These are independent async operations that each take 200ms+.
+    // Running them concurrently saves ~0.5-1s on every export.
+    console.log('[RemotionRenderer] Resolving Chrome browser + probing video (parallel)...');
+    const [browserExecutable, metadata] = await Promise.all([
+      ensureChromeBrowser(),
+      ffmpegService.probeVideo(project.rawVideoPath),
+    ]);
     console.log('[RemotionRenderer] Browser executable:', browserExecutable);
 
-    // ========================================================
-    // Step 3: Probe source video for duration
-    // ========================================================
-    console.log('[RemotionRenderer] Probing source video...');
-    const metadata = await ffmpegService.probeVideo(project.rawVideoPath);
     const videoDuration = metadata.duration;
 
     if (videoDuration === 0) {
@@ -431,20 +498,34 @@ export async function renderWithRemotion(
     console.log('[RemotionRenderer] Background pattern:', project.backgroundPattern?.id || 'none');
 
     // ========================================================
-    // Step 8: Select composition metadata
+    // Step 8: Build composition metadata directly (skip selectComposition)
     // ========================================================
-    console.log('[RemotionRenderer] Selecting composition...');
-    const composition = await selectComposition({
-      serveUrl: bundleCache!,
-      id: 'main',
-      inputProps,
-      binariesDirectory,
-    });
+    // OPTIMIZATION: selectComposition() launches a full Puppeteer browser instance,
+    // loads the bundle, and evaluates React just to read composition metadata.
+    // This adds 2-5 seconds of cold-start delay on EVERY export.
+    //
+    // Since we already know all the metadata (dimensions, fps, duration are all
+    // calculated above, and composition id is always 'main'), we construct the
+    // composition object directly — bypassing the browser round-trip entirely.
+    const composition = {
+      id: 'main' as const,
+      durationInFrames,
+      fps: renderFps,
+      width: canvasDimensions.width,
+      height: canvasDimensions.height,
+      defaultProps: inputProps as Record<string, unknown>,
+      props: inputProps as Record<string, unknown>,
+      defaultCodec: 'h264' as const,
+      defaultOutName: null,
+      defaultVideoImageFormat: null,
+      defaultPixelFormat: null,
+      defaultProResProfile: null,
+    };
 
-    console.log('[RemotionRenderer] Composition selected:', composition.id);
+    console.log('[RemotionRenderer] Composition built directly (skipped selectComposition)');
 
     // ========================================================
-    // Step 8: Render composition to video file
+    // Step 9: Render composition to video file
     // ========================================================
     console.log('[RemotionRenderer] Starting render...');
     const glRendererLabel = config.glRenderer || 'null';
@@ -463,42 +544,72 @@ export async function renderWithRemotion(
     console.log(
       '[RemotionRenderer] Intermediate quality:',
       config.quality,
-      `(CRF: ${intermediateQuality.crf}, JPEG: ${intermediateQuality.jpegQuality})`,
+      `(CRF: ${intermediateQuality.crf}, JPEG: ${intermediateQuality.jpegQuality}, ` +
+        `preset: ${intermediateQuality.preset}, tune: ${intermediateQuality.tune})`,
+    );
+    console.log(
+      '[RemotionRenderer] x264 params:',
+      intermediateQuality.x264Params,
+      `(g=${intermediateQuality.keyframeInterval}, bf=${intermediateQuality.bFrames})`,
     );
 
     const renderStart = Date.now();
 
+    // Calculate thread count for x264 encoding (match concurrency)
+    const cpuThreads = Math.max(1, os.cpus().length - 1);
+
     await renderMedia({
-      composition: {
-        ...composition,
-        durationInFrames,
-        fps: renderFps,
-        width: canvasDimensions.width,
-        height: canvasDimensions.height,
-      },
+      composition,
       serveUrl: bundleCache,
       codec: 'h264',
       // === Performance: Adaptive intermediate encode quality ===
       // Quality scales with export preset to balance speed and avoid generation loss
       crf: intermediateQuality.crf,
-      // encodingMaxRate and encodingBufferSize removed to uncap bitrate
       imageFormat: 'jpeg', // Faster than PNG, no transparency needed
       jpegQuality: intermediateQuality.jpegQuality,
       // Use all available cores for maximum performance
       // Reserve 1 core for system/UI responsiveness on lower-end machines
-      concurrency: Math.max(1, os.cpus().length - 1),
+      concurrency: cpuThreads,
       outputLocation: tempOutputPath,
       inputProps,
       browserExecutable,
       // Configure Puppeteer to allow local file access
       // This is necessary for Chromium to load file:// URLs in the browser context
       puppeteerInstance: undefined,
-      binariesDirectory, // <--- Pass the binaries directory here!
+      binariesDirectory,
+      // Better logging for monitoring render progress and debugging issues
+      logLevel: 'info',
+      // Safety timeout: 30 minutes for long videos, prevents infinite hangs
+      timeoutInMilliseconds: 1_800_000,
+      // === x264 encoding optimization via FFmpeg flags ===
+      // Provides fine-grained control over the intermediate encode:
+      //   -preset   : Speed/quality tradeoff (adaptive per quality level)
+      //   -tune     : Content type hint (animation for screen recordings, film for high quality)
+      //   -g        : Keyframe interval (shorter = better seeking, slightly larger file)
+      //   -bf       : B-frames for better compression efficiency
+      //   -threads  : Match encoding threads to available CPU cores
+      //   -x264-params : Advanced x264 settings (ref frames, motion estimation, trellis)
+      ffmpegOverride: ({ args }) => {
+        return [
+          ...args,
+          '-preset',
+          intermediateQuality.preset,
+          '-tune',
+          intermediateQuality.tune,
+          '-threads',
+          String(cpuThreads),
+          '-x264-params',
+          intermediateQuality.x264Params,
+          '-g',
+          String(intermediateQuality.keyframeInterval),
+          '-bf',
+          String(intermediateQuality.bFrames),
+        ];
+      },
       // Configure GL renderer backend for GPU usage
       chromiumOptions: {
         gl: config.glRenderer ?? null, // Use configured GL renderer or default (null)
       },
-      // Note: We use renderMedia's built-in Puppeteer which should handle file access
       onProgress: ({ renderedFrames, encodedFrames, encodedDoneIn }) => {
         // Check if render was cancelled
         if (isCancelled) {
@@ -661,4 +772,31 @@ export function isCancelRequested(): boolean {
  */
 export function resetCancelFlag(): void {
   isCancelled = false;
+}
+
+/**
+ * Pre-warm expensive resources at app startup.
+ *
+ * Call this early (e.g. during app.on('ready')) so that the Chrome binary
+ * path is resolved and cached before the user ever clicks Export.
+ * In dev mode this may trigger a one-time Chrome download (~200 MB);
+ * in production it simply resolves the bundled path (<5 ms).
+ *
+ * This is fire-and-forget — errors are logged but never thrown so
+ * they don't block app startup.
+ *
+ * @example
+ * // In main.ts, after app is ready
+ * import { preWarm } from './services/remotion-renderer.service.js';
+ * preWarm();
+ */
+export function preWarm(): void {
+  console.log('[RemotionRenderer] Pre-warming: resolving Chrome browser path...');
+  ensureChromeBrowser()
+    .then((browserPath) => {
+      console.log('[RemotionRenderer] Pre-warm complete. Chrome ready at:', browserPath);
+    })
+    .catch((err) => {
+      console.warn('[RemotionRenderer] Pre-warm failed (will retry at export time):', err);
+    });
 }
