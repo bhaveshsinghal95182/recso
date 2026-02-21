@@ -69,10 +69,10 @@ function getIntermediateQuality(exportQuality: string): {
 
   switch (exportQuality) {
     case 'low':
-      // Low: Prioritize encoding speed, acceptable quality loss
+      // Low: Prioritize encoding speed, but maintain good intermediate quality
       return {
-        crf: 20,
-        jpegQuality: 90,
+        crf: 16, // Was 20 - lowered to preserve quality for Stage 2
+        jpegQuality: 92, // Was 90 - increased to reduce JPEG artifacts
         preset: 'fast',
         tune: 'animation', // Good for screen content (flat areas, sharp edges)
         keyframeInterval: 60,
@@ -80,10 +80,10 @@ function getIntermediateQuality(exportQuality: string): {
         x264Params: `ref=2:subme=4:${BASE_X264}`,
       };
     case 'medium':
-      // Medium: Balanced quality and encoding speed
+      // Medium: Balanced quality and encoding speed, high intermediate quality
       return {
-        crf: 18,
-        jpegQuality: 93,
+        crf: 14, // Was 18 - lowered to minimize generation loss
+        jpegQuality: 95, // Was 93 - increased for better frame quality
         preset: 'medium',
         tune: 'animation',
         keyframeInterval: 48,
@@ -91,32 +91,32 @@ function getIntermediateQuality(exportQuality: string): {
         x264Params: `ref=3:subme=6:${BASE_X264}`,
       };
     case 'high':
-      // High: High quality intermediate, minimal generation loss
+      // High: Very high quality intermediate, minimal generation loss
       return {
-        crf: 15,
-        jpegQuality: 96,
-        preset: 'medium',
+        crf: 10, // Was 15 - lowered significantly for near-lossless intermediate
+        jpegQuality: 98, // Was 96 - increased to maximum practical quality
+        preset: 'slow', // Was 'medium' - slower but better quality
         tune: 'film', // Film for maximum fidelity at high quality
         keyframeInterval: 30,
         bFrames: 3,
-        x264Params: `ref=4:subme=7:${BASE_X264}`,
+        x264Params: `ref=5:subme=8:${BASE_X264}:me=umh`, // Added umh for better motion estimation
       };
     case 'lossless':
-      // Lossless: Near-lossless intermediate to preserve maximum quality
+      // Lossless: Visually lossless (CRF 10 for H264 compatibility)
       return {
-        crf: 10,
-        jpegQuality: 98,
-        preset: 'medium',
+        crf: 10, // Visually lossless, avoids H264 CRF=0 platform issues
+        jpegQuality: 100, // Maximum quality
+        preset: 'slow', // Slower but highest quality
         tune: 'film',
         keyframeInterval: 15,
         bFrames: 3,
-        x264Params: `ref=5:subme=8:trellis=2:me=umh`, // umh = best motion estimation for quality
+        x264Params: `ref=5:subme=10:trellis=2:me=umh`, // Maximum quality parameters
       };
     default:
       // Fallback to medium
       return {
-        crf: 18,
-        jpegQuality: 93,
+        crf: 14,
+        jpegQuality: 95,
         preset: 'medium',
         tune: 'animation',
         keyframeInterval: 48,

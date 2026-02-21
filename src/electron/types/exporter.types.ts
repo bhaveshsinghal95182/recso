@@ -48,10 +48,10 @@ export const RESOLUTION_MAP: Record<
 
 /** Quality to CRF mapping (lower = better quality, bigger file) */
 export const QUALITY_CRF_MAP: Record<ExportQuality, number> = {
-  low: 28,
-  medium: 23,
-  high: 18,
-  lossless: 0,
+  low: 20, // Was 28 - reduced for better quality
+  medium: 16, // Was 23 - reduced for better quality
+  high: 12, // Was 18 - reduced for much better quality
+  lossless: 10, // Visually lossless (CRF 0 causes H264 platform issues)
 };
 
 /** Export configuration from UI */

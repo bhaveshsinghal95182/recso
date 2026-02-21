@@ -564,13 +564,21 @@ async function getOutputSettingsArgs(config: ExportConfig): Promise<string[]> {
     // Hardware encoder settings
     if (encoder === 'h264_nvenc') {
       // NVIDIA NVENC - GPU accelerated
+      // Use higher quality preset and two-pass mode for better quality
+      const preset = config.quality === 'lossless' ? 'p7' : config.quality === 'high' ? 'p6' : 'p5';
       args.push(
         '-c:v',
         'h264_nvenc',
         '-preset',
-        'p4', // p1 (fastest) to p7 (slowest), p4 = balanced
+        preset, // p5-p7 for better quality
         '-cq',
         crf.toString(),
+        '-b:v',
+        '0', // Let CQ mode handle bitrate
+        '-profile:v',
+        'high',
+        '-rc',
+        'vbr', // Variable bitrate for better quality
         '-pix_fmt',
         'yuv420p',
         '-movflags',
@@ -578,17 +586,21 @@ async function getOutputSettingsArgs(config: ExportConfig): Promise<string[]> {
       );
     } else if (encoder === 'h264_amf') {
       // AMD AMF - GPU accelerated
+      const quality =
+        config.quality === 'lossless' || config.quality === 'high' ? 'quality' : 'balanced';
       args.push(
         '-c:v',
         'h264_amf',
         '-quality',
-        'balanced', // speed, balanced, quality
+        quality, // Use 'quality' mode for high/lossless
         '-rc',
         'cqp',
         '-qp_i',
         crf.toString(),
         '-qp_p',
         crf.toString(),
+        '-profile:v',
+        'high',
         '-pix_fmt',
         'yuv420p',
         '-movflags',
@@ -596,27 +608,53 @@ async function getOutputSettingsArgs(config: ExportConfig): Promise<string[]> {
       );
     } else if (encoder === 'h264_qsv') {
       // Intel Quick Sync - GPU accelerated
+      const preset =
+        config.quality === 'lossless' || config.quality === 'high' ? 'veryslow' : 'medium';
       args.push(
         '-c:v',
         'h264_qsv',
         '-preset',
-        'medium',
+        preset,
         '-global_quality',
         crf.toString(),
+        '-profile:v',
+        'high',
         '-pix_fmt',
         'yuv420p',
         '-movflags',
         '+faststart',
       );
     } else {
-      // CPU fallback - libx264
+      // CPU fallback - libx264 with advanced parameters for maximum quality
+      const preset =
+        config.quality === 'lossless' ? 'veryslow' : config.quality === 'high' ? 'slow' : 'medium';
+      const tune = 'film'; // Better for screen recordings than 'animation' at final stage
+
+      // Advanced x264 parameters for screen recording quality
+      // ref: More reference frames = better quality (4-5 for high quality)
+      // me: Motion estimation (umh/tesa for best quality)
+      // subme: Subpixel motion estimation quality (8-10 for best)
+      // trellis: Rate-distortion optimization (2 for all decisions)
+      // aq-mode: Adaptive quantization (1 = variance AQ)
+      // aq-strength: AQ strength (0.8-1.2, higher = more aggressive)
+      const x264params =
+        config.quality === 'lossless' || config.quality === 'high'
+          ? 'ref=5:me=umh:subme=10:trellis=2:aq-mode=1:aq-strength=1.0'
+          : 'ref=4:me=hex:subme=7:trellis=2:aq-mode=1:aq-strength=0.8';
+
       args.push(
         '-c:v',
         'libx264',
         '-preset',
-        'medium',
+        preset,
+        '-tune',
+        tune,
         '-crf',
         crf.toString(),
+        '-profile:v',
+        'high',
+        '-x264-params',
+        x264params,
         '-pix_fmt',
         'yuv420p',
         '-movflags',
@@ -624,13 +662,27 @@ async function getOutputSettingsArgs(config: ExportConfig): Promise<string[]> {
       );
     }
 
-    // AAC audio
-    args.push('-c:a', 'aac', '-b:a', '128k');
+    // AAC audio - increase bitrate for better quality
+    args.push('-c:a', 'aac', '-b:a', '192k');
   } else {
     // VP9 video (CPU only, no hardware encoders widely available)
-    args.push('-c:v', 'libvpx-vp9', '-crf', crf.toString(), '-b:v', '0', '-pix_fmt', 'yuv420p');
-    // Opus audio
-    args.push('-c:a', 'libopus', '-b:a', '128k');
+    const quality = config.quality === 'lossless' ? 'good' : 'good'; // 'best' is too slow
+    args.push(
+      '-c:v',
+      'libvpx-vp9',
+      '-crf',
+      crf.toString(),
+      '-b:v',
+      '0',
+      '-deadline',
+      quality,
+      '-cpu-used',
+      '1', // 0-5, lower = better quality but slower
+      '-pix_fmt',
+      'yuv420p',
+    );
+    // Opus audio - increase bitrate
+    args.push('-c:a', 'libopus', '-b:a', '192k');
   }
 
   return args;
