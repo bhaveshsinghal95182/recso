@@ -38,8 +38,8 @@ export function SourceSelector({
     <div className="flex flex-col h-full bg-background/50 backdrop-blur-sm relative overflow-hidden">
       {/* Dynamic Background Gradients */}
       <div className="absolute top-0 left-0 w-full h-full pointer-events-none opacity-20">
-        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-purple-500/30 rounded-full blur-[100px]" />
-        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-500/30 rounded-full blur-[100px]" />
+        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-brand-light/30 rounded-full blur-[100px]" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-brand-dark/30 rounded-full blur-[100px]" />
       </div>
 
       <div className="flex items-center justify-between p-4 z-10 border-b border-border/40 bg-background/20 backdrop-blur-md">

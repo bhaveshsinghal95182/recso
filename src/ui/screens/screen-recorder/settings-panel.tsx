@@ -114,9 +114,6 @@ export function SettingsPanel({
               <QualitySelector value={videoBitrate} onChange={onVideoBitrateChange} />
               <FormatSelector value={format} onChange={onFormatChange} />
             </div>
-            <p className="text-xs text-muted-foreground">
-              Note: Browser recording uses WebM format (VP8/VP9 codec).
-            </p>
           </div>
         </div>
       </CardContent>

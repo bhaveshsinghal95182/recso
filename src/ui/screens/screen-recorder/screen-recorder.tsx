@@ -141,38 +141,41 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
             </div>
           ) : (
             /* View 2: Ready / Settings */
-            <div className="w-full max-w-4xl flex flex-col md:flex-row gap-8 items-start justify-center h-full max-h-200">
+            <div className="w-full max-w-5xl flex flex-col md:flex-row gap-8 items-center justify-center h-full">
               {/* Left: Monitor Info */}
-              <div className="flex-1 w-full h-full flex flex-col gap-4">
-                <Card className="flex-1 overflow-hidden border-2 border-primary/20 relative group bg-card/50">
-                  <div className="w-full h-full flex flex-col items-center justify-center gap-4 p-8 relative">
+              <div className="flex-1 w-full flex flex-col items-center justify-center">
+                <Card className="w-full max-w-xl aspect-video overflow-hidden border-2 border-brand/20 relative group bg-card/50 shadow-[0_0_30px_rgba(16,185,129,0.05)]">
+                  <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_20%,var(--color-brand-dark)_150%)] opacity-20 pointer-events-none" />
+                  <div className="w-full h-full flex flex-col items-center justify-center p-3 relative z-10">
                     {selectedSource?.thumbnailDataUrl ? (
                       <div className="relative w-full h-full flex items-center justify-center">
                         <img
                           src={selectedSource.thumbnailDataUrl}
                           alt={selectedSource.name}
-                          className="max-w-full max-h-full object-contain rounded-lg shadow-lg"
+                          className="max-w-full max-h-full object-contain rounded-md shadow-2xl ring-1 ring-white/10"
                         />
                       </div>
                     ) : (
-                      <div className="p-6 rounded-2xl bg-primary/10">
+                      <div className="p-6 rounded-2xl bg-brand/10">
                         {selectedSource?.isScreen ? (
-                          <Monitor size={64} className="text-primary" />
+                          <Monitor size={64} className="text-brand" />
                         ) : (
-                          <AppWindow size={64} className="text-primary" />
+                          <AppWindow size={64} className="text-brand" />
                         )}
                       </div>
                     )}
                     {!selectedSource?.thumbnailDataUrl && (
-                      <div className="text-center space-y-2">
-                        <h3 className="text-xl font-semibold">{selectedSource?.name}</h3>
+                      <div className="text-center space-y-2 mt-4">
+                        <h3 className="text-xl font-semibold text-foreground">
+                          {selectedSource?.name}
+                        </h3>
                         {selectedSource?.width && selectedSource?.height && (
                           <p className="text-muted-foreground">
                             {selectedSource.width} × {selectedSource.height}
                           </p>
                         )}
                         {selectedSource?.isPrimary && (
-                          <span className="inline-block px-3 py-1 text-xs font-semibold uppercase bg-primary/20 text-primary rounded-full">
+                          <span className="inline-block px-3 py-1 text-xs font-semibold uppercase bg-brand/20 text-brand-light rounded-full mt-2">
                             Primary Display
                           </span>
                         )}
@@ -183,7 +186,7 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
               </div>
 
               {/* Right: Controls & Settings */}
-              <div className="w-full md:w-80 flex flex-col gap-6 h-full justify-center">
+              <div className="w-full md:w-80 flex flex-col gap-6 shrink-0">
                 <Card className="p-4 bg-card/80 backdrop-blur-sm">
                   <SettingsPanel
                     outputDir={outputDir}

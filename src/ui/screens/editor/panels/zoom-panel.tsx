@@ -236,20 +236,20 @@ export function ZoomPanel() {
   }, [project, replaceZoomRegions]);
 
   const smartPanButton = (
-    <Card className="p-4 shadow-sm border-2 gap-2">
+    <Card className="p-4 shadow-sm border-2 border-brand/20 bg-gradient-to-br from-brand-dark/10 to-transparent gap-2">
       <div className="flex items-center gap-3">
-        <div className="bg-blue-500 p-2 rounded-lg flex items-center justify-center shrink-0">
+        <div className="bg-brand/20 text-brand-light p-2 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_10px_rgba(16,185,129,0.2)]">
           <Ai size="24" />
         </div>
-        <h3 className="font-semibold text-base">Smart Pan</h3>
+        <h3 className="font-semibold text-base text-brand-light">Smart Pan</h3>
       </div>
 
-      <p className="text-sm text-muted-foreground leading-relaxed">
+      <p className="text-sm text-muted-foreground leading-relaxed mt-2 mb-4">
         Automatically follows the mouse cursor or active window region within the zoomed area.
       </p>
 
       <Button
-        className="w-full font-bold tracking-wide uppercase text-xs h-10 text-blue-500"
+        className="w-full font-bold tracking-wide uppercase text-xs h-10 bg-brand/10 text-brand-light border-brand/30 hover:bg-brand/20 hover:border-brand/50 hover:text-white transition-all duration-300 shadow-[0_0_10px_rgba(16,185,129,0.1)] hover:shadow-[0_0_15px_rgba(16,185,129,0.2)]"
         onClick={handleSmartPan}
         disabled={isPanning || !project || zoomRegions.length === 0}
         variant={'outline'}

@@ -21,12 +21,19 @@
     "category": "Utility"
   },
   "win": {
-    "target": ["nsis"],
+    "target": ["nsis", "appx"],
     "icon": "public/R.png"
   },
   "nsis": {
     "oneClick": false,
     "allowToChangeInstallationDirectory": true,
     "license": "build/license.txt"
+  },
+  "appx": {
+    "displayName": "Recso",
+    "publisherDisplayName": "Descentkatil",
+    "publisher": "CN=ADBBA92C-68FC-4614-8695-A08D2C192895",
+    "identityName": "Descentkatil.Recso",
+    "applicationId": "Recso"
   }
 }

@@ -15,7 +15,7 @@ export function QualitySelector({ value, onChange }: QualitySelectorProps) {
 
   return (
     <Field.Root className="flex flex-col gap-1 w-full">
-      <Field.Label className="cursor-default text-sm leading-5 font-medium text-gray-900 dark:text-gray-100">
+      <Field.Label className="cursor-default text-sm leading-5 font-medium text-foreground">
         Video Quality
       </Field.Label>
       <Select.Root
@@ -23,7 +23,7 @@ export function QualitySelector({ value, onChange }: QualitySelectorProps) {
         onValueChange={(val) => val && onChange(val.value)}
         itemToStringValue={(item) => String(item.value)}
       >
-        <Select.Trigger className="flex min-h-10 w-full items-start justify-between gap-3 rounded-md border border-gray-200 dark:border-gray-800 pr-3 pl-3.5 py-2 text-base bg-[canvas] text-gray-900 dark:text-gray-100 select-none hover:bg-gray-100 dark:hover:bg-gray-800 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-blue-800 data-[popup-open]:bg-gray-100 dark:data-[popup-open]:bg-gray-800 transition-colors">
+        <Select.Trigger className="flex min-h-10 w-full items-start justify-between gap-3 rounded-md border border-input pr-3 pl-3.5 py-2 text-base bg-transparent dark:bg-input/30 text-foreground select-none hover:bg-muted/50 data-[popup-open]:bg-muted shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]">
           <Select.Value>
             {(item) => {
               const parts = item.label.split(' (');
@@ -32,27 +32,25 @@ export function QualitySelector({ value, onChange }: QualitySelectorProps) {
               return (
                 <span className="flex flex-col items-start gap-0.5">
                   <span className="text-base leading-6 font-medium">{name}</span>
-                  <span className="text-xs leading-4 text-gray-600 dark:text-gray-400">
-                    {detail}
-                  </span>
+                  <span className="text-xs leading-4 text-muted-foreground">{detail}</span>
                 </span>
               );
             }}
           </Select.Value>
-          <Select.Icon className="flex items-center self-center text-gray-500">
+          <Select.Icon className="flex items-center self-center text-muted-foreground">
             <ChevronUpDownIcon />
           </Select.Icon>
         </Select.Trigger>
         <Select.Portal>
           <Select.Positioner className="outline-none select-none z-50" sideOffset={8}>
-            <Select.Popup className="group min-w-(--anchor-width) origin-(--transform-origin) bg-clip-padding rounded-md bg-[canvas] text-gray-900 dark:text-gray-100 shadow-lg shadow-gray-200 dark:shadow-black/50 outline outline-1 outline-gray-200 dark:outline-gray-800 transition-[transform,scale,opacity] data-ending-style:scale-90 data-ending-style:opacity-0 data-side-none:min-w-[calc(var(--anchor-width)+1rem)] data-side-none:data-ending-style:transition-none data-starting-style:scale-90 data-starting-style:opacity-0 data-side-none:data-starting-style:scale-100 data-side-none:data-starting-style:opacity-100 data-side-none:data-starting-style:transition-none dark:bg-zinc-950">
-              <Select.ScrollUpArrow className="top-0 z-1 flex h-4 w-full cursor-default items-center justify-center rounded-md bg-[canvas] text-center text-xs before:absolute data-side-none:before:top-[-100%] before:left-0 before:h-full before:w-full before:content-['']" />
+            <Select.Popup className="group min-w-(--anchor-width) origin-(--transform-origin) bg-clip-padding rounded-md bg-popover text-popover-foreground shadow-lg outline outline-1 outline-border transition-[transform,scale,opacity] data-ending-style:scale-90 data-ending-style:opacity-0 data-side-none:min-w-[calc(var(--anchor-width)+1rem)] data-side-none:data-ending-style:transition-none data-starting-style:scale-90 data-starting-style:opacity-0 data-side-none:data-starting-style:scale-100 data-side-none:data-starting-style:opacity-100 data-side-none:data-starting-style:transition-none">
+              <Select.ScrollUpArrow className="top-0 z-1 flex h-4 w-full cursor-default items-center justify-center rounded-md bg-popover text-center text-xs before:absolute data-side-none:before:top-[-100%] before:left-0 before:h-full before:w-full before:content-['']" />
               <Select.List className="relative py-1 scroll-py-6 overflow-y-auto max-h-[var(--available-height)]">
                 {quality.map((q) => (
                   <Select.Item
                     key={q.value}
                     value={q}
-                    className="grid cursor-default grid-cols-[0.75rem_1fr] items-start gap-2 py-2.5 pr-4 pl-2.5 text-sm leading-4 outline-none select-none group-data-[side=none]:pr-12 group-data-[side=none]:text-base group-data-[side=none]:leading-5 pointer-coarse:py-2.5 pointer-coarse:text-[0.925rem] [@media(hover:hover)]:data-highlighted:relative [@media(hover:hover)]:[&[data-highlighted]]:z-0 [@media(hover:hover)]:[&[data-highlighted]]:text-gray-50 [@media(hover:hover)]:[&[data-highlighted]]:before:content-[''] [@media(hover:hover)]:[&[data-highlighted]]:before:absolute [@media(hover:hover)]:[&[data-highlighted]]:before:inset-y-0 [@media(hover:hover)]:[&[data-highlighted]]:before:inset-x-1 [@media(hover:hover)]:[&[data-highlighted]]:before:rounded-sm [@media(hover:hover)]:[&[data-highlighted]]:before:bg-gray-900 dark:[@media(hover:hover)]:[&[data-highlighted]]:before:bg-gray-100 dark:[@media(hover:hover)]:[&[data-highlighted]]:text-gray-900 [@media(hover:hover)]:[&[data-highlighted]]:before:z-[-1]"
+                    className="grid cursor-default grid-cols-[0.75rem_1fr] items-start gap-2 py-2.5 pr-4 pl-2.5 text-sm leading-4 outline-none select-none group-data-[side=none]:pr-12 group-data-[side=none]:text-base group-data-[side=none]:leading-5 pointer-coarse:py-2.5 pointer-coarse:text-[0.925rem] [@media(hover:hover)]:data-highlighted:relative [@media(hover:hover)]:[&[data-highlighted]]:z-0 [@media(hover:hover)]:[&[data-highlighted]]:text-accent-foreground [@media(hover:hover)]:[&[data-highlighted]]:before:content-[''] [@media(hover:hover)]:[&[data-highlighted]]:before:absolute [@media(hover:hover)]:[&[data-highlighted]]:before:inset-y-0 [@media(hover:hover)]:[&[data-highlighted]]:before:inset-x-1 [@media(hover:hover)]:[&[data-highlighted]]:before:rounded-sm [@media(hover:hover)]:[&[data-highlighted]]:before:bg-accent [@media(hover:hover)]:[&[data-highlighted]]:before:z-[-1]"
                   >
                     <Select.ItemIndicator className="col-start-1 flex items-center self-start relative top-[0.4em]">
                       <CheckIcon className="size-3" />
@@ -73,7 +71,7 @@ export function QualitySelector({ value, onChange }: QualitySelectorProps) {
                   </Select.Item>
                 ))}
               </Select.List>
-              <Select.ScrollDownArrow className="bottom-0 z-1 flex h-4 w-full cursor-default items-center justify-center rounded-md bg-[canvas] text-center text-xs before:absolute before:left-0 before:h-full before:w-full before:content-[''] data-side-none:before:-bottom-full" />
+              <Select.ScrollDownArrow className="bottom-0 z-1 flex h-4 w-full cursor-default items-center justify-center rounded-md bg-popover text-center text-xs before:absolute before:left-0 before:h-full before:w-full before:content-[''] data-side-none:before:-bottom-full" />
             </Select.Popup>
           </Select.Positioner>
         </Select.Portal>
