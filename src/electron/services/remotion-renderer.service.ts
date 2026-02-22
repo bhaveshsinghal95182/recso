@@ -392,7 +392,17 @@ export async function renderWithRemotion(
     // This halves the number of frames Remotion needs to render.
     const sourceFps = metadata.fps || 30;
     const renderFps = Math.min(sourceFps, config.fps); // Never render MORE frames than target
-    const durationInFrames = Math.ceil(videoDuration * renderFps);
+
+    // Calculate total cut duration and subtract from video duration
+    // so Remotion only renders uncut frames (frame-skipping optimization)
+    const cuts = project.cuts || [];
+    const totalCutDurationSec = cuts.reduce(
+      (sum, cut) => sum + (cut.endMs - cut.startMs) / 1000,
+      0,
+    );
+    const effectiveDuration = videoDuration - totalCutDurationSec;
+    const durationInFrames = Math.ceil(effectiveDuration * renderFps);
+
     console.log(
       '[RemotionRenderer] Render FPS:',
       renderFps,
@@ -402,6 +412,14 @@ export async function renderWithRemotion(
       config.fps,
       ')',
     );
+    if (cuts.length > 0) {
+      console.log(
+        `[RemotionRenderer] Cuts: ${cuts.length} regions, ${totalCutDurationSec.toFixed(2)}s removed`,
+      );
+      console.log(
+        `[RemotionRenderer] Effective duration: ${effectiveDuration.toFixed(2)}s (was ${videoDuration.toFixed(2)}s)`,
+      );
+    }
     console.log('[RemotionRenderer] Total frames:', durationInFrames);
 
     // ========================================================
@@ -480,6 +498,15 @@ export async function renderWithRemotion(
       focalKeyframes: region.focalKeyframes,
     }));
 
+    // Transform cuts for composition (simple passthrough)
+    const compositionCuts = cuts.map((cut) => ({
+      id: cut.id,
+      startMs: cut.startMs,
+      endMs: cut.endMs,
+    }));
+
+    const sourceDurationMs = videoDuration * 1000;
+
     const inputProps = {
       videoSrc: videoFileName, // Relative name for staticFile()
       backgroundColor: config.backgroundColor,
@@ -489,6 +516,8 @@ export async function renderWithRemotion(
       canvasWidth: canvasDimensions.width,
       canvasHeight: canvasDimensions.height,
       zoomRegions,
+      cuts: compositionCuts,
+      sourceDurationMs,
     };
 
     console.log('[RemotionRenderer] Input props prepared');

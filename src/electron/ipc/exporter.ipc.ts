@@ -99,4 +99,15 @@ export function registerExporterHandlers(): void {
       console.log('[ExporterIPC] Unsubscribed from progress:', webContentsId);
     }
   });
+
+  // Toggle keep-intermediate debug mode
+  ipcMain.handle('exporter:set-keep-intermediate', async (_event, keep: boolean) => {
+    exporterService.setKeepIntermediate(keep);
+    return true;
+  });
+
+  // Get keep-intermediate state
+  ipcMain.handle('exporter:get-keep-intermediate', async () => {
+    return exporterService.getKeepIntermediate();
+  });
 }

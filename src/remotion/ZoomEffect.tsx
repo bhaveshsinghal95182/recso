@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Easing, interpolate, useCurrentFrame, useVideoConfig } from 'remotion';
 
+import { compositionToSourceTime, getUncutSegments } from './cut-utils';
 import type { CompositionFocalKeyframe, RemotionInputProps } from './types';
 
 /**
@@ -102,11 +103,26 @@ export const ZoomEffect: React.FC<{ children: React.ReactNode } & RemotionInputP
   children,
   zoomRegions,
   layout,
+  cuts,
+  sourceDurationMs,
 }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
-  const currentTimeMs = (frame / fps) * 1000;
+  // Pre-compute uncut segments for time-mapping
+  const segments = useMemo(
+    () => getUncutSegments(cuts, sourceDurationMs || 0),
+    [cuts, sourceDurationMs],
+  );
+
+  // Composition time (shortened timeline, post-cuts)
+  const compositionTimeMs = (frame / fps) * 1000;
+
+  // Map back to source video time so zoom regions (defined on source timeline) work correctly
+  const hasCuts = cuts && cuts.length > 0 && sourceDurationMs;
+  const currentTimeMs = hasCuts
+    ? compositionToSourceTime(compositionTimeMs, segments)
+    : compositionTimeMs;
 
   // Use exclusive end (< endMs) so that consecutive regions with
   // abutting boundaries never both match on the same frame.

@@ -43,6 +43,24 @@ let currentJob: ExportJob | null = null;
 let ffmpegProcess: ChildProcess | null = null;
 
 /**
+ * When true, the intermediate Remotion output file is NOT deleted after export.
+ * Useful for debugging the two-stage pipeline.
+ * Toggle via setKeepIntermediate() or the IPC handler.
+ */
+let keepIntermediate = false;
+
+/** Set whether to keep intermediate files after export */
+export function setKeepIntermediate(keep: boolean): void {
+  keepIntermediate = keep;
+  console.log('[ExporterService] Keep intermediate files:', keep);
+}
+
+/** Get current keep-intermediate setting */
+export function getKeepIntermediate(): boolean {
+  return keepIntermediate;
+}
+
+/**
  * Start a new export job
  */
 export async function startExport(config: ExportConfig): Promise<ExportResult> {
@@ -321,7 +339,10 @@ async function runTwoStagePipeline(
     // ============================================================
     // Cleanup Temp Files
     // ============================================================
-    if (remotionOutput && fs.existsSync(remotionOutput)) {
+    if (keepIntermediate) {
+      console.log('[ExporterService] Keeping intermediate files (debug mode)');
+      console.log('[ExporterService] Intermediate file:', remotionOutput);
+    } else if (remotionOutput && fs.existsSync(remotionOutput)) {
       try {
         const tempDir = path.dirname(remotionOutput);
         fs.rmSync(tempDir, { recursive: true, force: true });

@@ -49,6 +49,15 @@ export interface CompositionZoomRegion {
   focalKeyframes?: CompositionFocalKeyframe[];
 }
 
+/** A region to cut (exclude) from the final video */
+export interface CompositionCutRegion {
+  id: string;
+  /** Start of the cut in milliseconds (source timeline) */
+  startMs: number;
+  /** End of the cut in milliseconds (source timeline) */
+  endMs: number;
+}
+
 /**
  * Props passed to Remotion composition at render time.
  *
@@ -83,4 +92,10 @@ export interface RemotionInputProps {
 
   /** Zoom regions to animate */
   zoomRegions: CompositionZoomRegion[];
+
+  /** Cut regions to exclude (frame-skipped in composition) */
+  cuts?: CompositionCutRegion[];
+
+  /** Original source video duration in ms (before cuts) */
+  sourceDurationMs?: number;
 }

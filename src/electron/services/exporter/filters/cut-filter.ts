@@ -12,9 +12,11 @@ export const cutFilter: ExportFilter = {
   name: 'cut',
   priority: 50, // Apply AFTER background filter - cuts from composited video
 
-  isEnabled(context: FilterContext): boolean {
-    // Only enable if there are cuts defined
-    return context.project.cuts && context.project.cuts.length > 0;
+  isEnabled(_context: FilterContext): boolean {
+    // DISABLED: Cuts are now handled natively by Remotion via frame-skipping.
+    // Remotion renders only uncut segments using <Series>, so the intermediate
+    // video already has cuts applied. No FFmpeg post-processing needed.
+    return false;
   },
 
   getVideoFilters(context: FilterContext): string[] | null {
