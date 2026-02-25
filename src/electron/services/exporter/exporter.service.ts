@@ -59,6 +59,51 @@ export function setKeepIntermediate(keep: boolean): void {
 export function getKeepIntermediate(): boolean {
   return keepIntermediate;
 }
+/**
+ * Map raw error messages to human-readable messages for the UI.
+ * Keeps technical details in console logs while showing clean messages to users.
+ */
+function sanitizeErrorMessage(raw: string): string {
+  const lower = raw.toLowerCase();
+
+  if (lower.includes('err_network_changed') || lower.includes('network_changed')) {
+    return 'Export failed: system resources were overwhelmed. Try closing other apps or reducing quality.';
+  }
+
+  if (lower.includes('disk space is low') || lower.includes('disk space')) {
+    return 'Export failed: not enough disk space. Free up some space and try again.';
+  }
+
+  if (lower.includes('ffmpeg exited with error code')) {
+    return 'Export failed during video encoding. Try a different quality setting.';
+  }
+
+  if (lower.includes('source video not found')) {
+    return 'Export failed: the source recording file could not be found.';
+  }
+
+  if (lower.includes('source video is empty')) {
+    return 'Export failed: the source recording file is empty.';
+  }
+
+  if (lower.includes('timeout') || lower.includes('timed out')) {
+    return 'Export failed: the rendering process timed out. Try reducing the video length or quality.';
+  }
+
+  // Fallback: keep it short, strip internal prefixes
+  const cleaned = raw
+    .replace(/\[RemotionRenderer\]\s*/g, '')
+    .replace(/\[ExporterService\]\s*/g, '')
+    .replace(/\s+at\s+.*/s, '') // Strip stack traces
+    .trim();
+
+  // If the cleaned message is very long (likely a stack trace leaked), use generic
+  if (cleaned.length > 150) {
+    return 'Export failed unexpectedly. Please try again.';
+  }
+
+  return cleaned || 'Export failed unexpectedly. Please try again.';
+}
 
 /**
  * Start a new export job
@@ -140,9 +185,18 @@ export async function startExport(config: ExportConfig): Promise<ExportResult> {
     console.log('[ExporterService] Export completed successfully');
     return result;
   } catch (error) {
+    const rawMessage = error instanceof Error ? error.message : 'Unknown error';
+
+    // Detect cancellation (thrown by Remotion or FFmpeg)
+    if (currentJob.state === 'cancelled' || rawMessage === 'Export cancelled') {
+      currentJob.state = 'cancelled';
+      console.log('[ExporterService] Export was cancelled');
+      return { success: false, error: 'Export cancelled' };
+    }
+
     currentJob.state = 'error';
-    currentJob.error = error instanceof Error ? error.message : 'Unknown error';
-    console.error('[ExporterService] Export failed:', currentJob.error);
+    currentJob.error = sanitizeErrorMessage(rawMessage);
+    console.error('[ExporterService] Export failed:', rawMessage);
     return { success: false, error: currentJob.error };
   }
 }

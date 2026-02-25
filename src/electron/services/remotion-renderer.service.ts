@@ -127,13 +127,6 @@ function getIntermediateQuality(exportQuality: string): {
 }
 
 /**
- * Start a simple HTTP file server to serve the video file.
- * This is necessary because Chromium/Puppeteer blocks file:// URLs for security reasons.
- *
- * @param videoPath - Absolute path to video file
- * @returns Promise that resolves with { url, server } or rejects
- */
-/**
  * Links or copies the video file to the bundle directory.
  * This allows using staticFile() efficiently without an HTTP server.
  *
@@ -465,8 +458,9 @@ export async function renderWithRemotion(
     // ========================================================
     // Step 6: Link video file to bundle (for staticFile access)
     // ========================================================
-    // Instead of an HTTP server, we link the file into the bundle directory
-    // so it can be accessed via staticFile('video.mp4')
+    // Link the video into the bundle's public dir so Remotion's compositor
+    // can access it via the built-in HTTP server (http://localhost:PORT/public/...).
+    // The compositor only supports http/https URLs — file:// is rejected.
     const videoExt = path.extname(project.rawVideoPath);
     const videoFileName = `video-${runId}${videoExt}`;
 
@@ -587,6 +581,12 @@ export async function renderWithRemotion(
     // Calculate thread count for x264 encoding (match concurrency)
     const cpuThreads = Math.max(1, os.cpus().length - 1);
 
+    // Cap browser concurrency to prevent overwhelming Chrome's network stack.
+    // Too many parallel tabs hitting the local proxy (/proxy?src=...) simultaneously
+    // causes net::ERR_NETWORK_CHANGED on large videos (especially .mkv).
+    // 4 concurrent pages is a safe sweet-spot for stability vs speed.
+    const renderConcurrency = Math.min(cpuThreads, 4);
+
     await renderMedia({
       composition,
       serveUrl: bundleCache,
@@ -596,9 +596,8 @@ export async function renderWithRemotion(
       crf: intermediateQuality.crf,
       imageFormat: 'jpeg', // Faster than PNG, no transparency needed
       jpegQuality: intermediateQuality.jpegQuality,
-      // Use all available cores for maximum performance
-      // Reserve 1 core for system/UI responsiveness on lower-end machines
-      concurrency: cpuThreads,
+      // Cap concurrency to prevent network exhaustion on large video files
+      concurrency: renderConcurrency,
       outputLocation: tempOutputPath,
       inputProps,
       browserExecutable,
@@ -642,7 +641,7 @@ export async function renderWithRemotion(
       onProgress: ({ renderedFrames, encodedFrames, encodedDoneIn }) => {
         // Check if render was cancelled
         if (isCancelled) {
-          throw new Error('[RemotionRenderer] Render cancelled');
+          throw new Error('Export cancelled');
         }
 
         // Calculate progress percentage
@@ -682,9 +681,6 @@ export async function renderWithRemotion(
     }
 
     console.log('[RemotionRenderer] Output file size:', Math.round(fileSize / 1024 / 1024), 'MB');
-    console.log('[RemotionRenderer] ====== Render Success ======');
-
-    // Clean up file server
     console.log('[RemotionRenderer] ====== Render Success ======');
 
     // Clean up linked video file

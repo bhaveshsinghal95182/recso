@@ -159,12 +159,27 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
 
     try {
       const exportResult = await window.electron.exporter.start(config);
+
+      // If export was cancelled while awaiting, just reset cleanly
+      if (exportResult.error === 'Export cancelled') {
+        reset();
+        return;
+      }
+
       setResult(exportResult);
       setExportState(exportResult.success ? 'complete' : 'error');
     } catch (err) {
+      const message = err instanceof Error ? err.message : 'Export failed';
+
+      // Cancelled during composition — reset to configure, don't show error
+      if (message === 'Export cancelled') {
+        reset();
+        return;
+      }
+
       setResult({
         success: false,
-        error: err instanceof Error ? err.message : 'Export failed',
+        error: message,
       });
       setExportState('error');
     }
