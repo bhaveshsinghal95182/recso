@@ -38,7 +38,6 @@ export const VideoLayer: React.FC<RemotionInputProps> = React.memo(
       width: layout.width,
       height: layout.height,
       // Glassmorphic border container
-      padding: 12,
       backgroundColor: 'rgba(255, 255, 255, 0.1)',
       backdropFilter: 'blur(10px)',
       WebkitBackdropFilter: 'blur(10px)',
