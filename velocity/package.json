@@ -47,7 +47,7 @@
     "lint": "oxlint .",
     "prepublishOnly": "napi prepublish -t npm",
     "test": "ava",
-    "dev": "pnpm build && node test-runner.js",
+    "dev": "pnpm build && node tests/test-runner.js",
     "preversion": "napi build --platform && git add .",
     "version": "napi version",
     "prepare": "husky"

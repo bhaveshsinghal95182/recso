@@ -576,5 +576,7 @@ if (!nativeBinding) {
 }
 
 module.exports = nativeBinding
+module.exports.Stopper = nativeBinding.Stopper
 module.exports.isCursorSettingsSupported = nativeBinding.isCursorSettingsSupported
 module.exports.listAvailableWindows = nativeBinding.listAvailableWindows
+module.exports.startWindowRecording = nativeBinding.startWindowRecording
