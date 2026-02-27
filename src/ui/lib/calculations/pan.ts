@@ -10,12 +10,16 @@ import type { FocalKeyframe, RecordedMouseEvent, ZoomRegion } from '@/types';
  * `resolveFocal`).
  *
  * Only click events are used — mouse-move events are ignored.
+ *
+ * NOTE: Mouse events store NORMALISED 0-1 ratios (not raw pixels).
+ * The coordinates are already relative to the capture source, so we
+ * just clamp to 0-1 directly without dividing by video dimensions.
  */
 export function smartPanSingleRegion(
   region: ZoomRegion,
   events: RecordedMouseEvent[],
-  videoWidth: number,
-  videoHeight: number,
+  _videoWidth: number,
+  _videoHeight: number,
 ): ZoomRegion {
   // Filter to clicks that fall within this region's time span
   const clicks = events.filter(
@@ -35,9 +39,9 @@ export function smartPanSingleRegion(
     const elapsed = click.timestampMs - lastKeyframeMs;
     if (elapsed < MIN_REGION_DURATION_MS) continue;
 
-    // Normalise click position to 0-1 and clamp
-    const focalX = Math.max(0, Math.min(1, click.x / videoWidth));
-    const focalY = Math.max(0, Math.min(1, click.y / videoHeight));
+    // Coordinates are already 0-1 normalised ratios — just clamp
+    const focalX = Math.max(0, Math.min(1, click.x));
+    const focalY = Math.max(0, Math.min(1, click.y));
 
     keyframes.push({
       timestampMs: click.timestampMs,

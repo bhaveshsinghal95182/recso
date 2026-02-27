@@ -6,12 +6,14 @@ import { initializeWithWindow, registerAllIpcHandlers } from './ipc/index.js';
 import { initializeDatabase } from './services/database.service.js';
 import { preWarm as preWarmRemotion } from './services/remotion-renderer.service.js';
 import { createTray } from './services/tray.service.js';
+import { initializeVelocityDatabase } from './services/velocity-database.service.js';
 import { getPreloadPath } from './path-resolver.js';
 import { isDevelopment } from './util.js';
 
 app.on('ready', () => {
-  // Initialize database first (for crash-safe recording metadata)
+  // Initialize databases first (for crash-safe recording metadata)
   initializeDatabase();
+  initializeVelocityDatabase();
 
   // Register all IPC handlers before creating window
   registerAllIpcHandlers();

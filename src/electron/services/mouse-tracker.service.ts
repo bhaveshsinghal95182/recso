@@ -1,17 +1,20 @@
 /**
  * MouseTrackerService — Global mouse event tracking using uiohook-napi.
  *
- * This service tracks click and movement events using native input hooks.
- * - Uses uiohook-napi for cross-platform global input hooks
- * - Records timestamp and position of each click and movement
- * - Stores in SQLite for playback in editor
+ * Dual-mode operation:
+ *   • VELOCITY MODE (paid): 60fps, normalized 0-1 coords → velocity.db
+ *   • LEGACY MODE (free):   20fps, raw pixel coords → recso.db/mouse_events
+ *
+ * Mode is determined at startTracking() time by whether monitorBounds are provided.
+ * Velocity recordings always provide bounds; legacy WebRTC recordings don't.
  */
 
 import { uIOhook, type UiohookMouseEvent } from 'uiohook-napi';
 
 import { getDatabase } from './database.service.js';
+import * as velocityDb from './velocity-database.service.js';
 
-// Mouse event interface
+// Mouse event interface (used by consumers — always normalized for Velocity)
 export interface MouseEvent {
   id?: number;
   recordingId: string;
@@ -22,7 +25,7 @@ export interface MouseEvent {
   button?: 'left' | 'right' | 'middle';
 }
 
-/** Monitor bounds for coordinate offset calculation */
+/** Monitor bounds for coordinate normalization */
 export interface MonitorBounds {
   x: number;
   y: number;
@@ -40,9 +43,13 @@ class MouseTrackerService {
   private isTracking: boolean = false;
   private monitorBounds: MonitorBounds | null = null;
 
-  // Throttle mouse movement events (capture at most every N ms)
+  /** Whether this session is a Velocity recording (60fps, velocity.db) */
+  private velocityMode: boolean = false;
+
+  // Throttle settings — differ by mode
   private lastMoveTime: number = 0;
-  private readonly moveThrottleMs: number = 50; // 20 events per second max
+  private static readonly LEGACY_THROTTLE_MS = 50; // 20fps for free tier
+  private static readonly VELOCITY_THROTTLE_MS = 16; // ~60fps for Velocity
 
   private constructor() {
     this.onMouseDown = this.onMouseDown.bind(this);
@@ -57,7 +64,12 @@ class MouseTrackerService {
   }
 
   /**
-   * Start tracking mouse events for a recording
+   * Start tracking mouse events for a recording.
+   *
+   * @param recordingId — Unique recording identifier
+   * @param monitorBounds — Physical pixel bounds of the recorded monitor.
+   *   If provided, enables Velocity mode (60fps, normalized coords, velocity.db).
+   *   If omitted, falls back to legacy mode (20fps, raw pixels, main DB).
    */
   startTracking(recordingId: string, monitorBounds?: MonitorBounds): void {
     if (this.isTracking) {
@@ -72,6 +84,9 @@ class MouseTrackerService {
     this.monitorBounds = monitorBounds ?? null;
     this.lastMoveTime = 0;
 
+    // Determine mode: Velocity (has bounds) vs Legacy (no bounds)
+    this.velocityMode = !!monitorBounds;
+
     // Register uiohook event listeners
     uIOhook.on('mousedown', this.onMouseDown);
     uIOhook.on('mousemove', this.onMouseMove);
@@ -79,13 +94,15 @@ class MouseTrackerService {
     // Start the hook
     uIOhook.start();
 
-    // Start flush timer (every 2 seconds)
-    this.flushTimer = setInterval(() => this.flushBuffer(), 2000);
+    // Flush timer — slightly faster for Velocity due to higher event volume
+    const flushIntervalMs = this.velocityMode ? 1000 : 2000;
+    this.flushTimer = setInterval(() => this.flushBuffer(), flushIntervalMs);
 
-    console.log('[MouseTrackerService] Started mouse tracking for:', recordingId);
-    if (monitorBounds) {
-      console.log('[MouseTrackerService] Monitor bounds:', monitorBounds);
-    }
+    console.log('[MouseTrackerService] Started tracking:', {
+      recordingId,
+      mode: this.velocityMode ? 'VELOCITY (60fps → velocity.db)' : 'LEGACY (20fps → recso.db)',
+      bounds: monitorBounds || 'none',
+    });
   }
 
   /**
@@ -99,7 +116,7 @@ class MouseTrackerService {
     if (event.button === 2) button = 'right';
     else if (event.button === 3) button = 'middle';
 
-    // Get normalized coordinates
+    // Normalize coordinates based on mode
     const { x, y } = this.normalizeCoordinates(event.x, event.y);
 
     const mouseEvent: MouseEvent = {
@@ -112,7 +129,12 @@ class MouseTrackerService {
     };
 
     this.eventBuffer.push(mouseEvent);
-    console.log('[MouseTrackerService] Click recorded:', { x, y, button });
+    console.log('[MouseTrackerService] Click recorded:', {
+      raw: { x: event.x, y: event.y },
+      normalized: { x, y },
+      mode: this.velocityMode ? 'velocity' : 'legacy',
+      button,
+    });
   }
 
   /**
@@ -122,12 +144,16 @@ class MouseTrackerService {
     if (!this.recordingId || !this.isTracking) return;
 
     const now = Date.now();
-    if (now - this.lastMoveTime < this.moveThrottleMs) {
+    const throttleMs = this.velocityMode
+      ? MouseTrackerService.VELOCITY_THROTTLE_MS
+      : MouseTrackerService.LEGACY_THROTTLE_MS;
+
+    if (now - this.lastMoveTime < throttleMs) {
       return; // Skip this event due to throttling
     }
     this.lastMoveTime = now;
 
-    // Get normalized coordinates
+    // Normalize coordinates based on mode
     const { x, y } = this.normalizeCoordinates(event.x, event.y);
 
     const mouseEvent: MouseEvent = {
@@ -142,13 +168,21 @@ class MouseTrackerService {
   }
 
   /**
-   * Normalize coordinates to monitor-local if bounds are set
+   * Normalize coordinates based on mode.
+   *
+   * VELOCITY: Produces 0-1 ratios (subtracts monitor offset, divides by size)
+   * LEGACY: Returns raw pixel coordinates (unchanged)
    */
   private normalizeCoordinates(x: number, y: number): { x: number; y: number } {
-    if (this.monitorBounds) {
+    if (
+      this.velocityMode &&
+      this.monitorBounds &&
+      this.monitorBounds.width > 0 &&
+      this.monitorBounds.height > 0
+    ) {
       return {
-        x: x - this.monitorBounds.x,
-        y: y - this.monitorBounds.y,
+        x: (x - this.monitorBounds.x) / this.monitorBounds.width,
+        y: (y - this.monitorBounds.y) / this.monitorBounds.height,
       };
     }
     return { x, y };
@@ -184,39 +218,49 @@ class MouseTrackerService {
     this.isTracking = false;
     this.recordingId = null;
     this.monitorBounds = null;
+    this.velocityMode = false;
 
     console.log('[MouseTrackerService] Stopped tracking. Total events:', totalEvents);
     return totalEvents;
   }
 
   /**
-   * Flush event buffer to SQLite
+   * Flush event buffer to the appropriate database.
    */
   private flushBuffer(): void {
     if (this.eventBuffer.length === 0) return;
 
     try {
-      const db = getDatabase();
-      const stmt = db.prepare(`
-        INSERT INTO mouse_events (recording_id, timestamp_ms, x, y, event_type, button, meta)
-        VALUES (?, ?, ?, ?, ?, ?, NULL)
-      `);
+      if (this.velocityMode) {
+        // Write to velocity.db
+        velocityDb.insertMouseEvents(this.eventBuffer);
+      } else {
+        // Write to main recso.db (legacy)
+        const db = getDatabase();
+        const stmt = db.prepare(`
+          INSERT INTO mouse_events (recording_id, timestamp_ms, x, y, event_type, button, meta)
+          VALUES (?, ?, ?, ?, ?, ?, NULL)
+        `);
 
-      const insertMany = db.transaction((events: MouseEvent[]) => {
-        for (const event of events) {
-          stmt.run(
-            event.recordingId,
-            event.timestampMs,
-            event.x,
-            event.y,
-            event.eventType,
-            event.button ?? null,
-          );
-        }
-      });
+        const insertMany = db.transaction((events: MouseEvent[]) => {
+          for (const event of events) {
+            stmt.run(
+              event.recordingId,
+              event.timestampMs,
+              event.x,
+              event.y,
+              event.eventType,
+              event.button ?? null,
+            );
+          }
+        });
 
-      insertMany(this.eventBuffer);
-      console.log('[MouseTrackerService] Flushed', this.eventBuffer.length, 'events to database');
+        insertMany(this.eventBuffer);
+      }
+
+      console.log(
+        `[MouseTrackerService] Flushed ${this.eventBuffer.length} events to ${this.velocityMode ? 'velocity.db' : 'recso.db'}`,
+      );
       this.eventBuffer = [];
     } catch (error) {
       console.error('[MouseTrackerService] Failed to flush events:', error);
@@ -230,6 +274,11 @@ class MouseTrackerService {
     if (!this.recordingId) return 0;
 
     try {
+      if (this.velocityMode) {
+        const events = velocityDb.getEventsForRecording(this.recordingId);
+        return events.length + this.eventBuffer.length;
+      }
+
       const db = getDatabase();
       const stmt = db.prepare('SELECT COUNT(*) as count FROM mouse_events WHERE recording_id = ?');
       const result = stmt.get(this.recordingId) as { count: number };
@@ -240,9 +289,20 @@ class MouseTrackerService {
   }
 
   /**
-   * Get all events for a recording
+   * Get all events for a recording.
+   * Tries velocity.db first, falls back to legacy mouse_events table.
    */
   getEventsForRecording(recordingId: string): MouseEvent[] {
+    // Try velocity DB first (premium data)
+    try {
+      if (velocityDb.hasVelocityData(recordingId)) {
+        return velocityDb.getEventsForRecording(recordingId);
+      }
+    } catch {
+      // Velocity DB might not be initialized — fall through to legacy
+    }
+
+    // Fallback to legacy mouse_events in main DB
     try {
       const db = getDatabase();
       const stmt = db.prepare(`
@@ -268,9 +328,25 @@ class MouseTrackerService {
   }
 
   /**
-   * Delete all events for a recording
+   * Check if a recording has Velocity-quality data.
+   */
+  hasVelocityData(recordingId: string): boolean {
+    try {
+      return velocityDb.hasVelocityData(recordingId);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Delete all events for a recording (both DBs).
    */
   deleteEventsForRecording(recordingId: string): void {
+    try {
+      velocityDb.deleteEventsForRecording(recordingId);
+    } catch {
+      // Velocity DB may not be initialized
+    }
     try {
       const db = getDatabase();
       const stmt = db.prepare('DELETE FROM mouse_events WHERE recording_id = ?');

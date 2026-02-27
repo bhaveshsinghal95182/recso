@@ -2,6 +2,7 @@ import { type BrowserWindow, ipcMain, screen } from 'electron';
 
 import { mouseTrackerService } from '../../services/mouse-tracker.service.js';
 import * as VelocityRecorderService from '../../services/recorder/velocity-recorder.service.js';
+import * as velocityDb from '../../services/velocity-database.service.js';
 import type { RecordingConfig } from '../../types/recorder.types.js';
 
 let mainWindowRef: BrowserWindow | null = null;
@@ -11,17 +12,30 @@ export function setVelocityRecorderMainWindow(window: BrowserWindow): void {
 }
 
 /**
- * Get monitor bounds for the primary display.
- * Used to normalize mouse coordinates to monitor-local space.
+ * Get monitor bounds for the primary display in PHYSICAL pixels.
+ *
+ * IMPORTANT: Electron's screen.getPrimaryDisplay().bounds returns LOGICAL (DIP)
+ * coordinates, but uiohook-napi reports PHYSICAL pixel coordinates.
+ * We must multiply by scaleFactor to match uiohook's coordinate space.
  */
-function getPrimaryMonitorBounds() {
+function getPrimaryDisplayInfo() {
   const primaryDisplay = screen.getPrimaryDisplay();
-  return {
-    x: primaryDisplay.bounds.x,
-    y: primaryDisplay.bounds.y,
-    width: primaryDisplay.bounds.width,
-    height: primaryDisplay.bounds.height,
+  const sf = primaryDisplay.scaleFactor;
+
+  const bounds = {
+    x: primaryDisplay.bounds.x * sf,
+    y: primaryDisplay.bounds.y * sf,
+    width: primaryDisplay.bounds.width * sf,
+    height: primaryDisplay.bounds.height * sf,
   };
+
+  console.log('[VelocityRecorderIPC] Display info:', {
+    logicalBounds: primaryDisplay.bounds,
+    scaleFactor: sf,
+    physicalBounds: bounds,
+  });
+
+  return { bounds, scaleFactor: sf };
 }
 
 export function registerVelocityRecorderHandlers(): void {
@@ -38,9 +52,21 @@ export function registerVelocityRecorderHandlers(): void {
     async (_event, config: RecordingConfig, bitrate: number) => {
       const result = VelocityRecorderService.recordMonitor(config, bitrate);
       if (result.success && result.recordingId) {
-        // Pass monitor bounds so cursor coords are normalized to monitor-local space
-        const bounds = getPrimaryMonitorBounds();
+        const { bounds, scaleFactor } = getPrimaryDisplayInfo();
+
+        // Start tracking with bounds → enables Velocity mode (60fps, velocity.db)
         mouseTrackerService.startTracking(result.recordingId, bounds);
+
+        // Save capture metadata for later reference
+        velocityDb.saveMetadata({
+          recordingId: result.recordingId,
+          monitorWidth: bounds.width,
+          monitorHeight: bounds.height,
+          scaleFactor,
+          captureFps: 60,
+          captureSource: 'monitor',
+        });
+
         startStatePolling();
       }
       return result;
@@ -52,9 +78,22 @@ export function registerVelocityRecorderHandlers(): void {
     async (_event, windowTitle: string, config: RecordingConfig, bitrate: number) => {
       const result = VelocityRecorderService.recordWindow(windowTitle, config, bitrate);
       if (result.success && result.recordingId) {
-        // Pass monitor bounds so cursor coords are normalized to monitor-local space
-        const bounds = getPrimaryMonitorBounds();
+        const { bounds, scaleFactor } = getPrimaryDisplayInfo();
+
+        // Start tracking with bounds → enables Velocity mode (60fps, velocity.db)
         mouseTrackerService.startTracking(result.recordingId, bounds);
+
+        // Save capture metadata for later reference
+        velocityDb.saveMetadata({
+          recordingId: result.recordingId,
+          monitorWidth: bounds.width,
+          monitorHeight: bounds.height,
+          scaleFactor,
+          captureFps: 60,
+          captureSource: 'window',
+          windowTitle,
+        });
+
         startStatePolling();
       }
       return result;

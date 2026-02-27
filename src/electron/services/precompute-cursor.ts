@@ -203,12 +203,12 @@ export function precomputeCursorFrames(
   const contentWidth = layout.width - 2 * videoBorderWidth;
   const contentHeight = layout.height - 2 * videoBorderWidth;
 
-  // Scale factor: raw cursor coords (monitor pixels) → canvas-space pixels
-  // Maps from video pixel coords → content area on canvas
-  const scaleX = contentWidth / videoDimensions.width;
-  const scaleY = contentHeight / videoDimensions.height;
+  // Mouse events store normalized 0-1 ratios, so mapping to canvas is simple:
+  //   canvasX = contentX + ratio * contentWidth
+  //   canvasY = contentY + ratio * contentHeight
+  // No need for videoDimensions or scale factors — ratios are resolution-independent.
 
-  // Convert raw events to canvas-space position snapshots
+  // Convert normalized events to canvas-space position snapshots
   interface CursorSnapshot {
     sourceTimeMs: number;
     canvasX: number;
@@ -218,8 +218,8 @@ export function precomputeCursorFrames(
 
   const snapshots: CursorSnapshot[] = events.map((e) => ({
     sourceTimeMs: e.timestampMs,
-    canvasX: contentX + e.x * scaleX,
-    canvasY: contentY + e.y * scaleY,
+    canvasX: contentX + e.x * contentWidth,
+    canvasY: contentY + e.y * contentHeight,
     isClick: e.eventType === 'click',
   }));
 

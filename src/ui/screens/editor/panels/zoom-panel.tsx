@@ -179,9 +179,7 @@ export function ZoomPanel() {
         return;
       }
 
-      // Get video dimensions for normalizing coordinates
-      const videoWidth = project.videoDimensions?.width || 1920;
-      const videoHeight = project.videoDimensions?.height || 1080;
+      // Mouse events now store 0-1 normalised ratios — no need for video dimensions
 
       // Generate zoom regions by grouping rapid clicks
       const newZooms: ZoomRegion[] = [];
@@ -203,9 +201,9 @@ export function ZoomPanel() {
             newZooms.push(currentRegion);
           }
 
-          // Normalize coordinates to 0-1 range
-          const focalX = Math.max(0, Math.min(1, click.x / videoWidth));
-          const focalY = Math.max(0, Math.min(1, click.y / videoHeight));
+          // Coordinates are already 0-1 normalised ratios — just clamp
+          const focalX = Math.max(0, Math.min(1, click.x));
+          const focalY = Math.max(0, Math.min(1, click.y));
 
           currentRegion = {
             id: crypto.randomUUID(),
