@@ -35,21 +35,21 @@ async function runTests() {
           console.log(`   ${i + 1}. "${win.title}" (class: ${win.className})`)
         })
 
-        targetWindow = windows[0]
+        targetWindow = windows[1]
       }
     } else {
       console.log('⚠️ listAvailableWindows not found.')
     }
 
     // Test: Recording API
-    if (typeof velocity.startWindowRecording === 'function' && targetWindow) {
-      console.log(`\n🎥 Testing Window Recording API on "${targetWindow.title}"...`)
+    if (typeof velocity.startMonitorRecording === 'function') {
+      console.log(`\n🎥 Testing Monitor Recording API...`)
       const outputPath = 'tests/test_recording.mp4'
       if (fs.existsSync(outputPath)) {
         fs.unlinkSync(outputPath)
       }
 
-      const stopper = velocity.startWindowRecording(targetWindow.title, outputPath)
+      const stopper = velocity.startMonitorRecording(outputPath)
       console.log('   ✅ Recording started! Waiting 3.5 seconds...')
 
       await new Promise((resolve) => setTimeout(resolve, 3500))
@@ -67,7 +67,7 @@ async function runTests() {
         console.log('   ❌ Video file was not found where expected!')
       }
     } else {
-      console.log('\n⚠️ startWindowRecording not found or no target window available.')
+      console.log('\n⚠️ startMonitorRecording not found.')
     }
   } catch (error) {
     console.error('\n❌ Error occurred during execution:', error)

@@ -8,7 +8,7 @@ export declare function isCursorSettingsSupported(): boolean
 
 export declare function listAvailableWindows(): Array<WindowInfo>
 
-export declare function startWindowRecording(windowTitle: string, outputPath: string): Stopper
+export declare function startMonitorRecording(outputPath: string): Stopper
 
 export interface WindowInfo {
   title: string

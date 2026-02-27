@@ -11,7 +11,6 @@ use windows_capture::settings::{
     ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings,
     MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
 };
-use windows_capture::window::Window;
 
 #[napi]
 pub struct Stopper {
@@ -92,29 +91,21 @@ impl GraphicsCaptureApiHandler for Capture {
     }
 }
 
+use windows_capture::monitor::Monitor;
+
+// ... (rest of the imports remain the same) ...
+
 #[napi]
-pub fn start_window_recording(
-    window_title: String,
+pub fn start_monitor_recording(
     output_path: String,
 ) -> napi::Result<Stopper> {
     let (tx, rx) = channel();
 
-    // Iterate carefully to find our requested window instance
-    let mut target_window = None;
-    if let Ok(windows) = Window::enumerate() {
-        for window in windows {
-            if let Ok(title) = window.title() {
-                if title == window_title {
-                    target_window = Some(window);
-                    break;
-                }
-            }
-        }
-    }
-    let window = target_window.ok_or_else(|| napi::Error::from_reason("Window not found"))?;
+    let primary_monitor = Monitor::primary()
+        .map_err(|e| napi::Error::from_reason(format!("Failed to get primary monitor: {:?}", e)))?;
 
     let settings = Settings::new(
-        window,
+        primary_monitor,
         CursorCaptureSettings::WithoutCursor,
         DrawBorderSettings::WithoutBorder,
         SecondaryWindowSettings::Default,
