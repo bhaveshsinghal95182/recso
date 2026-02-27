@@ -1,3 +1,4 @@
+import type { WindowInfo } from '../electron/types/velocity.types';
 import type { BackgroundPatternConfig } from '../shared/patterns';
 import type {
   CursorConfig,
@@ -274,6 +275,21 @@ interface ElectronAPI {
 
     /** Subscribe to progress updates */
     onProgress: (callback: (progress: ExportProgress) => void) => () => void;
+  };
+
+  velocity: {
+    isCursorSettingsSupported: () => Promise<boolean>;
+    listAvailableWindows: () => Promise<WindowInfo[]>;
+    startMonitorRecording: (
+      config: RecordingConfig,
+      bitrate: number,
+    ) => Promise<StartRecordingResult>;
+    startWindowRecording: (
+      windowTitle: string,
+      config: RecordingConfig,
+      bitrate: number,
+    ) => Promise<StartRecordingResult>;
+    stopRecording: (recordingId: string) => Promise<StopRecordingResult>;
   };
 }
 

@@ -18,14 +18,14 @@ import type {
   RecordingStateEvent,
   StartRecordingResult,
   StopRecordingResult,
-} from '../types/recorder.types.js';
+} from '../../types/recorder.types.js';
 import {
   completeRecording,
   createRecording,
   getRecording,
   updateRecordingStatus,
-} from './database.service.js';
-import { initProjectFolder } from './project-storage.service.js';
+} from '../database.service.js';
+import { initProjectFolder } from '../project-storage.service.js';
 
 /** Active recording session state */
 interface ActiveRecording {
@@ -223,7 +223,7 @@ export async function stopRecording(recordingId: string): Promise<StopRecordingR
     // Otherwise we just rename
     if (activeRecording.fileExtension === 'mkv' || activeRecording.fileExtension === 'mp4') {
       console.log('[RecorderService] Remuxing to fix metadata...');
-      const ffmpegService = await import('./ffmpeg.service.js');
+      const ffmpegService = await import('../ffmpeg.service.js');
       await ffmpegService.remuxVideo(activeRecording.tempPath, finalPath);
 
       // Clean up temp file

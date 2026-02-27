@@ -38,7 +38,8 @@ export interface DesktopSource {
   /** Height in pixels */
   height?: number;
   /** Whether this is the primary monitor */
-  isPrimary?: boolean;
+  /** Whether this is a velocity native source */
+  isVelocity?: boolean;
 }
 
 /** Status of a recording in the database */

@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { DesktopSource, RecorderState } from '@/types';
+import type { DesktopSource, RecorderState, RecordingConfig } from '@/types';
 
 interface UseScreenRecorderOptions {
   /** Chunk interval in ms (default: 1000) */
@@ -39,13 +39,46 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
   const recordingIdRef = useRef<string | null>(null);
   // Guard against double-stop (e.g. track ends + user clicks stop)
   const isStoppingRef = useRef(false);
+  // Track whether current recording is velocity-based (native) vs WebRTC
+  const isVelocityRecordingRef = useRef(false);
 
   // Fetch available sources
   const refreshSources = useCallback(async () => {
     try {
-      const sources = await window.electron.recorder.getSources();
-      setSources(sources);
-      return sources;
+      // Fetch standard WebRTC sources
+      const stdSources = await window.electron.recorder.getSources();
+
+      // Fetch velocity native windows + monitor
+      let velocitySources: DesktopSource[] = [];
+      try {
+        const windows = await window.electron.velocity.listAvailableWindows();
+
+        // Add primary monitor as a velocity source
+        velocitySources.push({
+          id: 'velocity:monitor:primary',
+          name: 'Entire Screen (Velocity)',
+          thumbnailDataUrl: '',
+          isScreen: true,
+          isVelocity: true,
+        });
+
+        // Add individual windows
+        velocitySources.push(
+          ...windows.map((w, index) => ({
+            id: `velocity:window:${w.title}:${index}`,
+            name: w.title,
+            thumbnailDataUrl: '',
+            isScreen: false,
+            isVelocity: true,
+          })),
+        );
+      } catch (err) {
+        console.warn('Failed to fetch velocity windows:', err);
+      }
+
+      const allSources = [...stdSources, ...velocitySources];
+      setSources(allSources);
+      return allSources;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to get sources');
       return [];
@@ -99,7 +132,13 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
       const recId = recordingIdRef.current;
       if (recId) {
         recordingIdRef.current = null;
-        const result = await window.electron.recorder.stop(recId);
+        const isVelocity = isVelocityRecordingRef.current;
+        isVelocityRecordingRef.current = false;
+
+        const result = isVelocity
+          ? await window.electron.velocity.stopRecording(recId)
+          : await window.electron.recorder.stop(recId);
+
         setState({
           status: 'idle',
           recordingId: null,
@@ -132,7 +171,39 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
       try {
         setError(null);
 
-        // Get media stream from the source
+        // Handle velocity native recording vs standard WebRTC recording
+        const selectedSource = sources.find((s) => s.id === sourceId);
+
+        if (selectedSource?.isVelocity) {
+          const config: RecordingConfig = {
+            sourceId,
+            outputDir,
+            fileName,
+            fileExtension: fileExtension || 'mp4',
+          };
+
+          // Route to monitor or window recording based on source type
+          const isMonitor = sourceId.startsWith('velocity:monitor:');
+          const result = isMonitor
+            ? await window.electron.velocity.startMonitorRecording(config, videoBitrate)
+            : await window.electron.velocity.startWindowRecording(
+                selectedSource.name,
+                config,
+                videoBitrate,
+              );
+
+          if (!result || !result.success) {
+            throw new Error(result?.error || 'Failed to start velocity recording');
+          }
+
+          // Store recording ID and mark as velocity so stop knows which API to call
+          recordingIdRef.current = result.recordingId || null;
+          isVelocityRecordingRef.current = true;
+
+          return { success: true, recordingId: result.recordingId };
+        }
+
+        // Get media stream from the source (Standard WebRTC flow)
         const constraints: any = {
           audio: audio
             ? {
@@ -229,7 +300,7 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
         return { success: false, error: message };
       }
     },
-    [audio, frameRate, timeslice, stopRecordingInternal],
+    [audio, frameRate, sources, timeslice, stopRecordingInternal],
   );
 
   // Stop recording (public API — delegates to internal helper)

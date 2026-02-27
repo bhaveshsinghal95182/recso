@@ -7,6 +7,7 @@ import type {
   StartRecordingResult,
   StopRecordingResult,
 } from './types/recorder.types';
+import type { WindowInfo } from './types/velocity.types';
 
 // Types for recovery
 interface OrphanedRecording {
@@ -78,6 +79,20 @@ electron.contextBridge.exposeInMainWorld('electron', {
 
     validateOutputPath: (outputPath: string): Promise<{ valid: boolean; error?: string }> =>
       electron.ipcRenderer.invoke('recorder:validate-output-path', outputPath),
+  },
+
+  // Velocity Recorder
+  velocity: {
+    isCursorSettingsSupported: (): Promise<boolean> =>
+      electron.ipcRenderer.invoke('velocity:is-cursor-settings-supported'),
+    listAvailableWindows: (): Promise<WindowInfo[]> =>
+      electron.ipcRenderer.invoke('velocity:list-available-windows'),
+    startMonitorRecording: (config: any, bitrate: number) =>
+      electron.ipcRenderer.invoke('velocity:start-monitor-recording', config, bitrate),
+    startWindowRecording: (windowTitle: string, config: any, bitrate: number) =>
+      electron.ipcRenderer.invoke('velocity:start-window-recording', windowTitle, config, bitrate),
+    stopRecording: (recordingId: string) =>
+      electron.ipcRenderer.invoke('velocity:stop-recording', recordingId),
   },
 
   // Compositor

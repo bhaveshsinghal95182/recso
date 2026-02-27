@@ -3,7 +3,7 @@ use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::thread;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
-  SetForegroundWindow, ShowWindow, SW_RESTORE,
+  IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE,
 };
 use windows_capture::capture::{Context, GraphicsCaptureApiHandler};
 use windows_capture::encoder::{
@@ -144,9 +144,12 @@ pub fn start_window_recording(
 
   // WGC won't deliver frames for occluded/minimized windows.
   // Bring the target window to the foreground so the compositor renders it.
+  // Only SW_RESTORE if truly minimized — otherwise it un-maximizes the window.
   let hwnd = HWND(window.as_raw_hwnd() as *mut _);
   unsafe {
-    let _ = ShowWindow(hwnd, SW_RESTORE);
+    if IsIconic(hwnd).as_bool() {
+      let _ = ShowWindow(hwnd, SW_RESTORE);
+    }
     let _ = SetForegroundWindow(hwnd);
   }
 

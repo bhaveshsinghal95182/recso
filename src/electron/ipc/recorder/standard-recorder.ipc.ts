@@ -7,10 +7,10 @@ import { app, type BrowserWindow, dialog, ipcMain } from 'electron';
 import fs from 'fs';
 import path from 'path';
 
-import { mouseTrackerService } from '../services/mouse-tracker.service.js';
-import * as RecorderService from '../services/recorder.service.js';
-import * as RecoveryService from '../services/recovery.service.js';
-import type { RecordingConfig } from '../types/recorder.types.js';
+import { mouseTrackerService } from '../../services/mouse-tracker.service.js';
+import * as RecorderService from '../../services/recorder/standard-recorder.service.js';
+import * as RecoveryService from '../../services/recovery.service.js';
+import type { RecordingConfig } from '../../types/recorder.types.js';
 
 // Reference to main window for pushing state updates
 let mainWindowRef: BrowserWindow | null = null;

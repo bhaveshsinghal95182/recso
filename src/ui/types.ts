@@ -11,6 +11,8 @@ export interface DesktopSource {
   height?: number;
   /** Whether this is the primary display */
   isPrimary?: boolean;
+  /** Whether this is a velocity native source */
+  isVelocity?: boolean;
 }
 
 /** Mouse event recorded during a session */

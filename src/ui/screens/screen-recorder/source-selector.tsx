@@ -1,4 +1,4 @@
-import { AppWindow, Layers, Monitor, MonitorPlay, RefreshCw } from 'lucide-react';
+import { AppWindow, Layers, Monitor, MonitorPlay, RefreshCw, Zap } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useState } from 'react';
 
@@ -22,17 +22,19 @@ export function SourceSelector({
   isLoading,
   onRefresh,
 }: SourceSelectorProps) {
-  const [activeTab, setActiveTab] = useState<'all' | 'screen' | 'window'>('all');
+  const [activeTab, setActiveTab] = useState<'all' | 'screen' | 'window' | 'velocity'>('all');
 
   const filteredSources = sources.filter((source) => {
-    if (activeTab === 'all') return true;
-    if (activeTab === 'screen') return source.isScreen;
-    if (activeTab === 'window') return !source.isScreen;
+    if (activeTab === 'all') return !source.isVelocity;
+    if (activeTab === 'screen') return source.isScreen && !source.isVelocity;
+    if (activeTab === 'window') return !source.isScreen && !source.isVelocity;
+    if (activeTab === 'velocity') return !!source.isVelocity;
     return true;
   });
 
-  const screensCount = sources.filter((s) => s.isScreen).length;
-  const windowsCount = sources.filter((s) => !s.isScreen).length;
+  const screensCount = sources.filter((s) => s.isScreen && !s.isVelocity).length;
+  const windowsCount = sources.filter((s) => !s.isScreen && !s.isVelocity).length;
+  const velocityCount = sources.filter((s) => Boolean(s.isVelocity)).length;
 
   return (
     <div className="flex flex-col h-full bg-background/50 backdrop-blur-sm relative overflow-hidden">
@@ -49,7 +51,7 @@ export function SourceSelector({
             onClick={() => setActiveTab('all')}
             icon={<Layers size={14} />}
             label="All"
-            count={sources.length}
+            count={sources.filter((s) => !s.isVelocity).length}
           />
           <TabButton
             active={activeTab === 'screen'}
@@ -64,6 +66,13 @@ export function SourceSelector({
             icon={<AppWindow size={14} />}
             label="Windows"
             count={windowsCount}
+          />
+          <TabButton
+            active={activeTab === 'velocity'}
+            onClick={() => setActiveTab('velocity')}
+            icon={<Zap size={14} />}
+            label="Velocity"
+            count={velocityCount}
           />
         </div>
 
@@ -211,7 +220,13 @@ function SourceCard({
             />
           ) : (
             <div className="w-full h-full flex items-center justify-center text-muted-foreground/30">
-              {source.isScreen ? <Monitor size={48} /> : <AppWindow size={48} />}
+              {source.isScreen ? (
+                <Monitor size={48} />
+              ) : source.isVelocity ? (
+                <Zap size={48} className="text-yellow-500/50" />
+              ) : (
+                <AppWindow size={48} />
+              )}
             </div>
           )}
 
@@ -240,7 +255,13 @@ function SourceCard({
                 isSelected ? 'bg-primary/20 text-primary' : 'bg-muted/50 text-muted-foreground',
               )}
             >
-              {source.isScreen ? <Monitor size={14} /> : <AppWindow size={14} />}
+              {source.isScreen ? (
+                <Monitor size={14} />
+              ) : source.isVelocity ? (
+                <Zap size={14} className={isSelected ? 'text-yellow-500' : ''} />
+              ) : (
+                <AppWindow size={14} />
+              )}
             </div>
             <span className="text-xs font-medium truncate flex-1 opacity-90" title={source.name}>
               {source.name}
