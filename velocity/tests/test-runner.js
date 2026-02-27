@@ -22,26 +22,27 @@ async function runTests() {
       console.log('⚠️ isCursorSettingsSupported not found.')
     }
 
-    // Test: listAvailableWindows & startWindowRecording
-    let targetWindow = null
+    // List all exports
+    const exportsList = Object.keys(velocity)
+    console.log(exportsList)
 
+    // Test: listAvailableWindows
+    let windowTitle = null
     if (typeof velocity.listAvailableWindows === 'function') {
+      console.log('\n🪟 Testing listAvailableWindows()...')
       const windows = velocity.listAvailableWindows()
-      console.log(`✅ listAvailableWindows(): Found ${windows.length} windows.`)
-
+      console.log(`   ✅ Found ${windows.length} windows:`)
+      windows.forEach((w, i) => {
+        console.log(`      ${i + 1}. "${w.title}" [${w.className}]`)
+      })
       if (windows.length > 0) {
-        console.log('   Sample windows:')
-        windows.forEach((win, i) => {
-          console.log(`   ${i + 1}. "${win.title}" (class: ${win.className})`)
-        })
-
-        targetWindow = windows[1]
+        windowTitle = windows[2].title
       }
     } else {
-      console.log('⚠️ listAvailableWindows not found.')
+      console.log('\n⚠️ listAvailableWindows not found.')
     }
 
-    // Test: Recording API
+    // Test: Monitor Recording API
     if (typeof velocity.startMonitorRecording === 'function') {
       console.log(`\n🎥 Testing Monitor Recording API...`)
       const outputPath = 'tests/test_recording.mp4'
@@ -49,7 +50,8 @@ async function runTests() {
         fs.unlinkSync(outputPath)
       }
 
-      const stopper = velocity.startMonitorRecording(outputPath)
+      const bitrate = 50000000
+      const stopper = velocity.startMonitorRecording(outputPath, bitrate)
       console.log('   ✅ Recording started! Waiting 3.5 seconds...')
 
       await new Promise((resolve) => setTimeout(resolve, 3500))
@@ -57,7 +59,6 @@ async function runTests() {
       console.log('   🛑 Sending STOP signal through IPC...')
       stopper.stop()
 
-      // Wait a tiny bit for the file system to flush
       await new Promise((resolve) => setTimeout(resolve, 500))
 
       if (fs.existsSync(outputPath)) {
@@ -68,6 +69,37 @@ async function runTests() {
       }
     } else {
       console.log('\n⚠️ startMonitorRecording not found.')
+    }
+
+    // Test: Window Recording API
+    if (typeof velocity.startWindowRecording === 'function' && windowTitle) {
+      console.log(`\n🎯 Testing Window Recording API (capturing: "${windowTitle}")...`)
+      const outputPath = 'tests/test_window_recording.mp4'
+      if (fs.existsSync(outputPath)) {
+        fs.unlinkSync(outputPath)
+      }
+
+      const bitrate = 50000000
+      const stopper = velocity.startWindowRecording(windowTitle, outputPath, bitrate)
+      console.log('   ✅ Window recording started! Waiting 3.5 seconds...')
+
+      await new Promise((resolve) => setTimeout(resolve, 3500))
+
+      console.log('   🛑 Sending STOP signal through IPC...')
+      stopper.stop()
+
+      await new Promise((resolve) => setTimeout(resolve, 500))
+
+      if (fs.existsSync(outputPath)) {
+        const stats = fs.statSync(outputPath)
+        console.log(`   ✅ Window video saved successfully! Size: ${(stats.size / 1024 / 1024).toFixed(2)} MB`)
+      } else {
+        console.log('   ❌ Window video file was not found where expected!')
+      }
+    } else if (!windowTitle) {
+      console.log('\n⚠️ Skipping window recording test — no windows found.')
+    } else {
+      console.log('\n⚠️ startWindowRecording not found.')
     }
   } catch (error) {
     console.error('\n❌ Error occurred during execution:', error)

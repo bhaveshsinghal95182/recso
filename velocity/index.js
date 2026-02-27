@@ -580,3 +580,4 @@ module.exports.Stopper = nativeBinding.Stopper
 module.exports.isCursorSettingsSupported = nativeBinding.isCursorSettingsSupported
 module.exports.listAvailableWindows = nativeBinding.listAvailableWindows
 module.exports.startMonitorRecording = nativeBinding.startMonitorRecording
+module.exports.startWindowRecording = nativeBinding.startWindowRecording

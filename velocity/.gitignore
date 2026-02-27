@@ -129,4 +129,5 @@ Cargo.lock
 !.yarn/versions
 /npm
 
-tests/test_recording.mp4
+tests/*.mp4
+build_output.json
