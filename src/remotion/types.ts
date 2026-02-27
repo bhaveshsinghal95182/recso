@@ -49,6 +49,20 @@ export interface CompositionZoomRegion {
   focalKeyframes?: CompositionFocalKeyframe[];
 }
 
+/** Precomputed cursor position for a single Remotion frame */
+export interface PrecomputedCursorFrame {
+  /** X position in canvas-space pixels */
+  x: number;
+  /** Y position in canvas-space pixels */
+  y: number;
+  /** Scale factor (1.0 = normal, dips on click for "blip") */
+  scale: number;
+  /** Opacity (0-1) */
+  opacity: number;
+  /** Whether this frame is during a click event */
+  isClick: boolean;
+}
+
 /** A region to cut (exclude) from the final video */
 export interface CompositionCutRegion {
   id: string;
@@ -98,4 +112,10 @@ export interface RemotionInputProps {
 
   /** Original source video duration in ms (before cuts) */
   sourceDurationMs?: number;
+
+  /** Precomputed cursor data (one entry per frame, indexed by frame number) */
+  cursorFrames?: PrecomputedCursorFrame[];
+
+  /** Base cursor size multiplier from user config (default: 1.0) */
+  cursorSizeMultiplier?: number;
 }

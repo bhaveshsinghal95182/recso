@@ -28,6 +28,8 @@ import type { RemotionRenderProgress, RemotionRenderResult } from '../types/remo
 import { ensureChromeBrowser } from './chrome-resolver.service.js';
 import * as compositorService from './compositor.service.js';
 import * as ffmpegService from './ffmpeg.service.js';
+import { mouseTrackerService } from './mouse-tracker.service.js';
+import { precomputeCursorFrames } from './precompute-cursor.js';
 
 /**
  * Cache for bundled composition.
@@ -456,6 +458,49 @@ export async function renderWithRemotion(
     });
 
     // ========================================================
+    // Step 5.5: Precompute cursor data (if available)
+    // ========================================================
+    // This runs once before the render starts. For a 10-minute video
+    // at 60fps (36,000 frames) this takes <50ms — just a single pass
+    // over the sorted events array with binary search interpolation.
+    const sourceDurationMs = videoDuration * 1000;
+    let cursorFrames: ReturnType<typeof precomputeCursorFrames> | undefined;
+    let cursorSizeMultiplier: number | undefined;
+
+    if (project.recordingId) {
+      try {
+        const mouseEvents = mouseTrackerService.getEventsForRecording(project.recordingId);
+        if (mouseEvents.length > 0) {
+          const precomputeStart = Date.now();
+          cursorFrames = precomputeCursorFrames(mouseEvents, {
+            fps: renderFps,
+            totalFrames: durationInFrames,
+            videoDimensions: project.videoDimensions,
+            canvasDimensions,
+            layout,
+            sourceDurationMs,
+            cuts: cuts.length > 0 ? cuts : undefined,
+            blipDurationFrames: 8,
+            blipMinScale: 1.0 - (project.cursorConfig?.clickAnimationScale ?? 0.3),
+          });
+          cursorSizeMultiplier = project.cursorConfig?.size ?? 1.0;
+          const precomputeTime = Date.now() - precomputeStart;
+          console.log(
+            `[RemotionRenderer] Precomputed ${cursorFrames.length} cursor frames from ${mouseEvents.length} events in ${precomputeTime}ms`,
+          );
+        } else {
+          console.log(
+            '[RemotionRenderer] No mouse events found for recording:',
+            project.recordingId,
+          );
+        }
+      } catch (err) {
+        console.warn('[RemotionRenderer] Failed to precompute cursor data:', err);
+        // Non-fatal — render will proceed without cursor overlay
+      }
+    }
+
+    // ========================================================
     // Step 6: Link video file to bundle (for staticFile access)
     // ========================================================
     // Link the video into the bundle's public dir so Remotion's compositor
@@ -499,8 +544,6 @@ export async function renderWithRemotion(
       endMs: cut.endMs,
     }));
 
-    const sourceDurationMs = videoDuration * 1000;
-
     const inputProps = {
       videoSrc: videoFileName, // Relative name for staticFile()
       backgroundColor: config.backgroundColor,
@@ -512,6 +555,8 @@ export async function renderWithRemotion(
       zoomRegions,
       cuts: compositionCuts,
       sourceDurationMs,
+      // Cursor overlay data (Velocity recordings only)
+      ...(cursorFrames && { cursorFrames, cursorSizeMultiplier }),
     };
 
     console.log('[RemotionRenderer] Input props prepared');

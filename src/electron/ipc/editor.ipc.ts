@@ -12,10 +12,22 @@ import { ipcMain } from 'electron';
 
 import * as editorService from '../services/editor.service.js';
 import { mouseTrackerService } from '../services/mouse-tracker.service.js';
+import {
+  precomputeCursorFrames,
+  type PrecomputedCursorFrame,
+} from '../services/precompute-cursor.js';
 import * as projectStorage from '../services/project-storage.service.js';
 import type { CutRegion } from '../types/cut.types.js';
 import type { CursorConfig, ZoomConfig } from '../types/project.types.js';
 import type { ZoomRegion } from '../types/zoom.types.js';
+
+// Cache for precomputed cursor data to avoid recomputation
+let cursorCache: {
+  recordingId: string;
+  fps: number;
+  totalFrames: number;
+  frames: PrecomputedCursorFrame[];
+} | null = null;
 
 /**
  * Register all editor IPC handlers
@@ -162,6 +174,72 @@ export function registerEditorHandlers(): void {
     if (!project) return [];
     return mouseTrackerService.getEventsForRecording(project.recordingId);
   });
+
+  // Get precomputed cursor frames for the preview player
+  ipcMain.handle(
+    'editor:get-precomputed-cursor',
+    async (
+      _event,
+      options: {
+        fps: number;
+        totalFrames: number;
+        canvasWidth: number;
+        canvasHeight: number;
+        layout: { x: number; y: number; width: number; height: number; scale: number };
+      },
+    ) => {
+      const project = editorService.getActiveProject();
+      if (!project) return null;
+
+      // Check cache
+      if (
+        cursorCache &&
+        cursorCache.recordingId === project.recordingId &&
+        cursorCache.fps === options.fps &&
+        cursorCache.totalFrames === options.totalFrames
+      ) {
+        return {
+          frames: cursorCache.frames,
+          sizeMultiplier: project.cursorConfig?.size ?? 1.0,
+        };
+      }
+
+      const events = mouseTrackerService.getEventsForRecording(project.recordingId);
+      if (events.length === 0) return null;
+
+      const sourceDurationMs = project.timeline?.duration || 0;
+      const cuts = project.cuts || [];
+
+      const frames = precomputeCursorFrames(events, {
+        fps: options.fps,
+        totalFrames: options.totalFrames,
+        videoDimensions: project.videoDimensions,
+        canvasDimensions: { width: options.canvasWidth, height: options.canvasHeight },
+        layout: options.layout,
+        sourceDurationMs,
+        cuts: cuts.length > 0 ? cuts : undefined,
+        blipDurationFrames: 8,
+        blipMinScale: 1.0 - (project.cursorConfig?.clickAnimationScale ?? 0.3),
+      });
+
+      // Cache the result
+      cursorCache = {
+        recordingId: project.recordingId,
+        fps: options.fps,
+        totalFrames: options.totalFrames,
+        frames,
+      };
+
+      console.log(
+        `[EditorIPC] Precomputed ${frames.length} cursor frames from ${events.length} events`,
+      );
+
+      return {
+        frames,
+        sizeMultiplier: project.cursorConfig?.size ?? 1.0,
+      };
+    },
+  );
 
   console.log('[EditorIPC] Handlers registered');
 }

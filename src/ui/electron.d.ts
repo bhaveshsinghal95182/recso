@@ -221,6 +221,18 @@ interface ElectronAPI {
 
     /** Get mouse events for the active project's recording */
     getMouseEvents: () => Promise<RecordedMouseEvent[]>;
+
+    /** Get precomputed cursor frames for preview player */
+    getPrecomputedCursor: (options: {
+      fps: number;
+      totalFrames: number;
+      canvasWidth: number;
+      canvasHeight: number;
+      layout: { x: number; y: number; width: number; height: number; scale: number };
+    }) => Promise<{
+      frames: Array<{ x: number; y: number; scale: number; opacity: number; isClick: boolean }>;
+      sizeMultiplier: number;
+    } | null>;
   };
 
   background: {
@@ -290,6 +302,7 @@ interface ElectronAPI {
       bitrate: number,
     ) => Promise<StartRecordingResult>;
     stopRecording: (recordingId: string) => Promise<StopRecordingResult>;
+    getMouseEvents: (recordingId: string) => Promise<any[]>;
   };
 }
 

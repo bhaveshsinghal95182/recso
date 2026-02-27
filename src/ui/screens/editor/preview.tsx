@@ -1,13 +1,13 @@
 import { Player, type PlayerRef } from '@remotion/player';
 import { Pause, Play } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { usePlaybackStore } from '@/store/playback-store';
 import { useProjectStore } from '@/store/project-store';
 import { useTimelineStore } from '@/store/timeline-store';
 
 import { MainComposition } from '../../../remotion/Composition';
-import type { RemotionInputProps } from '../../../remotion/types';
+import type { PrecomputedCursorFrame, RemotionInputProps } from '../../../remotion/types';
 import { FocalPointOverlay } from './focal-point-overlay';
 import { VerticalTabs } from './vertical-tabs';
 
@@ -26,6 +26,10 @@ export function MinimalPreview() {
   const { isPlaying, currentTime, play, pause, tick, setDuration } = usePlaybackStore();
 
   const playerRef = useRef<PlayerRef>(null);
+
+  // Cursor overlay state
+  const [cursorFrames, setCursorFrames] = useState<PrecomputedCursorFrame[] | null>(null);
+  const [cursorSizeMultiplier, setCursorSizeMultiplier] = useState(1.0);
 
   // Calculate composition dimensions from project
   const canvasWidth = 1920;
@@ -80,12 +84,50 @@ export function MinimalPreview() {
     }
   }, [durationMs, setDuration]);
 
+  // Fetch precomputed cursor data when project loads
+  useEffect(() => {
+    if (!project?.recordingId || durationInFrames <= 1) {
+      setCursorFrames(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    window.electron.editor
+      .getPrecomputedCursor({
+        fps: PREVIEW_FPS,
+        totalFrames: durationInFrames,
+        canvasWidth,
+        canvasHeight,
+        layout,
+      })
+      .then((result) => {
+        if (cancelled) return;
+        if (result) {
+          setCursorFrames(result.frames);
+          setCursorSizeMultiplier(result.sizeMultiplier);
+        } else {
+          setCursorFrames(null);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.warn('[Preview] Failed to load cursor data:', err);
+          setCursorFrames(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [project?.recordingId, durationInFrames, layout, canvasWidth, canvasHeight]);
+
   // Build input props for the composition
   const inputProps: RemotionInputProps = useMemo(() => {
     const videoPath = project?.rawVideoPath?.replace(/\\/g, '/') || '';
     const videoSrc = videoPath ? `file:///${videoPath}` : '';
 
-    const props = {
+    const props: RemotionInputProps = {
       videoSrc,
       backgroundColor: project?.backgroundColor || '#000000',
       backgroundPath: project?.backgroundPath,
@@ -103,10 +145,12 @@ export function MinimalPreview() {
         easeDurationMs: z.easeDurationMs,
         focalKeyframes: z.focalKeyframes,
       })),
+      // Cursor overlay data (Velocity recordings only)
+      ...(cursorFrames && { cursorFrames, cursorSizeMultiplier }),
     };
 
     return props;
-  }, [project, layout, canvasWidth, canvasHeight, zoomRegions]);
+  }, [project, layout, canvasWidth, canvasHeight, zoomRegions, cursorFrames, cursorSizeMultiplier]);
 
   // Sync: Playback Store → Player (only when NOT playing, i.e. user scrubs timeline)
   // During playback, the Player is the source of truth — we don't seek from the store.

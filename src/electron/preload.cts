@@ -93,6 +93,8 @@ electron.contextBridge.exposeInMainWorld('electron', {
       electron.ipcRenderer.invoke('velocity:start-window-recording', windowTitle, config, bitrate),
     stopRecording: (recordingId: string) =>
       electron.ipcRenderer.invoke('velocity:stop-recording', recordingId),
+    getMouseEvents: (recordingId: string) =>
+      electron.ipcRenderer.invoke('velocity:get-mouse-events', recordingId),
   },
 
   // Compositor
@@ -249,6 +251,18 @@ electron.contextBridge.exposeInMainWorld('electron', {
         button?: 'left' | 'right' | 'middle';
       }[]
     > => electron.ipcRenderer.invoke('editor:get-mouse-events'),
+
+    /** Get precomputed cursor frames for the preview player */
+    getPrecomputedCursor: (options: {
+      fps: number;
+      totalFrames: number;
+      canvasWidth: number;
+      canvasHeight: number;
+      layout: { x: number; y: number; width: number; height: number; scale: number };
+    }): Promise<{
+      frames: Array<{ x: number; y: number; scale: number; opacity: number; isClick: boolean }>;
+      sizeMultiplier: number;
+    } | null> => electron.ipcRenderer.invoke('editor:get-precomputed-cursor', options),
   },
 
   // Background configuration
