@@ -102,7 +102,10 @@ export function registerRecorderHandlers(): void {
     const result = await dialog.showSaveDialog({
       title: 'Save Recording',
       defaultPath: path.join(app.getPath('videos'), defaultName),
-      filters: [{ name: 'WebM Video', extensions: ['webm'] }],
+      filters: [
+        { name: 'MP4 Video', extensions: ['mp4'] },
+        { name: 'MKV Video', extensions: ['mkv'] },
+      ],
     });
 
     if (result.canceled || !result.filePath) {

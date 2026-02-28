@@ -146,7 +146,7 @@ export async function startExport(config: ExportConfig): Promise<ExportResult> {
 
   // Generate output filename with timestamp
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const ext = config.format === 'mp4' ? 'mp4' : 'webm';
+  const ext = 'mp4';
   // Use custom filename if provided, else project name
   let baseNameRaw = config.outputFilename || project.name || 'export';
   // Remove existing extension if any
@@ -739,25 +739,6 @@ async function getOutputSettingsArgs(config: ExportConfig): Promise<string[]> {
 
     // AAC audio - increase bitrate for better quality
     args.push('-c:a', 'aac', '-b:a', '192k');
-  } else {
-    // VP9 video (CPU only, no hardware encoders widely available)
-    const quality = config.quality === 'lossless' ? 'good' : 'good'; // 'best' is too slow
-    args.push(
-      '-c:v',
-      'libvpx-vp9',
-      '-crf',
-      crf.toString(),
-      '-b:v',
-      '0',
-      '-deadline',
-      quality,
-      '-cpu-used',
-      '1', // 0-5, lower = better quality but slower
-      '-pix_fmt',
-      'yuv420p',
-    );
-    // Opus audio - increase bitrate
-    args.push('-c:a', 'libopus', '-b:a', '192k');
   }
 
   return args;

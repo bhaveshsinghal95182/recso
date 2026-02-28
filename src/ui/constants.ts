@@ -8,8 +8,6 @@ export const quality = [
 export const formats = [
   { value: 'video/webm;codecs=h264', label: 'MKV (H.264)', extension: 'mkv' },
   { value: 'video/mp4;codecs=avc1', label: 'MP4 (H.264)', extension: 'mp4' },
-  { value: 'video/webm;codecs=h264', label: 'WebM (H.264)', extension: 'webm' },
-  { value: 'video/webm;codecs=vp9', label: 'WebM (VP9)', extension: 'webm' },
 ] as const;
 
 export const GROUP_THRESHOLD_MS = 3000; // Max time between clicks to consider them part of the same action

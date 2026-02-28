@@ -3,7 +3,7 @@
  *
  * Features:
  * - Resolution selection (720p, 1080p, 4K, Custom)
- * - Format selection (MP4, WebM)
+ * - Format selection (MP4)
  * - Quality presets (Low, Medium, High, Lossless)
  * - FPS selection (24, 30, 60)
  * - Real-time progress tracking
@@ -51,7 +51,6 @@ const RESOLUTION_OPTIONS: { value: ExportResolution; label: string }[] = [
 
 const FORMAT_OPTIONS: { value: ExportFormat; label: string }[] = [
   { value: 'mp4', label: 'MP4 (H.264)' },
-  { value: 'webm', label: 'WebM (VP9)' },
 ];
 
 const QUALITY_OPTIONS: { value: ExportQuality; label: string }[] = [

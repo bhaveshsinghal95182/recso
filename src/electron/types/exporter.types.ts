@@ -7,7 +7,7 @@
 export type ExportResolution = '720p' | '1080p' | '4k' | 'custom';
 
 /** Supported output formats */
-export type ExportFormat = 'mp4' | 'webm';
+export type ExportFormat = 'mp4';
 
 /** Quality presets */
 export type ExportQuality = 'low' | 'medium' | 'high' | 'lossless';
@@ -62,7 +62,7 @@ export interface ExportConfig {
   customWidth?: number;
   /** Custom height (only used when resolution is 'custom') */
   customHeight?: number;
-  /** Output format (mp4 or webm) */
+  /** Output format */
   format: ExportFormat;
   /** Quality preset */
   quality: ExportQuality;

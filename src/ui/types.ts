@@ -51,8 +51,8 @@ export interface RecordingConfig {
   sourceId: string;
   outputDir: string;
   fileName: string;
-  /** File extension without dot (e.g., 'mp4', 'webm'). Defaults to 'webm' */
-  fileExtension?: 'mp4' | 'webm' | 'mkv';
+  /** File extension without dot (e.g., 'mp4'). Defaults to 'mp4' */
+  fileExtension?: 'mp4' | 'mkv';
   options?: RecordingOptions;
 }
 
@@ -220,7 +220,7 @@ export interface FrameState {
 export type ExportResolution = '720p' | '1080p' | '4k' | 'custom';
 
 /** Supported output formats */
-export type ExportFormat = 'mp4' | 'webm';
+export type ExportFormat = 'mp4';
 
 /** Quality presets */
 export type ExportQuality = 'low' | 'medium' | 'high' | 'lossless';
@@ -246,7 +246,7 @@ export interface ExportConfig {
   customWidth?: number;
   /** Custom height (only used when resolution is 'custom') */
   customHeight?: number;
-  /** Output format (mp4 or webm) */
+  /** Output format */
   format: ExportFormat;
   /** Quality preset */
   quality: ExportQuality;

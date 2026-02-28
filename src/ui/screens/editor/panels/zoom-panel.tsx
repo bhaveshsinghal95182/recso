@@ -112,7 +112,13 @@ export function ZoomPanel() {
     try {
       // 1. Fetch ALL mouse events (moves + clicks)
       const allEvents = await window.electron.editor.getMouseEvents();
-      const videoDuration = project.timeline.duration;
+
+      // Get video duration — fall back to max event timestamp if duration is 0
+      // (WebM files written via streaming MediaRecorder often have duration=0 in metadata)
+      let videoDuration = project.timeline.duration;
+      if (videoDuration <= 0 && allEvents.length > 0) {
+        videoDuration = Math.max(...allEvents.map((e) => e.timestampMs)) + 5000;
+      }
 
       // Filter to moves within video duration
       const moves = allEvents
@@ -166,8 +172,12 @@ export function ZoomPanel() {
       // Fetch mouse events from backend
       const events = await window.electron.editor.getMouseEvents();
 
-      // Get video duration to filter out clicks past the end
-      const videoDuration = project.timeline.duration;
+      // Get video duration — fall back to max event timestamp if duration is 0
+      // (WebM files written via streaming MediaRecorder often have duration=0 in metadata)
+      let videoDuration = project.timeline.duration;
+      if (videoDuration <= 0 && events.length > 0) {
+        videoDuration = Math.max(...events.map((e) => e.timestampMs)) + 5000;
+      }
 
       // Filter for clicks only, exclude clicks past video duration, and sort by time
       const clicks = events

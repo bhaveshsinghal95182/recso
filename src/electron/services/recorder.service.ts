@@ -1,7 +1,7 @@
 /**
  * RecorderService — quick overview:
  * - Enumerates sources.
- * - Manages a single streaming `.webm` recording lifecycle (start, append, pause, resume, stop) and moves final files to the chosen output.
+ * - Manages a single streaming recording lifecycle (start, append, pause, resume, stop) and moves final files to the chosen output.
  * - Integrates with DB for metadata and provides a temp-path recovery helper.
  */
 
@@ -33,7 +33,7 @@ interface ActiveRecording {
   tempPath: string;
   outputDir: string;
   fileName: string;
-  fileExtension: 'mp4' | 'webm' | 'mkv';
+  fileExtension: 'mp4' | 'mkv';
   writeStream: fs.WriteStream;
   state: RecordingState;
   startedAt: number;
@@ -71,7 +71,7 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
 
   try {
     const recordingId = randomUUID();
-    const fileExt = config.fileExtension || 'webm';
+    const fileExt = config.fileExtension || 'mp4';
     const tempDir = path.join(app.getPath('temp'), 'recso');
     const tempPath = path.join(tempDir, `rec_${recordingId}.${fileExt}`);
 
@@ -219,18 +219,13 @@ export async function stopRecording(recordingId: string): Promise<StopRecordingR
     const finalPath = path.join(recordingFolderPath, `${folderName}${ext}`);
 
     // Move temp file to final location
-    // If it's MKV or MP4, we remux to fix metadata (like duration)
-    // Otherwise we just rename
-    if (activeRecording.fileExtension === 'mkv' || activeRecording.fileExtension === 'mp4') {
-      console.log('[RecorderService] Remuxing to fix metadata...');
-      const ffmpegService = await import('./ffmpeg.service.js');
-      await ffmpegService.remuxVideo(activeRecording.tempPath, finalPath);
+    // Remux to fix metadata (duration, seek tables, etc.)
+    console.log('[RecorderService] Remuxing to fix metadata...');
+    const ffmpegService = await import('./ffmpeg.service.js');
+    await ffmpegService.remuxVideo(activeRecording.tempPath, finalPath);
 
-      // Clean up temp file
-      fs.unlinkSync(activeRecording.tempPath);
-    } else {
-      fs.renameSync(activeRecording.tempPath, finalPath);
-    }
+    // Clean up temp file
+    fs.unlinkSync(activeRecording.tempPath);
 
     // Update database
     completeRecording(recordingId, finalPath);
