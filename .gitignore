@@ -25,3 +25,5 @@ resources/chrome
 *.njsproj
 *.sln
 *.sw?
+
+*.appx

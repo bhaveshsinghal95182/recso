@@ -1,5 +1,12 @@
 import { app, BrowserWindow, screen } from 'electron';
 
+// APPX/MSIX Store apps launch with cwd = C:\WINDOWS\system32 (read-only).
+// Remotion resolves its .remotion cache relative to process.cwd().
+// Redirect to writable userData folder before anything else runs.
+if (app.isPackaged) {
+  process.chdir(app.getPath('userData'));
+}
+
 import path from 'path';
 
 import { initializeWithWindow, registerAllIpcHandlers } from './ipc/index.js';
