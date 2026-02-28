@@ -306,8 +306,31 @@ export async function renderWithRemotion(
       console.log('[RemotionRenderer] Checking for pre-bundled assets at:', preBundledPath);
 
       if (fs.existsSync(preBundledPath)) {
-        console.log('[RemotionRenderer] Using pre-bundled Remotion composition');
-        bundleCache = preBundledPath;
+        // In APPX/MSIX, the resources folder is strictly read-only.
+        // We need to link/copy the user's video into the bundle's 'public' folder,
+        // so we need a WRITABLE copy of the bundle.
+        //
+        // Performance optimization: Copy once to a persistent location in userData
+        // and reuse it across renders (bundleCache persists across renders).
+        if (!bundleCache) {
+          const writableBundlePath = path.join(app.getPath('userData'), '.remotion-bundle');
+
+          // Only copy if the writable bundle doesn't exist yet
+          if (!fs.existsSync(writableBundlePath)) {
+            console.log('[RemotionRenderer] First render: copying bundle to writable location...');
+            fs.cpSync(preBundledPath, writableBundlePath, { recursive: true });
+            console.log('[RemotionRenderer] Bundle copied to:', writableBundlePath);
+          } else {
+            console.log(
+              '[RemotionRenderer] Using existing writable bundle at:',
+              writableBundlePath,
+            );
+          }
+
+          bundleCache = writableBundlePath;
+        } else {
+          console.log('[RemotionRenderer] Using cached writable bundle');
+        }
 
         // Configure Remotion to use unpacked binaries from app.asar.unpacked
         // The path structure is: resources-path/app.asar.unpacked/node_modules/@remotion/compositor-win32-x64-msvc
@@ -323,7 +346,6 @@ export async function renderWithRemotion(
         binariesDirectory = unpackedBinariesDir;
       } else {
         console.error('[RemotionRenderer] pre-bundled assets NOT FOUND at:', preBundledPath);
-        // Fallback or throw error? For now, throw error as we expect it to be there
         throw new Error(`Remotion bundle not found in resources: ${preBundledPath}`);
       }
     } else {

@@ -99,10 +99,10 @@ function sanitizeErrorMessage(raw: string): string {
 
   // If the cleaned message is very long (likely a stack trace leaked), use generic
   if (cleaned.length > 150) {
-    return 'Export failed unexpectedly. Please try again.';
+    return `Export failed unexpectedly. Raw Error: ${raw.substring(0, 100)}...`;
   }
 
-  return cleaned || 'Export failed unexpectedly. Please try again.';
+  return cleaned || `Export failed unexpectedly: ${raw}`;
 }
 
 /**
