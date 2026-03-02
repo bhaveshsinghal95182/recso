@@ -12,6 +12,7 @@ import path from 'path';
 import { initializeWithWindow, registerAllIpcHandlers } from './ipc/index.js';
 import { initializeDatabase } from './services/database.service.js';
 import { preWarm as preWarmRemotion } from './services/remotion-renderer.service.js';
+import { initializeTelemetry } from './services/telemetry/telemetry.service.js';
 import { createTray } from './services/tray.service.js';
 import { getPreloadPath } from './path-resolver.js';
 import { isDevelopment } from './util.js';
@@ -19,6 +20,9 @@ import { isDevelopment } from './util.js';
 app.on('ready', () => {
   // Initialize database first (for crash-safe recording metadata)
   initializeDatabase();
+
+  // Initialize telemetry (support ID + error handlers)
+  initializeTelemetry();
 
   // Register all IPC handlers before creating window
   registerAllIpcHandlers();

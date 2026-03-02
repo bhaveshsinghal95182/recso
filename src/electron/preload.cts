@@ -297,6 +297,20 @@ electron.contextBridge.exposeInMainWorld('electron', {
   debug: {
     getMouseStatus: () => electron.ipcRenderer.invoke('debug:get-mouse-status'),
   },
+
+  // Telemetry & Support
+  telemetry: {
+    /** Get the persistent hardware-based support ID for this device */
+    getSupportId: (): Promise<string> => electron.ipcRenderer.invoke('telemetry:get-support-id'),
+
+    /** Send an error report from the renderer to the main process */
+    logError: (error: {
+      message: string;
+      stack?: string;
+      componentStack?: string;
+      source?: string;
+    }): void => electron.ipcRenderer.send('telemetry:log-error', error),
+  },
 });
 
 // Helper to create a subscription that returns an unsubscribe function

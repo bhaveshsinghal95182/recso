@@ -6,6 +6,7 @@ import { registerDebugHandlers } from './debug.ipc.js';
 import { registerEditorHandlers } from './editor.ipc.js';
 import { registerExporterHandlers } from './exporter.ipc.js';
 import { registerRecorderHandlers, setRecorderMainWindow } from './recorder.ipc.js';
+import { registerTelemetryHandlers } from './telemetry.ipc.js';
 import { registerWindowEvents, registerWindowHandlers, setMainWindowRef } from './window.ipc.js';
 
 export function registerAllIpcHandlers() {
@@ -16,6 +17,7 @@ export function registerAllIpcHandlers() {
   registerEditorHandlers();
   registerBackgroundHandlers();
   registerExporterHandlers();
+  registerTelemetryHandlers();
 }
 
 export function initializeWithWindow(mainWindow: BrowserWindow) {

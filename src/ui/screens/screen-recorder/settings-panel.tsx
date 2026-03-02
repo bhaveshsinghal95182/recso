@@ -1,4 +1,4 @@
-import { ChevronDown, FolderOpen, Settings } from 'lucide-react';
+import { Check, ChevronDown, Copy, FolderOpen, Settings } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -33,6 +33,8 @@ export function SettingsPanel({
 }: SettingsPanelProps) {
   const [isValid, setIsValid] = useState(true);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [supportId, setSupportId] = useState<string>('');
+  const [copied, setCopied] = useState(false);
 
   // Validate output path on change
   useEffect(() => {
@@ -43,11 +45,23 @@ export function SettingsPanel({
     if (outputDir) validate();
   }, [outputDir]);
 
+  // Fetch support ID on mount
+  useEffect(() => {
+    window.electron.telemetry.getSupportId().then(setSupportId).catch(console.error);
+  }, []);
+
   const handleBrowse = async () => {
     const selectedPath = await window.electron.recorder.showOpenDialog();
     if (selectedPath) {
       onOutputDirChange(selectedPath);
     }
+  };
+
+  const handleCopySupportId = async () => {
+    if (!supportId) return;
+    await navigator.clipboard.writeText(supportId);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   return (
@@ -116,6 +130,31 @@ export function SettingsPanel({
             </div>
           </div>
         </div>
+
+        {/* Support ID */}
+        {supportId && (
+          <div className="pt-3 border-t border-border/50">
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <p className="text-xs text-muted-foreground">Support ID</p>
+                <code className="text-xs font-mono text-foreground/80">{supportId}</code>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                onClick={handleCopySupportId}
+                title="Copy Support ID"
+              >
+                {copied ? (
+                  <Check className="h-3.5 w-3.5 text-green-500" />
+                ) : (
+                  <Copy className="h-3.5 w-3.5" />
+                )}
+              </Button>
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

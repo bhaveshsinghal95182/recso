@@ -275,6 +275,19 @@ interface ElectronAPI {
     /** Subscribe to progress updates */
     onProgress: (callback: (progress: ExportProgress) => void) => () => void;
   };
+
+  telemetry: {
+    /** Get the persistent hardware-based support ID for this device */
+    getSupportId: () => Promise<string>;
+
+    /** Send an error report from the renderer to the main process */
+    logError: (error: {
+      message: string;
+      stack?: string;
+      componentStack?: string;
+      source?: string;
+    }) => void;
+  };
 }
 
 declare global {
