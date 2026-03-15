@@ -132,7 +132,7 @@ export function SettingsPanel({
         </div>
 
         {/* Support ID */}
-        {supportId && (
+        {/* {supportId && (
           <div className="pt-3 border-t border-border/50">
             <div className="flex items-center justify-between">
               <div className="space-y-0.5">
@@ -154,7 +154,7 @@ export function SettingsPanel({
               </Button>
             </div>
           </div>
-        )}
+        )} */}
       </CardContent>
     </Card>
   );

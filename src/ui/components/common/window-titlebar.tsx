@@ -50,7 +50,7 @@ export const WindowTitlebar = () => {
       </div>
       <div className="nav-buttons flex items-center gap-1.5 app-region-no-drag">
         {/* Support ID Button */}
-        {supportId && (
+        {/* {supportId && (
           <Tooltip delayDuration={300}>
             <TooltipTrigger asChild>
               <Button
@@ -73,7 +73,7 @@ export const WindowTitlebar = () => {
               {copied ? 'Copied!' : `Support ID: ${supportId} (Click to copy)`}
             </TooltipContent>
           </Tooltip>
-        )}
+        )} */}
 
         <Button
           variant="ghost"
