@@ -1,22 +1,21 @@
-import { Check, Copy, Headset, Square, X } from 'lucide-react';
+import { Copy, Square, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
 import Minimize24Regular from '../icons/minimize';
 
 export const WindowTitlebar = () => {
   const [isMaximized, setIsMaximized] = useState(false);
-  const [supportId, setSupportId] = useState<string>('');
-  const [copied, setCopied] = useState(false);
+  // const [supportId, setSupportId] = useState<string>('');
+  // const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     // Get initial state
     window.electron.window.isMaximized().then(setIsMaximized);
 
     // Fetch Support ID
-    window.electron.telemetry.getSupportId().then(setSupportId).catch(console.error);
+    // window.electron.telemetry.getSupportId().then(setSupportId).catch(console.error);
 
     // Subscribe to changes
     const unsubscribe = window.electron.window.onMaximizeChange(setIsMaximized);
@@ -35,12 +34,12 @@ export const WindowTitlebar = () => {
     window.electron.window.maximize();
   };
 
-  const handleCopySupportId = async () => {
-    if (!supportId) return;
-    await navigator.clipboard.writeText(supportId);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+  // const handleCopySupportId = async () => {
+  //   if (!supportId) return;
+  //   await navigator.clipboard.writeText(supportId);
+  //   setCopied(true);
+  //   setTimeout(() => setCopied(false), 2000);
+  // };
 
   return (
     <nav className="flex items-center justify-between px-4 py-2 bg-linear-to-b from-gray-900/90 to-gray-800/90 backdrop-blur-md border-b border-white/10 shadow-lg select-none z-50 app-region-drag">

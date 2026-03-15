@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Copy, FolderOpen, Settings } from 'lucide-react';
+import { ChevronDown, FolderOpen, Settings } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -33,8 +33,8 @@ export function SettingsPanel({
 }: SettingsPanelProps) {
   const [isValid, setIsValid] = useState(true);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [supportId, setSupportId] = useState<string>('');
-  const [copied, setCopied] = useState(false);
+  // const [supportId, setSupportId] = useState<string>('');
+  // const [copied, setCopied] = useState(false);
 
   // Validate output path on change
   useEffect(() => {
@@ -46,9 +46,9 @@ export function SettingsPanel({
   }, [outputDir]);
 
   // Fetch support ID on mount
-  useEffect(() => {
-    window.electron.telemetry.getSupportId().then(setSupportId).catch(console.error);
-  }, []);
+  // useEffect(() => {
+  // window.electron.telemetry.getSupportId().then(setSupportId).catch(console.error);
+  // }, []);
 
   const handleBrowse = async () => {
     const selectedPath = await window.electron.recorder.showOpenDialog();
@@ -57,12 +57,12 @@ export function SettingsPanel({
     }
   };
 
-  const handleCopySupportId = async () => {
-    if (!supportId) return;
-    await navigator.clipboard.writeText(supportId);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+  // const handleCopySupportId = async () => {
+  //   if (!supportId) return;
+  //   await navigator.clipboard.writeText(supportId);
+  //   setCopied(true);
+  //   setTimeout(() => setCopied(false), 2000);
+  // };
 
   return (
     <Card className="border-0 shadow-none bg-transparent p-0">
