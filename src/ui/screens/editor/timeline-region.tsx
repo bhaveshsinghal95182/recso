@@ -11,6 +11,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { usePlaybackStore } from '@/store/playback-store';
+
 export type RegionVariant = 'cut' | 'zoom';
 
 export interface BaseRegion {
@@ -77,6 +79,7 @@ export function TimelineRegion<T extends BaseRegion>({
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState<'left' | 'right' | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { isPlaying, pause } = usePlaybackStore();
 
   // Sync with prop when not interacting
   useEffect(() => {
@@ -118,6 +121,10 @@ export function TimelineRegion<T extends BaseRegion>({
 
       const parent = containerRef.current?.parentElement;
       if (!parent) return;
+
+      if (isPlaying) {
+        pause();
+      }
 
       const startX = e.clientX;
       const rect = parent.getBoundingClientRect();

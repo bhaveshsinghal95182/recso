@@ -27,3 +27,7 @@ resources/chrome
 *.sw?
 
 *.appx
+*/tests/*
+*/target/*
+*/*.lock
+*/*.node
