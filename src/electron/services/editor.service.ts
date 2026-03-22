@@ -53,6 +53,19 @@ export async function createProject(recordingId: string): Promise<Project | null
     return null;
   }
 
+  // Check if a project already exists for this recording — if so, load it
+  // instead of creating a new one (preserves zoom regions, cuts, backgrounds)
+  const recordingDir = path.dirname(recording.finalPath);
+  if (projectStorage.projectExists(recordingDir)) {
+    console.log('[EditorService] Found existing project, loading...');
+    const existingProject = loadProject(recordingDir);
+    if (existingProject) {
+      return existingProject;
+    }
+    // If loading fails, fall through to create a new project
+    console.warn('[EditorService] Failed to load existing project, creating new one');
+  }
+
   // Probe video for metadata
   await ffmpegService.ensureInitialized();
   let metadata;
@@ -66,7 +79,6 @@ export async function createProject(recordingId: string): Promise<Project | null
   }
 
   // Get the recording directory and init .recso folder
-  const recordingDir = path.dirname(recording.finalPath);
   const projectFolderPath = projectStorage.initProjectFolder(recordingDir);
 
   // Try to load existing spritesheet metadata
