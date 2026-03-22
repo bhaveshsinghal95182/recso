@@ -83,11 +83,6 @@ export interface RemotionInputProps {
    */
   backgroundPattern?: BackgroundPatternConfig;
 
-  /** Native source video width in pixels */
-  sourceWidth: number;
-  /** Native source video height in pixels */
-  sourceHeight: number;
-
   /** Pre-calculated layout for video positioning on canvas */
   layout: CompositionLayout;
 
