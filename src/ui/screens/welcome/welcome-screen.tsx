@@ -1,9 +1,43 @@
+import { AnimatePresence, motion } from 'motion/react';
+import { useEffect, useState } from 'react';
+
+import type { RecentProject } from '@/electron.d.ts';
+
 interface WelcomeScreenProps {
   onNewRecording: () => void;
   onOpenProject: () => void;
+  onOpenRecentProject: (path: string) => void;
 }
 
-export function WelcomeScreen({ onNewRecording, onOpenProject }: WelcomeScreenProps) {
+export function WelcomeScreen({
+  onNewRecording,
+  onOpenProject,
+  onOpenRecentProject,
+}: WelcomeScreenProps) {
+  const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
+
+  useEffect(() => {
+    window.electron.recentProjects.getAll(20).then(setRecentProjects);
+  }, []);
+
+  const handleRemove = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    await window.electron.recentProjects.remove(id);
+    setRecentProjects((prev) => prev.filter((p) => p.id !== id));
+  };
+
+  const formatRelativeTime = (timeMs: number) => {
+    const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+    const diffMs = timeMs - Date.now();
+    const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+    const diffHours = Math.round(diffMs / (1000 * 60 * 60));
+    const diffMinutes = Math.round(diffMs / (1000 * 60));
+
+    if (Math.abs(diffDays) > 0) return rtf.format(diffDays, 'day');
+    if (Math.abs(diffHours) > 0) return rtf.format(diffHours, 'hour');
+    if (Math.abs(diffMinutes) > 0) return rtf.format(diffMinutes, 'minute');
+    return 'just now';
+  };
   return (
     <div className="flex-1 flex flex-col items-center justify-center select-none relative overflow-hidden bg-background">
       {/* Background Half-Circle Gradient */}
@@ -76,6 +110,57 @@ export function WelcomeScreen({ onNewRecording, onOpenProject }: WelcomeScreenPr
           </div>
         </button>
       </div>
+
+      {recentProjects.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.4, duration: 0.8, ease: 'easeOut' }}
+          className="mt-16 w-full max-w-2xl mx-auto z-10"
+        >
+          <h2 className="text-[10px] font-semibold text-muted-foreground/30 uppercase tracking-[0.3em] mb-4 text-center select-none">
+            Recent Projects
+          </h2>
+          <div className="flex flex-col gap-1 max-h-[280px] overflow-y-auto overflow-x-hidden pr-2 transition-colors">
+            <AnimatePresence mode="popLayout">
+              {recentProjects.map((project, i) => (
+                <motion.button
+                  layout
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, filter: 'blur(4px)' }}
+                  transition={{ duration: 0.3, delay: i * 0.05 }}
+                  key={project.id}
+                  onClick={() => onOpenRecentProject(project.path)}
+                  className="group relative w-full flex items-center justify-between p-4 rounded-xl bg-transparent hover:bg-white/3 border border-transparent hover:border-white/4 transition-all duration-300 text-left hover:translate-x-1 cursor-pointer focus:outline-none"
+                >
+                  <div className="flex flex-col gap-1 min-w-0 pr-8">
+                    <span className="font-medium text-foreground/80 group-hover:text-foreground transition-colors truncate">
+                      {project.name}
+                    </span>
+                    <span className="text-[11px] font-mono text-muted-foreground/40 group-hover:text-muted-foreground/60 transition-colors truncate max-w-[400px]">
+                      {project.path}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-4 shrink-0">
+                    <span className="text-xs font-light tabular-nums text-muted-foreground/40 group-hover:text-muted-foreground/70 transition-colors">
+                      {formatRelativeTime(project.openedAt)}
+                    </span>
+                    <button
+                      onClick={(e) => handleRemove(e, project.id)}
+                      className="opacity-0 group-hover:opacity-100 p-1.5 rounded-full hover:bg-white/10 text-muted-foreground hover:text-foreground transition-all duration-200 cursor-pointer focus:outline-none"
+                      title="Remove from recent"
+                    >
+                      <span className="text-xs leading-none">✕</span>
+                    </button>
+                  </div>
+                </motion.button>
+              ))}
+            </AnimatePresence>
+          </div>
+        </motion.div>
+      )}
     </div>
   );
 }

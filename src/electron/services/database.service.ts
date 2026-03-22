@@ -72,6 +72,19 @@ export function initializeDatabase(): void {
     CREATE INDEX IF NOT EXISTS idx_mouse_recording ON mouse_events(recording_id, timestamp_ms)
   `);
 
+  // Create recent_projects table for welcome screen history
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS recent_projects (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      path TEXT NOT NULL UNIQUE,
+      recording_id TEXT NOT NULL,
+      thumbnail TEXT,
+      opened_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    )
+  `);
+
   console.log('[DatabaseService] Initialized at:', dbPath);
 }
 

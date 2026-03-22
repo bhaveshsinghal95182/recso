@@ -31,6 +31,7 @@ import { getRecording } from './database.service.js';
 import * as ffmpegService from './ffmpeg.service.js';
 import { type MouseEvent, mouseTrackerService } from './mouse-tracker.service.js';
 import * as projectStorage from './project-storage.service.js';
+import { upsertRecentProject } from './recent-projects.service.js';
 
 // Active project (only one at a time)
 let activeProject: Project | null = null;
@@ -112,6 +113,14 @@ export async function createProject(recordingId: string): Promise<Project | null
   // Load click events
   loadClickEvents(recordingId);
 
+  // Track in recent projects
+  upsertRecentProject({
+    id: project.id,
+    name: project.name,
+    path: recordingDir,
+    recordingId,
+  });
+
   return project;
 }
 
@@ -137,6 +146,14 @@ export function loadProject(recordingDir: string): Project | null {
 
     // Load click events
     loadClickEvents(project.recordingId);
+
+    // Track in recent projects
+    upsertRecentProject({
+      id: project.id,
+      name: project.name,
+      path: recordingDir,
+      recordingId: project.recordingId,
+    });
 
     console.log('[EditorService] Loaded project:', project.id);
     return project;

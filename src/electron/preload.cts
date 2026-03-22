@@ -311,6 +311,18 @@ electron.contextBridge.exposeInMainWorld('electron', {
       source?: string;
     }): void => electron.ipcRenderer.send('telemetry:log-error', error),
   },
+
+  // Recent Projects
+  recentProjects: {
+    getAll: (limit?: number): Promise<unknown[]> =>
+      electron.ipcRenderer.invoke('recent-projects:get', limit),
+
+    remove: (id: string): Promise<boolean> =>
+      electron.ipcRenderer.invoke('recent-projects:remove', id),
+
+    clear: (): Promise<boolean> =>
+      electron.ipcRenderer.invoke('recent-projects:clear'),
+  },
 });
 
 // Helper to create a subscription that returns an unsubscribe function

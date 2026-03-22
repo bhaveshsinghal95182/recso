@@ -27,6 +27,16 @@ export interface RecordingStateEvent {
   bytesWritten: number;
 }
 
+export interface RecentProject {
+  id: string;
+  name: string;
+  path: string;
+  recordingId: string;
+  thumbnail: string | null;
+  openedAt: number;
+  createdAt: number;
+}
+
 interface ElectronAPI {
   window: {
     close: () => void;
@@ -287,6 +297,17 @@ interface ElectronAPI {
       componentStack?: string;
       source?: string;
     }) => void;
+  };
+
+  recentProjects: {
+    /** Get the most recently opened projects */
+    getAll: (limit?: number) => Promise<RecentProject[]>;
+
+    /** Remove a recent project entry by ID */
+    remove: (id: string) => Promise<boolean>;
+
+    /** Clear all recent projects */
+    clear: () => Promise<boolean>;
   };
 }
 

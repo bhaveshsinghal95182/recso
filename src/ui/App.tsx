@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { toast } from 'sonner';
 
 import { ExportProgressToast } from '@/components/export-progress-toast';
 import { Toaster } from '@/components/ui/sonner';
@@ -57,11 +58,32 @@ function App() {
     }
   };
 
+  // Handle opening a recent project bypasses the file dialog
+  const handleOpenRecentProject = async (path: string) => {
+    try {
+      const project = await window.electron.editor.loadProject(path);
+      if (project) {
+        setState({ screen: 'editor', recordingId: project.recordingId });
+      } else {
+        toast.error('Project not found', {
+          description: 'The folder might have been moved or deleted.',
+        });
+      }
+    } catch (error) {
+      console.error('Error opening recent project:', error);
+      toast.error('Failed to open project');
+    }
+  };
+
   switch (state.screen) {
     case 'welcome':
       return (
         <RootLayout>
-          <WelcomeScreen onNewRecording={goToRecorder} onOpenProject={handleOpenProject} />
+          <WelcomeScreen
+            onNewRecording={goToRecorder}
+            onOpenProject={handleOpenProject}
+            onOpenRecentProject={handleOpenRecentProject}
+          />
           <Toaster />
           <ExportProgressToast />
         </RootLayout>
@@ -72,7 +94,11 @@ function App() {
         // Fallback if no recordingId
         return (
           <RootLayout>
-            <WelcomeScreen onNewRecording={goToRecorder} onOpenProject={handleOpenProject} />
+            <WelcomeScreen
+              onNewRecording={goToRecorder}
+              onOpenProject={handleOpenProject}
+              onOpenRecentProject={handleOpenRecentProject}
+            />
             <Toaster />
             <ExportProgressToast />
           </RootLayout>
