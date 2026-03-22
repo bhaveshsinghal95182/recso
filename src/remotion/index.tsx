@@ -30,6 +30,8 @@ function RemotionRoot() {
             project: {},
             config: {},
             layout: {},
+            sourceWidth: 1920,
+            sourceHeight: 1080,
             canvasWidth: 1920,
             canvasHeight: 1080,
           } as unknown as RemotionInputProps

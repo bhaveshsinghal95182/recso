@@ -528,6 +528,8 @@ export async function renderWithRemotion(
       backgroundColor: config.backgroundColor,
       backgroundPath: compositorService.getBackground(),
       backgroundPattern: project.backgroundPattern,
+      sourceWidth: project.videoDimensions.width,
+      sourceHeight: project.videoDimensions.height,
       layout,
       canvasWidth: canvasDimensions.width,
       canvasHeight: canvasDimensions.height,
