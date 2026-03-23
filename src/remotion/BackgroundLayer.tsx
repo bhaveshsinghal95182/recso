@@ -1,5 +1,5 @@
 import React from 'react';
-import { Img } from 'remotion';
+import { Img, staticFile } from 'remotion';
 
 import type { RemotionInputProps } from './types.js';
 
@@ -14,9 +14,23 @@ import type { RemotionInputProps } from './types.js';
 export const BackgroundLayer: React.FC<RemotionInputProps> = React.memo(
   ({ backgroundPath, backgroundColor, backgroundPattern, canvasWidth, canvasHeight }) => {
     if (backgroundPath) {
+      // If it's an absolute path from the project file, use file:// protocol.
+      // If it's a relative path from the remotion renderer's linkVideoToBundle, use staticFile()
+      const isAbsolute =
+        backgroundPath.startsWith('file:') ||
+        backgroundPath.includes(':/') ||
+        backgroundPath.includes(':\\') ||
+        backgroundPath.startsWith('/');
+
+      const resolvedSrc = isAbsolute
+        ? backgroundPath.startsWith('file:')
+          ? backgroundPath
+          : `file://${backgroundPath}`
+        : staticFile(backgroundPath);
+
       return (
         <Img
-          src={backgroundPath}
+          src={resolvedSrc}
           style={{
             width: canvasWidth,
             height: canvasHeight,

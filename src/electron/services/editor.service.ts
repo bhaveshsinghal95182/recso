@@ -144,6 +144,14 @@ export function loadProject(recordingDir: string): Project | null {
 
     activeProject = project;
 
+    // Sync compositor state
+    try {
+      CompositorService.setBackgroundColor(project.backgroundColor);
+      CompositorService.setBackground(project.backgroundPath || null);
+    } catch (err) {
+      console.warn('[EditorService] Failed to sync compositor state on load:', err);
+    }
+
     // Load click events
     loadClickEvents(project.recordingId);
 
@@ -239,6 +247,26 @@ export function updateBackgroundPattern(pattern: BackgroundPatternConfig | null)
 
   activeProject.backgroundPattern = pattern;
   activeProject.modifiedAt = Date.now();
+
+  // Auto-save metadata
+  projectStorage.saveProjectMetadata(activeProject);
+  return true;
+}
+
+/**
+ * Update project background image path
+ */
+export function updateBackgroundPath(imagePath: string | null): boolean {
+  if (!activeProject) return false;
+
+  activeProject.backgroundPath = imagePath ?? undefined;
+  activeProject.modifiedAt = Date.now();
+
+  try {
+    CompositorService.setBackground(imagePath);
+  } catch (err) {
+    console.warn('[EditorService] Failed to update compositor background path:', err);
+  }
 
   // Auto-save metadata
   projectStorage.saveProjectMetadata(activeProject);

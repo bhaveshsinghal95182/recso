@@ -48,14 +48,29 @@ export function registerBackgroundHandlers(): void {
   );
 
   /**
+   * Update background image path for the active project
+   * Accepts: absolute path string or null to clear
+   */
+  ipcMain.handle('background:update-path', async (_event, imagePath: string | null) => {
+    try {
+      const result = editorService.updateBackgroundPath(imagePath);
+      return { success: result, path: imagePath };
+    } catch (err) {
+      console.error('[BackgroundIPC] updateBackgroundPath error:', err);
+      throw err;
+    }
+  });
+
+  /**
    * Get current background configuration for the active project
    */
   ipcMain.handle('background:get-config', async () => {
     const project = editorService.getActiveProject();
     if (!project) {
-      return { backgroundColor: '#ffffff', backgroundPattern: null };
+      return { backgroundPath: null, backgroundColor: '#ffffff', backgroundPattern: null };
     }
     return {
+      backgroundPath: project.backgroundPath || null,
       backgroundColor: project.backgroundColor,
       backgroundPattern: project.backgroundPattern,
     };

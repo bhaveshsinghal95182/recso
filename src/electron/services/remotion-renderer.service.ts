@@ -282,6 +282,7 @@ export async function renderWithRemotion(
 
   const tempOutputPath = path.join(tempDir, 'output.mp4');
   let linkedVideoPath: string | null = null;
+  let linkedBgPath: string | null = null;
   let binariesDirectory: string | null = null;
 
   try {
@@ -478,7 +479,7 @@ export async function renderWithRemotion(
     });
 
     // ========================================================
-    // Step 6: Link video file to bundle (for staticFile access)
+    // Step 6: Link video & background files to bundle (for staticFile access)
     // ========================================================
     // Link the video into the bundle's public dir so Remotion's compositor
     // can access it via the built-in HTTP server (http://localhost:PORT/public/...).
@@ -498,6 +499,17 @@ export async function renderWithRemotion(
 
     console.log('[RemotionRenderer] Linking video to bundle public dir...');
     linkedVideoPath = linkVideoToBundle(project.rawVideoPath, bundlePublicDir, videoFileName);
+
+    linkedBgPath = null;
+    let finalBgPath = project.backgroundPath || null;
+
+    if (finalBgPath) {
+      const bgExt = path.extname(finalBgPath);
+      const bgFileName = `bg-${runId}${bgExt}`;
+      console.log('[RemotionRenderer] Linking background image to bundle public dir...');
+      linkedBgPath = linkVideoToBundle(finalBgPath, bundlePublicDir, bgFileName);
+      finalBgPath = bgFileName; // Relative name for staticFile()
+    }
 
     // ========================================================
     // Step 7: Prepare input props for composition
@@ -526,7 +538,7 @@ export async function renderWithRemotion(
     const inputProps = {
       videoSrc: videoFileName, // Relative name for staticFile()
       backgroundColor: config.backgroundColor,
-      backgroundPath: compositorService.getBackground(),
+      backgroundPath: finalBgPath,
       backgroundPattern: project.backgroundPattern,
       layout,
       canvasWidth: canvasDimensions.width,
@@ -539,7 +551,7 @@ export async function renderWithRemotion(
     console.log('[RemotionRenderer] Input props prepared');
     console.log('[RemotionRenderer] Video source:', videoFileName);
     console.log('[RemotionRenderer] Background color:', config.backgroundColor);
-    console.log('[RemotionRenderer] Background path:', compositorService.getBackground());
+    console.log('[RemotionRenderer] Background path:', finalBgPath);
     console.log('[RemotionRenderer] Background pattern:', project.backgroundPattern?.id || 'none');
 
     // ========================================================
@@ -711,6 +723,11 @@ export async function renderWithRemotion(
       console.log('[RemotionRenderer] Cleaned up linked video file');
     }
 
+    if (linkedBgPath && fs.existsSync(linkedBgPath)) {
+      fs.unlinkSync(linkedBgPath);
+      console.log('[RemotionRenderer] Cleaned up linked background file');
+    }
+
     return {
       success: true,
       outputPath: tempOutputPath,
@@ -727,6 +744,15 @@ export async function renderWithRemotion(
         console.log('[RemotionRenderer] Cleaned up linked video file after error');
       } catch (cleanupError) {
         console.warn('[RemotionRenderer] Failed to cleanup linked video:', cleanupError);
+      }
+    }
+
+    if (linkedBgPath && fs.existsSync(linkedBgPath)) {
+      try {
+        fs.unlinkSync(linkedBgPath);
+        console.log('[RemotionRenderer] Cleaned up linked background file after error');
+      } catch (cleanupError) {
+        console.warn('[RemotionRenderer] Failed to cleanup linked background:', cleanupError);
       }
     }
 

@@ -241,6 +241,10 @@ electron.contextBridge.exposeInMainWorld('electron', {
     /** Update background color for the active project */
     updateColor: (color: string) => electron.ipcRenderer.invoke('background:update-color', color),
 
+    /** Update background image path for the active project */
+    updatePath: (imagePath: string | null) =>
+      electron.ipcRenderer.invoke('background:update-path', imagePath),
+
     /** Update background pattern for the active project */
     updatePattern: (pattern: Record<string, unknown> | null) =>
       electron.ipcRenderer.invoke('background:update-pattern', pattern),

@@ -19,6 +19,7 @@ interface ProjectState {
   updateCursorConfig: (config: Partial<CursorConfig>) => Promise<void>;
   updateZoomConfig: (config: Partial<ZoomConfig>) => Promise<void>;
   updateBackgroundColor: (color: string) => void;
+  updateBackgroundPath: (path: string | null) => void;
   updateBackgroundPattern: (pattern: BackgroundPatternConfig | null) => void;
   updateDuration: (durationMs: number) => Promise<void>;
 
@@ -148,6 +149,22 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }));
 
     debouncedUpdateBackgroundColor(color);
+  },
+
+  updateBackgroundPath: (path: string | null) => {
+    const { project } = get();
+    if (!project) return;
+
+    // Optimistic update
+    set((state) => ({
+      project: state.project
+        ? { ...state.project, backgroundPath: path === null ? undefined : path }
+        : null,
+    }));
+
+    window.electron.background.updatePath(path).catch((err) => {
+      console.warn('[ProjectStore] updateBackgroundPath error:', err);
+    });
   },
 
   updateBackgroundPattern: (pattern: BackgroundPatternConfig | null) => {

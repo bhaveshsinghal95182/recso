@@ -1,4 +1,4 @@
-import { RefreshCcw } from 'lucide-react';
+import { ImagePlus, RefreshCcw } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useState } from 'react';
 
@@ -39,7 +39,8 @@ function hslToHex(h: number, s: number, l: number) {
 }
 
 export function GeneralPanel() {
-  const { project, updateBackgroundColor, updateBackgroundPattern } = useProjectStore();
+  const { project, updateBackgroundColor, updateBackgroundPattern, updateBackgroundPath } =
+    useProjectStore();
   const [presetColors, setPresetColors] = useState<string[]>(PASTEL_COLORS);
 
   if (!project) return null;
@@ -147,6 +148,55 @@ export function GeneralPanel() {
                       />
                     ))}
                   </motion.div>
+                </div>
+
+                {/* 2.5. Custom Image */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label>Custom Image</Label>
+                    {project.backgroundPath && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 px-2 text-[10px] text-destructive hover:text-destructive hover:bg-destructive/10"
+                        onClick={() => updateBackgroundPath(null)}
+                      >
+                        Remove
+                      </Button>
+                    )}
+                  </div>
+
+                  {project.backgroundPath ? (
+                    <div
+                      className="relative w-full aspect-video rounded-md border border-border/50 overflow-hidden group cursor-pointer transition-all hover:border-primary/50"
+                      onClick={async () => {
+                        const path = await window.electron.compositor.showBackgroundPicker();
+                        if (path) updateBackgroundPath(path);
+                      }}
+                    >
+                      <img
+                        src={`file://${project.backgroundPath}`}
+                        alt="Custom background"
+                        className="w-full h-full object-cover"
+                      />
+                      <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-all duration-200">
+                        <span className="text-white text-xs font-medium">Change Image</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div
+                      className="w-full h-24 rounded-md border border-dashed border-border/60 hover:border-primary/50 flex flex-col items-center justify-center gap-2 cursor-pointer transition-colors bg-muted/10 hover:bg-muted/30"
+                      onClick={async () => {
+                        const path = await window.electron.compositor.showBackgroundPicker();
+                        if (path) updateBackgroundPath(path);
+                      }}
+                    >
+                      <ImagePlus className="w-5 h-5 text-muted-foreground/70" />
+                      <span className="text-[11px] text-muted-foreground font-medium">
+                        Click to upload image
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 {/* 3. Paginated Background Patterns */}

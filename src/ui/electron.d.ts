@@ -236,6 +236,9 @@ interface ElectronAPI {
     /** Update background color for the active project */
     updateColor: (color: string) => Promise<{ success: boolean; color: string }>;
 
+    /** Update background path for the active project */
+    updatePath: (path: string | null) => Promise<{ success: boolean; path: string | null }>;
+
     /** Update background pattern for the active project */
     updatePattern: (
       pattern: BackgroundPatternConfig | null,
@@ -243,6 +246,7 @@ interface ElectronAPI {
 
     /** Get current background configuration */
     getConfig: () => Promise<{
+      backgroundPath: string | null;
       backgroundColor: string;
       backgroundPattern: BackgroundPatternConfig | null;
     }>;
