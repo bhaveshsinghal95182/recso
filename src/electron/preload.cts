@@ -18,6 +18,77 @@ interface OrphanedRecording {
   fileSize: number;
 }
 
+type RendererLogLevel = 'error' | 'warn' | 'info' | 'debug';
+
+function toSerializableValue(value: unknown): unknown {
+  if (value instanceof Error) {
+    return {
+      name: value.name,
+      message: value.message,
+      stack: value.stack,
+    };
+  }
+
+  if (typeof value === 'bigint') {
+    return value.toString();
+  }
+
+  if (typeof value === 'function') {
+    return '[Function]';
+  }
+
+  if (typeof value === 'symbol') {
+    return value.toString();
+  }
+
+  if (value && typeof value === 'object') {
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch {
+      return String(value);
+    }
+  }
+
+  return value;
+}
+
+function writeRendererLog(level: RendererLogLevel, ...args: unknown[]): void {
+  electron.ipcRenderer.send('logging:write', level, ...args.map(toSerializableValue));
+}
+
+const originalRendererConsole = {
+  log: console.log.bind(console),
+  info: console.info.bind(console),
+  warn: console.warn.bind(console),
+  error: console.error.bind(console),
+  debug: console.debug.bind(console),
+};
+
+console.log = (...args: unknown[]): void => {
+  writeRendererLog('info', ...args);
+  originalRendererConsole.log(...args);
+};
+
+console.info = (...args: unknown[]): void => {
+  writeRendererLog('info', ...args);
+  originalRendererConsole.info(...args);
+};
+
+console.warn = (...args: unknown[]): void => {
+  writeRendererLog('warn', ...args);
+  originalRendererConsole.warn(...args);
+};
+
+console.error = (...args: unknown[]): void => {
+  writeRendererLog('error', ...args);
+  originalRendererConsole.error(...args);
+};
+
+console.debug = (...args: unknown[]): void => {
+  writeRendererLog('debug', ...args);
+  originalRendererConsole.debug(...args);
+};
+
 electron.contextBridge.exposeInMainWorld('electron', {
   // Window controls
   window: {
@@ -324,8 +395,15 @@ electron.contextBridge.exposeInMainWorld('electron', {
     remove: (id: string): Promise<boolean> =>
       electron.ipcRenderer.invoke('recent-projects:remove', id),
 
-    clear: (): Promise<boolean> =>
-      electron.ipcRenderer.invoke('recent-projects:clear'),
+    clear: (): Promise<boolean> => electron.ipcRenderer.invoke('recent-projects:clear'),
+  },
+
+  // Logging
+  logging: {
+    info: (...args: unknown[]): void => writeRendererLog('info', ...args),
+    warn: (...args: unknown[]): void => writeRendererLog('warn', ...args),
+    error: (...args: unknown[]): void => writeRendererLog('error', ...args),
+    debug: (...args: unknown[]): void => writeRendererLog('debug', ...args),
   },
 });
 

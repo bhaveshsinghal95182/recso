@@ -14,10 +14,13 @@ import { initializeDatabase } from './services/database.service.js';
 import { preWarm as preWarmRemotion } from './services/remotion-renderer.service.js';
 import { initializeTelemetry } from './services/telemetry/telemetry.service.js';
 import { createTray } from './services/tray.service.js';
+import { initializeLogging } from './utils/logger.js';
 import { getPreloadPath } from './path-resolver.js';
 import { isDevelopment } from './util.js';
 
 app.on('ready', () => {
+  initializeLogging({ mirrorConsole: isDevelopment() });
+
   // Initialize database first (for crash-safe recording metadata)
   initializeDatabase();
 

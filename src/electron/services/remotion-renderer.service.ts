@@ -281,8 +281,7 @@ export async function renderWithRemotion(
   fs.mkdirSync(tempDir, { recursive: true });
 
   const tempOutputPath = path.join(tempDir, 'output.mp4');
-  let linkedVideoPath: string | null = null;
-  let linkedBgPath: string | null = null;
+  const linkedAssetPaths = new Set<string>();
   let binariesDirectory: string | null = null;
 
   try {
@@ -481,9 +480,9 @@ export async function renderWithRemotion(
     // ========================================================
     // Step 6: Link video & background files to bundle (for staticFile access)
     // ========================================================
-    // Link the video into the bundle's public dir so Remotion's compositor
-    // can access it via the built-in HTTP server (http://localhost:PORT/public/...).
-    // The compositor only supports http/https URLs — file:// is rejected.
+    // Link the assets to both bundle root and bundle/public.
+    // Depending on Remotion runtime mode, staticFile() may resolve to
+    // /asset.ext or /public/asset.ext. Writing to both avoids path mismatches.
     const videoExt = path.extname(project.rawVideoPath);
     const videoFileName = `video-${runId}${videoExt}`;
 
@@ -491,23 +490,39 @@ export async function renderWithRemotion(
       throw new Error('Bundle cache is null after bundling step');
     }
 
-    // staticFile() resolves to /public/filename, so we must put the file in a 'public' subdir
+    const bundleRootDir = bundleCache;
     const bundlePublicDir = path.join(bundleCache, 'public');
+    if (!fs.existsSync(bundleRootDir)) {
+      fs.mkdirSync(bundleRootDir, { recursive: true });
+    }
     if (!fs.existsSync(bundlePublicDir)) {
       fs.mkdirSync(bundlePublicDir, { recursive: true });
     }
 
-    console.log('[RemotionRenderer] Linking video to bundle public dir...');
-    linkedVideoPath = linkVideoToBundle(project.rawVideoPath, bundlePublicDir, videoFileName);
+    console.log('[RemotionRenderer] Linking video to bundle root/public dirs...');
+    const linkedVideoRootPath = linkVideoToBundle(
+      project.rawVideoPath,
+      bundleRootDir,
+      videoFileName,
+    );
+    const linkedVideoPublicPath = linkVideoToBundle(
+      project.rawVideoPath,
+      bundlePublicDir,
+      videoFileName,
+    );
+    linkedAssetPaths.add(linkedVideoRootPath);
+    linkedAssetPaths.add(linkedVideoPublicPath);
 
-    linkedBgPath = null;
     let finalBgPath = project.backgroundPath || null;
 
     if (finalBgPath) {
       const bgExt = path.extname(finalBgPath);
       const bgFileName = `bg-${runId}${bgExt}`;
-      console.log('[RemotionRenderer] Linking background image to bundle public dir...');
-      linkedBgPath = linkVideoToBundle(finalBgPath, bundlePublicDir, bgFileName);
+      console.log('[RemotionRenderer] Linking background image to bundle root/public dirs...');
+      const linkedBgRootPath = linkVideoToBundle(finalBgPath, bundleRootDir, bgFileName);
+      const linkedBgPublicPath = linkVideoToBundle(finalBgPath, bundlePublicDir, bgFileName);
+      linkedAssetPaths.add(linkedBgRootPath);
+      linkedAssetPaths.add(linkedBgPublicPath);
       finalBgPath = bgFileName; // Relative name for staticFile()
     }
 
@@ -553,6 +568,13 @@ export async function renderWithRemotion(
     console.log('[RemotionRenderer] Background color:', config.backgroundColor);
     console.log('[RemotionRenderer] Background path:', finalBgPath);
     console.log('[RemotionRenderer] Background pattern:', project.backgroundPattern?.id || 'none');
+
+    // Validate linked assets before starting the render.
+    for (const linkedPath of linkedAssetPaths) {
+      if (!fs.existsSync(linkedPath)) {
+        throw new Error(`Linked asset missing before render: ${linkedPath}`);
+      }
+    }
 
     // ========================================================
     // Step 8: Build composition metadata directly (skip selectComposition)
@@ -717,16 +739,12 @@ export async function renderWithRemotion(
     console.log('[RemotionRenderer] Output file size:', Math.round(fileSize / 1024 / 1024), 'MB');
     console.log('[RemotionRenderer] ====== Render Success ======');
 
-    // Clean up linked video file
-    if (linkedVideoPath && fs.existsSync(linkedVideoPath)) {
-      fs.unlinkSync(linkedVideoPath);
-      console.log('[RemotionRenderer] Cleaned up linked video file');
+    for (const linkedPath of linkedAssetPaths) {
+      if (fs.existsSync(linkedPath)) {
+        fs.unlinkSync(linkedPath);
+      }
     }
-
-    if (linkedBgPath && fs.existsSync(linkedBgPath)) {
-      fs.unlinkSync(linkedBgPath);
-      console.log('[RemotionRenderer] Cleaned up linked background file');
-    }
+    console.log('[RemotionRenderer] Cleaned up linked render assets');
 
     return {
       success: true,
@@ -737,23 +755,21 @@ export async function renderWithRemotion(
   } catch (error) {
     console.error('[RemotionRenderer] Render failed:', error);
 
-    // Clean up linked video file on error
-    if (linkedVideoPath && fs.existsSync(linkedVideoPath)) {
-      try {
-        fs.unlinkSync(linkedVideoPath);
-        console.log('[RemotionRenderer] Cleaned up linked video file after error');
-      } catch (cleanupError) {
-        console.warn('[RemotionRenderer] Failed to cleanup linked video:', cleanupError);
+    for (const linkedPath of linkedAssetPaths) {
+      if (fs.existsSync(linkedPath)) {
+        try {
+          fs.unlinkSync(linkedPath);
+        } catch (cleanupError) {
+          console.warn(
+            '[RemotionRenderer] Failed to cleanup linked asset:',
+            linkedPath,
+            cleanupError,
+          );
+        }
       }
     }
-
-    if (linkedBgPath && fs.existsSync(linkedBgPath)) {
-      try {
-        fs.unlinkSync(linkedBgPath);
-        console.log('[RemotionRenderer] Cleaned up linked background file after error');
-      } catch (cleanupError) {
-        console.warn('[RemotionRenderer] Failed to cleanup linked background:', cleanupError);
-      }
+    if (linkedAssetPaths.size > 0) {
+      console.log('[RemotionRenderer] Cleaned up linked render assets after error');
     }
 
     // Clean up temp directory on error

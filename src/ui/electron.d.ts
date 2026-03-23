@@ -313,6 +313,13 @@ interface ElectronAPI {
     /** Clear all recent projects */
     clear: () => Promise<boolean>;
   };
+
+  logging: {
+    info: (...args: unknown[]) => void;
+    warn: (...args: unknown[]) => void;
+    error: (...args: unknown[]) => void;
+    debug: (...args: unknown[]) => void;
+  };
 }
 
 declare global {
