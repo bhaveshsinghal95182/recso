@@ -47,12 +47,21 @@ export function registerRecorderHandlers(): void {
     return result;
   });
 
-  // Append a video chunk
+  // Append a video chunk (legacy sequential append)
   ipcMain.handle(
     'recorder:append-chunk',
     async (_event, recordingId: string, chunk: ArrayBuffer) => {
       const buffer = Buffer.from(chunk);
       return RecorderService.appendChunk(recordingId, buffer);
+    },
+  );
+
+  // Write a chunk at a specific byte offset (mediabunny StreamTarget)
+  ipcMain.handle(
+    'recorder:write-chunk',
+    async (_event, recordingId: string, position: number, chunk: ArrayBuffer) => {
+      const buffer = Buffer.from(chunk);
+      return RecorderService.writeChunk(recordingId, position, buffer);
     },
   );
 

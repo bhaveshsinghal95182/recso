@@ -1,20 +1,23 @@
 /**
  * useScreenRecorder — quick overview:
- * - Manages screen capture in the renderer process using MediaRecorder API.
- * - Streams video chunks to main process for crash-safe disk writes.
+ * - Manages screen capture in the renderer process using mediabunny.
+ * - Uses StreamTarget to stream video chunks (with byte offsets) to main process for crash-safe disk writes.
  * - Provides start/stop/pause/resume controls and real-time state.
  *
  * Usage:
  *   const { sources, startRecording, stopRecording, state } = useScreenRecorder();
  */
 
+import type {
+  MediaStreamVideoTrackSource as MediaStreamVideoTrackSourceType,
+  Output as OutputType,
+  StreamTarget as StreamTargetType,
+} from 'mediabunny';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { DesktopSource, RecorderState } from '@/types';
 
 interface UseScreenRecorderOptions {
-  /** Chunk interval in ms (default: 1000) */
-  timeslice?: number;
   /** Video frame rate (default: 30) */
   frameRate?: number;
   /** Include system audio */
@@ -22,7 +25,7 @@ interface UseScreenRecorderOptions {
 }
 
 export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
-  const { timeslice = 1000, frameRate = 30, audio = false } = options;
+  const { frameRate = 30, audio = false } = options;
 
   const [sources, setSources] = useState<DesktopSource[]>([]);
   const [state, setState] = useState<RecorderState>({
@@ -33,7 +36,9 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
   });
   const [error, setError] = useState<string | null>(null);
 
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const outputRef = useRef<OutputType | null>(null);
+  const videoSourceRef = useRef<MediaStreamVideoTrackSourceType | null>(null);
+  const streamTargetRef = useRef<StreamTargetType | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   // Ref to track recording ID across async closures (e.g. track.onended)
   const recordingIdRef = useRef<string | null>(null);
@@ -65,8 +70,13 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
 
     // Initial source fetch
     refreshSources();
+    // Follow-up refresh helps when Windows/AppX source discovery arrives late.
+    const delayedRefresh = window.setTimeout(() => {
+      refreshSources();
+    }, 1200);
 
     return () => {
+      window.clearTimeout(delayedRefresh);
       unsubscribe();
       // Cleanup on unmount
       if (streamRef.current) {
@@ -85,16 +95,26 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
     isStoppingRef.current = true;
 
     try {
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-        // Request final data chunk before stopping
-        mediaRecorderRef.current.requestData();
-        mediaRecorderRef.current.stop();
+      // Finalize the mediabunny output (flushes remaining data, writes metadata)
+      if (outputRef.current && outputRef.current.state === 'started') {
+        try {
+          await outputRef.current.finalize();
+          console.log('[Recorder] mediabunny output finalized');
+        } catch (err) {
+          console.warn('[Recorder] output.finalize error:', err);
+        }
       }
 
+      // Stop media stream tracks
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
       }
+
+      // Clean up refs
+      outputRef.current = null;
+      videoSourceRef.current = null;
+      streamTargetRef.current = null;
 
       const recId = recordingIdRef.current;
       if (recId) {
@@ -126,11 +146,20 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
       outputDir: string,
       fileName: string,
       videoBitrate: number = 8000000,
-      mimeType: string = 'video/mp4;codecs=avc1',
+      _mimeType: string = 'video/mp4;codecs=avc1',
       fileExtension?: 'mp4' | 'mkv',
     ) => {
       try {
         setError(null);
+
+        // Dynamically import mediabunny (it's an ESM module)
+        const {
+          MediaStreamVideoTrackSource,
+          Output,
+          StreamTarget,
+          Mp4OutputFormat,
+          MkvOutputFormat,
+        } = await import('mediabunny');
 
         // Get media stream from the source
         const constraints: any = {
@@ -153,19 +182,12 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         streamRef.current = stream;
 
-        // Determine extension: prefer passed arg, otherwise derive, default to mp4
-        let extension: 'mp4' | 'mkv' = fileExtension || 'mp4';
-        if (!fileExtension) {
-          if (mimeType.includes('mp4') || mimeType.includes('avc1')) {
-            extension = 'mp4';
-          } else {
-            extension = 'mkv';
-          }
-        }
+        // Determine extension: prefer passed arg, default to mp4
+        const extension: 'mp4' | 'mkv' = fileExtension || 'mp4';
 
-        console.log(`[Recorder] Starting with mimeType: ${mimeType}, extension: ${extension}`);
+        console.log(`[Recorder] Starting with mediabunny, extension: ${extension}`);
 
-        // Start recording in main process
+        // Start recording in main process (creates the temp file)
         const result = await window.electron.recorder.start({
           sourceId,
           outputDir,
@@ -180,39 +202,69 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
         const recordingId = result.recordingId;
         recordingIdRef.current = recordingId;
 
-        // Create MediaRecorder
-        const mediaRecorder = new MediaRecorder(stream, {
-          mimeType,
-          videoBitsPerSecond: videoBitrate,
+        // Create a WritableStream that pipes chunks to the backend via IPC
+        const writable = new WritableStream<{ data: Uint8Array; position: number }>({
+          async write(chunk) {
+            const data = chunk.data;
+            // Ensure we only send the exact chunk window, not a larger backing buffer.
+            const exactChunk =
+              data.byteOffset === 0 && data.byteLength === data.buffer.byteLength
+                ? (data.buffer as ArrayBuffer)
+                : data.slice().buffer;
+
+            // Send data + byte offset to main process for random-access file write
+            await window.electron.recorder.writeChunk(recordingId, chunk.position, exactChunk);
+          },
         });
 
-        mediaRecorderRef.current = mediaRecorder;
+        // Create mediabunny StreamTarget with chunked mode for performance
+        const streamTarget = new StreamTarget(writable, {
+          chunked: true,
+          chunkSize: 2 ** 20, // 1 MiB chunks
+        });
+        streamTargetRef.current = streamTarget;
 
-        // Stream chunks to main process
-        mediaRecorder.ondataavailable = async (event) => {
-          if (event.data.size > 0) {
-            const arrayBuffer = await event.data.arrayBuffer();
-            await window.electron.recorder.appendChunk(recordingId, arrayBuffer);
-          }
-        };
+        // Choose the correct output format based on extension
+        const outputFormat =
+          extension === 'mkv'
+            ? new MkvOutputFormat()
+            : new Mp4OutputFormat({ fastStart: 'in-memory' });
 
-        mediaRecorder.onerror = () => {
-          setError('Recording error occurred');
-        };
+        // Create mediabunny Output
+        const output = new Output({
+          format: outputFormat,
+          target: streamTarget,
+        });
+        outputRef.current = output;
+
+        // Create video source from the media stream track
+        const videoTrack = stream.getVideoTracks()[0];
+        const videoTrackSource = new MediaStreamVideoTrackSource(videoTrack, {
+          codec: extension === 'mkv' ? 'vp9' : 'avc',
+          bitrate: videoBitrate,
+        });
+        videoSourceRef.current = videoTrackSource;
+
+        // Handle encoding errors
+        videoTrackSource.errorPromise.catch((err: Error) => {
+          console.error('[Recorder] MediaStreamVideoTrackSource error:', err);
+          setError(`Recording error: ${err.message}`);
+          stopRecordingInternal();
+        });
+
+        // Add video track to output
+        output.addVideoTrack(videoTrackSource, { frameRate });
 
         // Listen for the video track ending (e.g. user clicks "Stop Sharing")
-        const videoTrack = stream.getVideoTracks()[0];
-        if (videoTrack) {
-          videoTrack.onended = () => {
-            console.log(
-              '[Recorder] Video track ended (user clicked "Stop Sharing"), auto-stopping recording',
-            );
-            stopRecordingInternal();
-          };
-        }
+        videoTrack.onended = () => {
+          console.log(
+            '[Recorder] Video track ended (user clicked "Stop Sharing"), auto-stopping recording',
+          );
+          stopRecordingInternal();
+        };
 
-        // Start with timeslice for chunked recording
-        mediaRecorder.start(timeslice);
+        // Start the mediabunny output pipeline
+        await output.start();
 
         setState({
           status: 'recording',
@@ -228,7 +280,7 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
         return { success: false, error: message };
       }
     },
-    [audio, frameRate, timeslice, stopRecordingInternal],
+    [audio, frameRate, stopRecordingInternal],
   );
 
   // Stop recording (public API — delegates to internal helper)
@@ -238,21 +290,21 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
 
   // Pause recording
   const pauseRecording = useCallback(() => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-      mediaRecorderRef.current.pause();
-      if (state.recordingId) {
-        window.electron.recorder.pause(state.recordingId);
-      }
+    if (videoSourceRef.current) {
+      videoSourceRef.current.pause();
+    }
+    if (state.recordingId) {
+      window.electron.recorder.pause(state.recordingId);
     }
   }, [state.recordingId]);
 
   // Resume recording
   const resumeRecording = useCallback(() => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'paused') {
-      mediaRecorderRef.current.resume();
-      if (state.recordingId) {
-        window.electron.recorder.resume(state.recordingId);
-      }
+    if (videoSourceRef.current) {
+      videoSourceRef.current.resume();
+    }
+    if (state.recordingId) {
+      window.electron.recorder.resume(state.recordingId);
     }
   }, [state.recordingId]);
 

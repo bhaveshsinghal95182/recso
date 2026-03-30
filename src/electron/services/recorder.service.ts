@@ -1,11 +1,12 @@
 /**
  * RecorderService — quick overview:
  * - Enumerates sources.
- * - Manages a single streaming recording lifecycle (start, append, pause, resume, stop) and moves final files to the chosen output.
+ * - Manages a single streaming recording lifecycle (start, writeChunk, pause, resume, stop) and moves final files to the chosen output.
+ * - Uses raw file descriptors for random-access writes (required by mediabunny's StreamTarget).
  * - Integrates with DB for metadata and provides a temp-path recovery helper.
  */
 
-import { app, desktopCapturer } from 'electron';
+import { app, desktopCapturer, screen } from 'electron';
 
 import { randomUUID } from 'crypto';
 import fs from 'fs';
@@ -34,7 +35,8 @@ interface ActiveRecording {
   outputDir: string;
   fileName: string;
   fileExtension: 'mp4' | 'mkv';
-  writeStream: fs.WriteStream;
+  /** Raw file descriptor for random-access writes */
+  fd: number;
   state: RecordingState;
   startedAt: number;
   bytesWritten: number;
@@ -47,17 +49,51 @@ let activeRecording: ActiveRecording | null = null;
  * Get available desktop sources (screens and windows)
  */
 export async function getSources(): Promise<DesktopSource[]> {
-  const sources = await desktopCapturer.getSources({
-    types: ['screen', 'window'],
-    thumbnailSize: { width: 320, height: 180 },
-  });
+  const isPackagedWindows = process.platform === 'win32' && app.isPackaged;
+  const attemptCount = isPackagedWindows ? 3 : 1;
+  const displayById = new Map(
+    screen.getAllDisplays().map((display) => [String(display.id), display]),
+  );
+  const sourceById = new Map<string, DesktopSource>();
 
-  return sources.map((source) => ({
-    id: source.id,
-    name: source.name,
-    thumbnailDataUrl: source.thumbnail.toDataURL(),
-    isScreen: source.id.startsWith('screen:'),
-  }));
+  for (let attempt = 1; attempt <= attemptCount; attempt++) {
+    const batch = await desktopCapturer.getSources({
+      types: ['screen', 'window'],
+      thumbnailSize: { width: 320, height: 180 },
+      fetchWindowIcons: true,
+    });
+
+    for (const source of batch) {
+      const isScreen = source.id.startsWith('screen:');
+      const displayId = source.display_id ? String(source.display_id) : null;
+      const matchedDisplay = displayId ? displayById.get(displayId) : undefined;
+
+      sourceById.set(source.id, {
+        id: source.id,
+        name: source.name,
+        thumbnailDataUrl: source.thumbnail.toDataURL(),
+        isScreen,
+        width: matchedDisplay?.size.width,
+        height: matchedDisplay?.size.height,
+        isPrimary: matchedDisplay ? matchedDisplay.id === screen.getPrimaryDisplay().id : undefined,
+      });
+    }
+
+    if (isPackagedWindows) {
+      const screens = Array.from(sourceById.values()).filter((s) => s.isScreen).length;
+      const windows = sourceById.size - screens;
+      console.log(
+        `[RecorderService] getSources attempt ${attempt}/${attemptCount}: total=${sourceById.size}, screens=${screens}, windows=${windows}`,
+      );
+
+      // Sometimes AppX builds return incomplete snapshots on first call.
+      if (attempt < attemptCount) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+    }
+  }
+
+  return Array.from(sourceById.values());
 }
 
 /**
@@ -80,8 +116,9 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
       fs.mkdirSync(tempDir, { recursive: true });
     }
 
-    // Create write stream for streaming writes
-    const writeStream = fs.createWriteStream(tempPath, { flags: 'a' });
+    // Open a raw file descriptor for random-access writes.
+    // 'w' creates / truncates. We use fs.writeSync with offset later.
+    const fd = fs.openSync(tempPath, 'w');
 
     // Store in database
     createRecording({
@@ -103,7 +140,7 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
       outputDir: config.outputDir,
       fileName: config.fileName,
       fileExtension: fileExt,
-      writeStream,
+      fd,
       state: 'RECORDING' as RecordingState,
       startedAt: Date.now(),
       bytesWritten: 0,
@@ -126,8 +163,33 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
 }
 
 /**
- * Append a video chunk to the active recording
- * Called repeatedly from renderer as MediaRecorder produces data
+ * Write a chunk at a specific byte offset (random-access).
+ * Called repeatedly from renderer as mediabunny's StreamTarget produces data.
+ */
+export function writeChunk(recordingId: string, position: number, chunk: Buffer): boolean {
+  if (!activeRecording || activeRecording.id !== recordingId) {
+    console.warn('[RecorderService] No active recording for ID:', recordingId);
+    return false;
+  }
+
+  try {
+    fs.writeSync(activeRecording.fd, chunk, 0, chunk.length, position);
+
+    const newEnd = position + chunk.length;
+    if (newEnd > activeRecording.bytesWritten) {
+      activeRecording.bytesWritten = newEnd;
+    }
+
+    return true;
+  } catch (error) {
+    console.error('[RecorderService] Failed to write chunk:', error);
+    return false;
+  }
+}
+
+/**
+ * Append a video chunk to the active recording (legacy sequential append).
+ * Kept for backward compatibility / recovery scenarios.
  */
 export function appendChunk(recordingId: string, chunk: Buffer): boolean {
   if (!activeRecording || activeRecording.id !== recordingId) {
@@ -141,7 +203,8 @@ export function appendChunk(recordingId: string, chunk: Buffer): boolean {
   }
 
   try {
-    activeRecording.writeStream.write(chunk);
+    // Sequential append – write at the current end-of-file position
+    fs.writeSync(activeRecording.fd, chunk, 0, chunk.length, activeRecording.bytesWritten);
 
     const oldBytes = activeRecording.bytesWritten;
     activeRecording.bytesWritten += chunk.length;
@@ -166,7 +229,8 @@ export function appendChunk(recordingId: string, chunk: Buffer): boolean {
 }
 
 /**
- * Stop the active recording and finalize the file
+ * Stop the active recording and finalize the file.
+ * Since mediabunny produces a fully-muxed file, no ffmpeg remux is needed.
  */
 export async function stopRecording(recordingId: string): Promise<StopRecordingResult> {
   if (!activeRecording || activeRecording.id !== recordingId) {
@@ -174,13 +238,8 @@ export async function stopRecording(recordingId: string): Promise<StopRecordingR
   }
 
   try {
-    // Close the write stream
-    await new Promise<void>((resolve, reject) => {
-      activeRecording!.writeStream.end((err: Error | null) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
+    // Close the file descriptor
+    fs.closeSync(activeRecording.fd);
 
     // Check final file size
     const stats = fs.statSync(activeRecording.tempPath);
@@ -218,14 +277,10 @@ export async function stopRecording(recordingId: string): Promise<StopRecordingR
     const ext = `.${activeRecording.fileExtension}`;
     const finalPath = path.join(recordingFolderPath, `${folderName}${ext}`);
 
-    // Move temp file to final location
-    // Remux to fix metadata (duration, seek tables, etc.)
-    console.log('[RecorderService] Remuxing to fix metadata...');
-    const ffmpegService = await import('./ffmpeg.service.js');
-    await ffmpegService.remuxVideo(activeRecording.tempPath, finalPath);
-
-    // Clean up temp file
-    fs.unlinkSync(activeRecording.tempPath);
+    // Move temp file to final location.
+    // mediabunny already produces a fully-muxed file with correct metadata,
+    // so we can simply rename/copy — no ffmpeg remux needed.
+    fs.renameSync(activeRecording.tempPath, finalPath);
 
     // Update database
     completeRecording(recordingId, finalPath);

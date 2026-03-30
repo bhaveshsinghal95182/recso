@@ -1,7 +1,7 @@
 import { Loader2, Pause, Play, Square } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
-import { formatBytes, formatDuration } from '@/lib/utils';
+import { formatDuration } from '@/lib/utils';
 
 interface RecordingControlsProps {
   status: 'idle' | 'recording' | 'paused';
@@ -46,6 +46,8 @@ export function RecordingControls({
     );
   }
 
+  const recordedKb = Math.floor(bytesWritten / 1024);
+
   return (
     <div className="flex flex-col items-center gap-6 w-full max-w-md mx-auto p-6 bg-card rounded-xl border shadow-sm animate-in fade-in slide-in-from-bottom-4">
       {/* Timer Display */}
@@ -54,7 +56,7 @@ export function RecordingControls({
           {formatDuration(duration)}
         </div>
         <div className="text-xs text-muted-foreground font-mono">
-          Size: {formatBytes(bytesWritten)} • {status === 'paused' ? 'PAUSED' : 'REC'}
+          Size: {recordedKb.toLocaleString()} KB • {status === 'paused' ? 'PAUSED' : 'REC'}
         </div>
 
         {/* Recording Indicator */}

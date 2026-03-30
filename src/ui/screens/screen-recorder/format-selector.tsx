@@ -18,11 +18,11 @@ interface FormatItem {
 }
 
 export function FormatSelector({ value, onChange }: FormatSelectorProps) {
-  // Check browser support for formats
+  // All formats are supported via mediabunny (no MediaRecorder dependency)
   const supportedFormats = React.useMemo<FormatItem[]>(() => {
     return formats.map((f) => ({
       ...f,
-      supported: MediaRecorder.isTypeSupported(f.value),
+      supported: true,
     }));
   }, []);
 
