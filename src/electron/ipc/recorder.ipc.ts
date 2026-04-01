@@ -56,12 +56,12 @@ export function registerRecorderHandlers(): void {
     },
   );
 
-  // Write a chunk at a specific byte offset (mediabunny StreamTarget)
+  // Write a chunk at a specific byte offset to a specific stream (mediabunny StreamTarget)
   ipcMain.handle(
     'recorder:write-chunk',
-    async (_event, recordingId: string, position: number, chunk: ArrayBuffer) => {
+    async (_event, recordingId: string, streamId: string, position: number, chunk: ArrayBuffer) => {
       const buffer = Buffer.from(chunk);
-      return RecorderService.writeChunk(recordingId, position, buffer);
+      return RecorderService.writeChunk(recordingId, streamId, position, buffer);
     },
   );
 

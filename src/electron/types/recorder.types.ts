@@ -24,6 +24,14 @@ export interface RecordingConfig {
   fileName: string;
   /** File extension without dot (e.g., 'mp4'). Defaults to 'mp4' */
   fileExtension?: 'mp4' | 'mkv';
+  /** Whether to record from the camera as a separate file */
+  recordCamera?: boolean;
+  /** Whether to record microphone audio (embedded into video files) */
+  recordMic?: boolean;
+  /** Specific camera device ID (defaults to system default) */
+  cameraDeviceId?: string;
+  /** Specific microphone device ID (defaults to system default) */
+  micDeviceId?: string;
   options?: RecordingOptions;
 }
 

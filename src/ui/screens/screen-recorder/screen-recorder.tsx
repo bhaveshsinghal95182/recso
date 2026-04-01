@@ -5,6 +5,7 @@ import { Card } from '@/components/ui/card';
 import { formats } from '@/constants';
 import { useScreenRecorder } from '@/hooks/useScreenRecorder';
 
+import { CameraPreview } from './camera-preview';
 import Header from './header';
 import { RecordingControls } from './recording-controls';
 import { SettingsPanel } from './settings-panel';
@@ -35,6 +36,14 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
   const [format, setFormat] = useState<string>(formats[0].value);
   const [isStarting, setIsStarting] = useState(false);
 
+  // Add-on Devices State
+  const [recordMic, setRecordMic] = useState(false);
+  const [recordCamera, setRecordCamera] = useState(false);
+  const [cameraDeviceId, setCameraDeviceId] = useState<string | null>(null);
+  const [micDeviceId, setMicDeviceId] = useState<string | null>(null);
+  const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
+  const [microphones, setMicrophones] = useState<MediaDeviceInfo[]>([]);
+
   // 'selection' = source grid, 'ready' = settings & record button
   const [view, setView] = useState<'selection' | 'ready'>('selection');
 
@@ -44,6 +53,15 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
       const defaultDir = await window.electron.recorder.getDefaultOutputDir();
       setOutputDir(defaultDir);
       setFileName(`recording_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}`);
+
+      // Enumerate devices
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        setCameras(devices.filter((d) => d.kind === 'videoinput'));
+        setMicrophones(devices.filter((d) => d.kind === 'audioinput'));
+      } catch (err) {
+        console.error('Failed to enumerate devices:', err);
+      }
     };
     loadDefaults();
   }, []);
@@ -65,6 +83,10 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
       videoBitrate,
       format,
       formats.find((f) => f.value === format)?.extension,
+      recordCamera,
+      recordMic,
+      cameraDeviceId || undefined,
+      micDeviceId || undefined,
     );
     setIsStarting(false);
 
@@ -154,6 +176,11 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
                           alt={selectedSource.name}
                           className="max-w-full max-h-full object-contain rounded-md shadow-2xl ring-1 ring-white/10"
                         />
+                        <CameraPreview
+                          deviceId={cameraDeviceId}
+                          isActive={recordCamera}
+                          className="absolute bottom-4 right-4 w-24 h-24 md:w-32 md:h-32 xl:w-40 xl:h-40 z-20 transition-all duration-300"
+                        />
                       </div>
                     ) : (
                       <div className="p-6 rounded-2xl bg-brand/10">
@@ -193,10 +220,20 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
                     fileName={fileName}
                     videoBitrate={videoBitrate}
                     format={format}
+                    recordMic={recordMic}
+                    recordCamera={recordCamera}
+                    cameraDeviceId={cameraDeviceId}
+                    micDeviceId={micDeviceId}
+                    cameras={cameras}
+                    microphones={microphones}
                     onOutputDirChange={setOutputDir}
                     onFileNameChange={setFileName}
                     onVideoBitrateChange={setVideoBitrate}
                     onFormatChange={setFormat}
+                    onRecordMicChange={setRecordMic}
+                    onRecordCameraChange={setRecordCamera}
+                    onCameraDeviceChange={setCameraDeviceId}
+                    onMicDeviceChange={setMicDeviceId}
                   />
                 </Card>
 

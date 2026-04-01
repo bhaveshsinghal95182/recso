@@ -1,10 +1,18 @@
-import { ChevronDown, FolderOpen, Settings } from 'lucide-react';
+import { ChevronDown, FolderOpen, Mic, Settings, Video } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 
 import { FormatSelector } from './format-selector';
@@ -15,10 +23,20 @@ interface SettingsPanelProps {
   fileName: string;
   videoBitrate: number;
   format: string;
+  recordMic: boolean;
+  recordCamera: boolean;
+  cameraDeviceId: string | null;
+  micDeviceId: string | null;
+  cameras: MediaDeviceInfo[];
+  microphones: MediaDeviceInfo[];
   onOutputDirChange: (path: string) => void;
   onFileNameChange: (name: string) => void;
   onVideoBitrateChange: (bitrate: number) => void;
   onFormatChange: (format: string) => void;
+  onRecordMicChange: (enabled: boolean) => void;
+  onRecordCameraChange: (enabled: boolean) => void;
+  onCameraDeviceChange: (deviceId: string) => void;
+  onMicDeviceChange: (deviceId: string) => void;
 }
 
 export function SettingsPanel({
@@ -26,10 +44,20 @@ export function SettingsPanel({
   fileName,
   videoBitrate,
   format,
+  recordMic,
+  recordCamera,
+  cameraDeviceId,
+  micDeviceId,
+  cameras,
+  microphones,
   onOutputDirChange,
   onFileNameChange,
   onVideoBitrateChange,
   onFormatChange,
+  onRecordMicChange,
+  onRecordCameraChange,
+  onCameraDeviceChange,
+  onMicDeviceChange,
 }: SettingsPanelProps) {
   const [isValid, setIsValid] = useState(true);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -99,6 +127,76 @@ export function SettingsPanel({
           {!isValid && (
             <p className="text-xs text-red-500">Invalid directory or no write permission.</p>
           )}
+        </div>
+
+        {/* Add-on Devices */}
+        <div className="grid grid-cols-2 gap-4 pb-2 border-b border-border/50">
+          {/* Microphone Card */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Mic size={16} className={cn('text-muted-foreground', recordMic && 'text-brand')} />
+                <Label htmlFor="record-mic" className="cursor-pointer">
+                  Microphone
+                </Label>
+              </div>
+              <Switch id="record-mic" checked={recordMic} onCheckedChange={onRecordMicChange} />
+            </div>
+            {recordMic && microphones.length > 0 && (
+              <Select
+                value={micDeviceId || microphones[0]?.deviceId}
+                onValueChange={(val) => val && onMicDeviceChange(val)}
+              >
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue placeholder="Select Microphone" />
+                </SelectTrigger>
+                <SelectContent>
+                  {microphones.map((mic) => (
+                    <SelectItem key={mic.deviceId} value={mic.deviceId}>
+                      {mic.label || 'Default Microphone'}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+
+          {/* Camera Card */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Video
+                  size={16}
+                  className={cn('text-muted-foreground', recordCamera && 'text-brand')}
+                />
+                <Label htmlFor="record-cam" className="cursor-pointer">
+                  Webcam
+                </Label>
+              </div>
+              <Switch
+                id="record-cam"
+                checked={recordCamera}
+                onCheckedChange={onRecordCameraChange}
+              />
+            </div>
+            {recordCamera && cameras.length > 0 && (
+              <Select
+                value={cameraDeviceId || cameras[0]?.deviceId}
+                onValueChange={(val) => val && onCameraDeviceChange(val)}
+              >
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue placeholder="Select Camera" />
+                </SelectTrigger>
+                <SelectContent>
+                  {cameras.map((cam) => (
+                    <SelectItem key={cam.deviceId} value={cam.deviceId}>
+                      {cam.label || 'Default Camera'}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
         </div>
 
         {/* Advanced Settings Toggle */}

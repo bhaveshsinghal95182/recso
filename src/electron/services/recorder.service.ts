@@ -2,6 +2,7 @@
  * RecorderService — quick overview:
  * - Enumerates sources.
  * - Manages a single streaming recording lifecycle (start, writeChunk, pause, resume, stop) and moves final files to the chosen output.
+ * - Supports multiple parallel streams (screen, camera) each with their own file descriptor.
  * - Uses raw file descriptors for random-access writes (required by mediabunny's StreamTarget).
  * - Integrates with DB for metadata and provides a temp-path recovery helper.
  */
@@ -28,18 +29,24 @@ import {
 } from './database.service.js';
 import { initProjectFolder } from './project-storage.service.js';
 
-/** Active recording session state */
+/** State for a single file stream (screen or camera) */
+interface StreamState {
+  tempPath: string;
+  /** Raw file descriptor for random-access writes */
+  fd: number;
+  bytesWritten: number;
+}
+
+/** Active recording session state — supports multiple parallel streams */
 interface ActiveRecording {
   id: string;
-  tempPath: string;
+  /** Map of streamId ('screen' | 'camera') to its file state */
+  streams: Record<string, StreamState>;
   outputDir: string;
   fileName: string;
   fileExtension: 'mp4' | 'mkv';
-  /** Raw file descriptor for random-access writes */
-  fd: number;
   state: RecordingState;
   startedAt: number;
-  bytesWritten: number;
 }
 
 // Current active recording (only one at a time)
@@ -97,8 +104,23 @@ export async function getSources(): Promise<DesktopSource[]> {
 }
 
 /**
- * Start a new recording session
- * Creates temp file and database entry
+ * Open a stream file descriptor and return its StreamState.
+ */
+function openStreamFd(
+  tempDir: string,
+  recordingId: string,
+  streamId: string,
+  ext: string,
+): StreamState {
+  const tempPath = path.join(tempDir, `rec_${recordingId}_${streamId}.${ext}`);
+  const fd = fs.openSync(tempPath, 'w');
+  return { tempPath, fd, bytesWritten: 0 };
+}
+
+/**
+ * Start a new recording session.
+ * Creates temp files and database entry. If config.recordCamera is true,
+ * a second temp file is opened for the camera stream.
  */
 export function startRecording(config: RecordingConfig): StartRecordingResult {
   if (activeRecording) {
@@ -109,49 +131,53 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
     const recordingId = randomUUID();
     const fileExt = config.fileExtension || 'mp4';
     const tempDir = path.join(app.getPath('temp'), 'recso');
-    const tempPath = path.join(tempDir, `rec_${recordingId}.${fileExt}`);
 
     // Ensure temp directory exists
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
     }
 
-    // Open a raw file descriptor for random-access writes.
-    // 'w' creates / truncates. We use fs.writeSync with offset later.
-    const fd = fs.openSync(tempPath, 'w');
+    // Open file descriptors for each enabled stream
+    const streams: Record<string, StreamState> = {};
+    streams['screen'] = openStreamFd(tempDir, recordingId, 'screen', fileExt);
 
-    // Store in database
+    if (config.recordCamera) {
+      streams['camera'] = openStreamFd(tempDir, recordingId, 'camera', fileExt);
+    }
+
+    // Store in database (use the screen temp path as the primary)
     createRecording({
       id: recordingId,
       status: 'recording',
-      tempPath,
+      tempPath: streams['screen'].tempPath,
       finalPath: null,
       outputDir: config.outputDir,
       fileName: config.fileName,
       sourceId: config.sourceId,
       startedAt: Date.now(),
-      windowBounds: null, // Will be updated from renderer
+      windowBounds: null,
     });
 
     // Set active recording
     activeRecording = {
       id: recordingId,
-      tempPath,
+      streams,
       outputDir: config.outputDir,
       fileName: config.fileName,
       fileExtension: fileExt,
-      fd,
       state: 'RECORDING' as RecordingState,
       startedAt: Date.now(),
-      bytesWritten: 0,
     };
 
-    console.log('[RecorderService] Started recording:', recordingId);
+    const streamIds = Object.keys(streams);
+    console.log(
+      `[RecorderService] Started recording: ${recordingId} (streams: ${streamIds.join(', ')})`,
+    );
 
     return {
       success: true,
       recordingId,
-      tempPath,
+      tempPath: streams['screen'].tempPath,
     };
   } catch (error) {
     console.error('[RecorderService] Failed to start recording:', error);
@@ -163,26 +189,39 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
 }
 
 /**
- * Write a chunk at a specific byte offset (random-access).
+ * Write a chunk at a specific byte offset (random-access) to a given stream.
  * Called repeatedly from renderer as mediabunny's StreamTarget produces data.
+ *
+ * @param streamId - Which stream to write to ('screen' | 'camera')
  */
-export function writeChunk(recordingId: string, position: number, chunk: Buffer): boolean {
+export function writeChunk(
+  recordingId: string,
+  streamId: string,
+  position: number,
+  chunk: Buffer,
+): boolean {
   if (!activeRecording || activeRecording.id !== recordingId) {
     console.warn('[RecorderService] No active recording for ID:', recordingId);
     return false;
   }
 
+  const stream = activeRecording.streams[streamId];
+  if (!stream) {
+    console.warn(`[RecorderService] Unknown streamId "${streamId}" for recording:`, recordingId);
+    return false;
+  }
+
   try {
-    fs.writeSync(activeRecording.fd, chunk, 0, chunk.length, position);
+    fs.writeSync(stream.fd, chunk, 0, chunk.length, position);
 
     const newEnd = position + chunk.length;
-    if (newEnd > activeRecording.bytesWritten) {
-      activeRecording.bytesWritten = newEnd;
+    if (newEnd > stream.bytesWritten) {
+      stream.bytesWritten = newEnd;
     }
 
     return true;
   } catch (error) {
-    console.error('[RecorderService] Failed to write chunk:', error);
+    console.error(`[RecorderService] Failed to write chunk to stream "${streamId}":`, error);
     return false;
   }
 }
@@ -190,6 +229,7 @@ export function writeChunk(recordingId: string, position: number, chunk: Buffer)
 /**
  * Append a video chunk to the active recording (legacy sequential append).
  * Kept for backward compatibility / recovery scenarios.
+ * Always writes to the 'screen' stream.
  */
 export function appendChunk(recordingId: string, chunk: Buffer): boolean {
   if (!activeRecording || activeRecording.id !== recordingId) {
@@ -198,26 +238,28 @@ export function appendChunk(recordingId: string, chunk: Buffer): boolean {
   }
 
   if (activeRecording.state === 'PAUSED') {
-    // Don't write while paused
     return true;
   }
 
+  const stream = activeRecording.streams['screen'];
+  if (!stream) {
+    console.warn('[RecorderService] No screen stream for legacy append');
+    return false;
+  }
+
   try {
-    // Sequential append – write at the current end-of-file position
-    fs.writeSync(activeRecording.fd, chunk, 0, chunk.length, activeRecording.bytesWritten);
+    fs.writeSync(stream.fd, chunk, 0, chunk.length, stream.bytesWritten);
 
-    const oldBytes = activeRecording.bytesWritten;
-    activeRecording.bytesWritten += chunk.length;
+    const oldBytes = stream.bytesWritten;
+    stream.bytesWritten += chunk.length;
 
-    // Log first chunk and every ~5MB
     if (oldBytes === 0) {
       console.log('[RecorderService] First chunk written. Size:', chunk.length);
     } else if (
-      Math.floor(activeRecording.bytesWritten / (5 * 1024 * 1024)) >
-      Math.floor(oldBytes / (5 * 1024 * 1024))
+      Math.floor(stream.bytesWritten / (5 * 1024 * 1024)) > Math.floor(oldBytes / (5 * 1024 * 1024))
     ) {
       console.log(
-        `[RecorderService] Written ${(activeRecording.bytesWritten / 1024 / 1024).toFixed(2)} MB...`,
+        `[RecorderService] Written ${(stream.bytesWritten / 1024 / 1024).toFixed(2)} MB...`,
       );
     }
 
@@ -229,8 +271,8 @@ export function appendChunk(recordingId: string, chunk: Buffer): boolean {
 }
 
 /**
- * Stop the active recording and finalize the file.
- * Since mediabunny produces a fully-muxed file, no ffmpeg remux is needed.
+ * Stop the active recording and finalize all stream files.
+ * Moves all temp files to the final project folder.
  */
 export async function stopRecording(recordingId: string): Promise<StopRecordingResult> {
   if (!activeRecording || activeRecording.id !== recordingId) {
@@ -238,15 +280,15 @@ export async function stopRecording(recordingId: string): Promise<StopRecordingR
   }
 
   try {
-    // Close the file descriptor
-    fs.closeSync(activeRecording.fd);
-
-    // Check final file size
-    const stats = fs.statSync(activeRecording.tempPath);
-    if (stats.size === 0) {
-      console.error('[RecorderService] WARNING: Recording resulted in 0-byte file!');
-    } else {
-      console.log('[RecorderService] Recording finished. Size:', stats.size);
+    // Close all file descriptors
+    for (const [streamId, stream] of Object.entries(activeRecording.streams)) {
+      fs.closeSync(stream.fd);
+      const stats = fs.statSync(stream.tempPath);
+      if (stats.size === 0) {
+        console.error(`[RecorderService] WARNING: Stream "${streamId}" resulted in 0-byte file!`);
+      } else {
+        console.log(`[RecorderService] Stream "${streamId}" finished. Size: ${stats.size}`);
+      }
     }
 
     // Ensure root output directory exists
@@ -255,7 +297,6 @@ export async function stopRecording(recordingId: string): Promise<StopRecordingR
     }
 
     // Determine recording folder name (handling duplicates)
-    // We want a dedicated folder for each recording: outputDir/RecordingName/
     let folderName = activeRecording.fileName;
     let recordingFolderPath = path.join(activeRecording.outputDir, folderName);
     let counter = 1;
@@ -269,28 +310,36 @@ export async function stopRecording(recordingId: string): Promise<StopRecordingR
     // Create the dedicated recording folder
     fs.mkdirSync(recordingFolderPath, { recursive: true });
 
-    // Initialize project structure (.recso, exports) inside the recording folder
+    // Initialize project structure (.recso, exports)
     initProjectFolder(recordingFolderPath);
 
-    // Determine final video path inside the recording folder
-    // Format: outputDir/RecordingName/RecordingName.{ext}
     const ext = `.${activeRecording.fileExtension}`;
-    const finalPath = path.join(recordingFolderPath, `${folderName}${ext}`);
 
-    // Move temp file to final location.
-    // mediabunny already produces a fully-muxed file with correct metadata,
-    // so we can simply rename/copy — no ffmpeg remux needed.
-    fs.renameSync(activeRecording.tempPath, finalPath);
+    // Move each stream's temp file to its final location
+    // Screen: RecordingName.mp4
+    // Camera: RecordingName_camera.mp4
+    let screenFinalPath = '';
+    for (const [streamId, stream] of Object.entries(activeRecording.streams)) {
+      const suffix = streamId === 'screen' ? '' : `_${streamId}`;
+      const finalPath = path.join(recordingFolderPath, `${folderName}${suffix}${ext}`);
 
-    // Update database
-    completeRecording(recordingId, finalPath);
+      fs.renameSync(stream.tempPath, finalPath);
+      console.log(`[RecorderService] Stream "${streamId}" saved to: ${finalPath}`);
 
-    console.log('[RecorderService] Recording saved to:', finalPath);
+      if (streamId === 'screen') {
+        screenFinalPath = finalPath;
+      }
+    }
+
+    // Update database with the primary (screen) file path
+    completeRecording(recordingId, screenFinalPath);
+
+    console.log('[RecorderService] Recording saved to:', screenFinalPath);
 
     // Clear active recording
     activeRecording = null;
 
-    return { success: true, filePath: finalPath };
+    return { success: true, filePath: screenFinalPath };
   } catch (error) {
     console.error('[RecorderService] Failed to stop recording:', error);
     return {
@@ -329,7 +378,8 @@ export function resumeRecording(recordingId: string): boolean {
 }
 
 /**
- * Get current recording state
+ * Get current recording state.
+ * Returns aggregate bytesWritten across all streams.
  */
 export function getState(): RecordingStateEvent {
   if (!activeRecording) {
@@ -343,11 +393,17 @@ export function getState(): RecordingStateEvent {
 
   const duration = Date.now() - activeRecording.startedAt;
 
+  // Sum bytes across all streams
+  let totalBytesWritten = 0;
+  for (const stream of Object.values(activeRecording.streams)) {
+    totalBytesWritten += stream.bytesWritten;
+  }
+
   return {
     state: activeRecording.state,
     recordingId: activeRecording.id,
     duration,
-    bytesWritten: activeRecording.bytesWritten,
+    bytesWritten: totalBytesWritten,
   };
 }
 
