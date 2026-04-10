@@ -9,6 +9,13 @@ interface FocalPointOverlayProps {
   /** Container (canvas) dimensions */
   containerWidth: number;
   containerHeight: number;
+  /** Optional explicit video layout on canvas */
+  videoLayout?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
   /** Currently selected zoom region */
   selectedZoom: ZoomRegion;
   /** Callback when focal point changes */
@@ -26,6 +33,7 @@ export function FocalPointOverlay({
   videoHeight,
   containerWidth,
   containerHeight,
+  videoLayout,
   selectedZoom,
   onUpdate,
 }: FocalPointOverlayProps) {
@@ -39,19 +47,29 @@ export function FocalPointOverlay({
 
   let drawWidth: number;
   let drawHeight: number;
-  const maxWidth = containerWidth * 0.85;
-  const maxHeight = containerHeight * 0.85;
+  let offsetX: number;
+  let offsetY: number;
 
-  if (videoAspect > containerAspect) {
-    drawWidth = maxWidth;
-    drawHeight = drawWidth / videoAspect;
+  if (videoLayout) {
+    drawWidth = videoLayout.width;
+    drawHeight = videoLayout.height;
+    offsetX = videoLayout.x;
+    offsetY = videoLayout.y;
   } else {
-    drawHeight = maxHeight;
-    drawWidth = drawHeight * videoAspect;
-  }
+    const maxWidth = containerWidth * 0.85;
+    const maxHeight = containerHeight * 0.85;
 
-  const offsetX = (containerWidth - drawWidth) / 2;
-  const offsetY = (containerHeight - drawHeight) / 2;
+    if (videoAspect > containerAspect) {
+      drawWidth = maxWidth;
+      drawHeight = drawWidth / videoAspect;
+    } else {
+      drawHeight = maxHeight;
+      drawWidth = drawHeight * videoAspect;
+    }
+
+    offsetX = (containerWidth - drawWidth) / 2;
+    offsetY = (containerHeight - drawHeight) / 2;
+  }
 
   // Viewport size based on zoom level
   const viewportWidth = drawWidth / selectedZoom.zoomLevel;

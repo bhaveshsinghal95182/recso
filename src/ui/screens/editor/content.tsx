@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
 import { usePlaybackStore } from '@/store/playback-store';
 import { useProjectStore } from '@/store/project-store';
@@ -11,31 +11,43 @@ import { Timeline } from './timeline';
 
 export function EditorContent() {
   const { project, isLoading, error } = useProjectStore();
+  const handledSpaceDownRef = useRef(false);
 
   useEffect(() => {
+    const isTypingTarget = (element: Element | null): boolean => {
+      if (!(element instanceof HTMLElement)) {
+        return false;
+      }
+
+      const tag = element.tagName.toLowerCase();
+      return tag === 'input' || tag === 'textarea' || tag === 'select' || element.isContentEditable;
+    };
+
+    const isSpaceKey = (e: KeyboardEvent): boolean =>
+      e.code === 'Space' || e.key === ' ' || e.key === 'Spacebar';
+
     const handleKeyDown = (e: KeyboardEvent) => {
-      console.log('key ', e.code);
+      if (isTypingTarget(document.activeElement) || isTypingTarget(e.target as Element | null)) {
+        return;
+      }
 
-      const activeEl = document.activeElement;
-      const activeTag = activeEl?.tagName.toLowerCase();
+      if (isSpaceKey(e)) {
+        // Ignore key-repeat so one press equals one toggle.
+        if (e.repeat) {
+          e.preventDefault();
+          return;
+        }
 
-      // Don't toggle if user is typing in an input or textarea
-      const isInput =
-        activeTag === 'input' ||
-        activeTag === 'textarea' ||
-        (activeEl as HTMLElement)?.isContentEditable;
-
-      if (isInput) return;
-
-      // Only trigger on Spacebar
-      if (e.code === 'Space') {
         e.preventDefault();
+        e.stopPropagation();
+        handledSpaceDownRef.current = true;
         const { isPlaying, play, pause } = usePlaybackStore.getState();
         if (isPlaying) {
           pause();
         } else {
           play();
         }
+        return;
       }
 
       if (e.code === 'ArrowRight') {
@@ -94,8 +106,23 @@ export function EditorContent() {
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (!isSpaceKey(e) || !handledSpaceDownRef.current) {
+        return;
+      }
+
+      e.preventDefault();
+      e.stopPropagation();
+      handledSpaceDownRef.current = false;
+    };
+
+    document.addEventListener('keydown', handleKeyDown, true);
+    document.addEventListener('keyup', handleKeyUp, true);
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown, true);
+      document.removeEventListener('keyup', handleKeyUp, true);
+    };
   }, []);
 
   if (isLoading) {

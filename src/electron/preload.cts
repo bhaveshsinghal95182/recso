@@ -111,7 +111,12 @@ electron.contextBridge.exposeInMainWorld('electron', {
     appendChunk: (recordingId: string, chunk: ArrayBuffer): Promise<boolean> =>
       electron.ipcRenderer.invoke('recorder:append-chunk', recordingId, chunk),
 
-    writeChunk: (recordingId: string, streamId: string, position: number, chunk: ArrayBuffer): Promise<boolean> =>
+    writeChunk: (
+      recordingId: string,
+      streamId: string,
+      position: number,
+      chunk: ArrayBuffer,
+    ): Promise<boolean> =>
       electron.ipcRenderer.invoke('recorder:write-chunk', recordingId, streamId, position, chunk),
 
     stop: (recordingId: string): Promise<StopRecordingResult> =>
@@ -356,6 +361,17 @@ electron.contextBridge.exposeInMainWorld('electron', {
     /** Show file in folder */
     showInFolder: (filePath: string): Promise<boolean> =>
       electron.ipcRenderer.invoke('exporter:show-in-folder', filePath),
+
+    /** Resolve output path using exporter naming rules */
+    resolveOutputPath: (config: Record<string, unknown>): Promise<string | null> =>
+      electron.ipcRenderer.invoke('exporter:resolve-output-path', config),
+
+    /** Persist renderer-produced output bytes to disk */
+    writeOutputFile: (
+      outputPath: string,
+      data: ArrayBuffer,
+    ): Promise<{ success: boolean; outputPath?: string; fileSize?: number; error?: string }> =>
+      electron.ipcRenderer.invoke('exporter:write-output-file', outputPath, data),
 
     /** Subscribe to progress updates */
     onProgress: (callback: (progress: Record<string, unknown>) => void) => {

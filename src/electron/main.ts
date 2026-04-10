@@ -48,6 +48,25 @@ app.on('ready', () => {
     mainWindow.loadFile(path.join(app.getAppPath(), 'dist-react/index.html'));
   }
 
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error('[Main] Renderer process gone:', details);
+  });
+
+  mainWindow.webContents.on(
+    'did-fail-load',
+    (_event, errorCode, errorDescription, validatedURL) => {
+      console.error('[Main] Renderer failed to load:', {
+        errorCode,
+        errorDescription,
+        validatedURL,
+      });
+    },
+  );
+
+  mainWindow.webContents.on('unresponsive', () => {
+    console.error('[Main] Renderer became unresponsive');
+  });
+
   // Initialize IPC with window reference and start polling
   initializeWithWindow(mainWindow);
 

@@ -28,7 +28,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
 
   play: () => {
     const { currentTime, duration } = get();
-    if (currentTime >= duration) {
+    if (duration > 0 && currentTime >= duration) {
       set({ currentTime: 0, isPlaying: true });
     } else {
       set({ isPlaying: true });
@@ -39,8 +39,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
 
   seek: (timeMs) => {
     const { duration } = get();
-    // Clamp time
-    const newTime = Math.max(0, Math.min(timeMs, duration));
+    // If duration is unknown (0), treat it as unbounded for seeking.
+    const upperBound = duration > 0 ? duration : Number.POSITIVE_INFINITY;
+    const newTime = Math.max(0, Math.min(timeMs, upperBound));
     set({ currentTime: newTime });
   },
 
@@ -55,10 +56,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         nextTime = state.currentTime + deltaOrTimeMs;
       }
 
-      if (nextTime >= state.duration) {
+      if (state.duration > 0 && nextTime >= state.duration) {
         return { currentTime: state.duration, isPlaying: false };
       }
-      return { currentTime: nextTime };
+      return { currentTime: Math.max(0, nextTime) };
     });
   },
 

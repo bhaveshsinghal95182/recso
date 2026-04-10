@@ -49,6 +49,35 @@ let ffmpegProcess: ChildProcess | null = null;
  */
 let keepIntermediate = false;
 
+function ensureExportsDirectory(project: Project, configuredOutputFolder?: string): string {
+  const recordingDir = path.dirname(project.projectFolderPath);
+  const defaultExportsDir = path.join(recordingDir, 'exports');
+  const exportsDir = configuredOutputFolder ? configuredOutputFolder : defaultExportsDir;
+
+  if (!fs.existsSync(exportsDir)) {
+    fs.mkdirSync(exportsDir, { recursive: true });
+  }
+
+  return exportsDir;
+}
+
+function resolveOutputExtension(config: Pick<ExportConfig, 'format'>): string {
+  // Currently only MP4 is supported, keep this centralized for future formats.
+  return config.format === 'mp4' ? 'mp4' : 'mp4';
+}
+
+function buildOutputPath(project: Project, config: ExportConfig): string {
+  const exportsDir = ensureExportsDirectory(project, config.outputFolder);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const ext = resolveOutputExtension(config);
+
+  let baseNameRaw = config.outputFilename || project.name || 'export';
+  baseNameRaw = baseNameRaw.replace(new RegExp(`\\.${ext}$`, 'i'), '');
+  const sanitizedName = baseNameRaw.replace(/[^a-zA-Z0-9-_]/g, '_');
+
+  return path.join(exportsDir, `${sanitizedName}_${timestamp}.${ext}`);
+}
+
 /** Set whether to keep intermediate files after export */
 export function setKeepIntermediate(keep: boolean): void {
   keepIntermediate = keep;
@@ -132,29 +161,7 @@ export async function startExport(config: ExportConfig): Promise<ExportResult> {
     return { success: false, error: `Source video is empty (0 bytes): ${project.rawVideoPath}` };
   }
 
-  // Create default exports folder in project directory
-  const recordingDir = path.dirname(project.projectFolderPath);
-  const defaultExportsDir = path.join(recordingDir, 'exports');
-  if (!fs.existsSync(defaultExportsDir)) {
-    fs.mkdirSync(defaultExportsDir, { recursive: true });
-  }
-
-  const exportsDir = config.outputFolder ? config.outputFolder : defaultExportsDir;
-  if (!fs.existsSync(exportsDir)) {
-    fs.mkdirSync(exportsDir, { recursive: true });
-  }
-
-  // Generate output filename with timestamp
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const ext = 'mp4';
-  // Use custom filename if provided, else project name
-  let baseNameRaw = config.outputFilename || project.name || 'export';
-  // Remove existing extension if any
-  baseNameRaw = baseNameRaw.replace(new RegExp(`\\.${ext}$`, 'i'), '');
-  // Sanitize filename
-  const sanitizedName = baseNameRaw.replace(/[^a-zA-Z0-9-_]/g, '_');
-
-  const outputPath = path.join(exportsDir, `${sanitizedName}_${timestamp}.${ext}`);
+  const outputPath = buildOutputPath(project, config);
 
   // Create job
   currentJob = {
@@ -284,8 +291,49 @@ export function getCurrentJob(): ExportJob | null {
 export function getExportsFolder(): string | null {
   const project = editorService.getActiveProject();
   if (!project) return null;
-  const recordingDir = path.dirname(project.projectFolderPath);
-  return path.join(recordingDir, 'exports');
+  return ensureExportsDirectory(project);
+}
+
+/**
+ * Resolve the final output path using the same naming strategy as the built-in exporter.
+ */
+export function resolveOutputPath(config: ExportConfig): string | null {
+  const project = editorService.getActiveProject();
+  if (!project) {
+    return null;
+  }
+
+  return buildOutputPath(project, config);
+}
+
+/**
+ * Persist renderer-produced export bytes to disk.
+ */
+export function writeOutputFile(outputPath: string, data: ArrayBuffer): ExportResult {
+  try {
+    if (!outputPath) {
+      return { success: false, error: 'Output path is required' };
+    }
+
+    const parentDir = path.dirname(outputPath);
+    if (!fs.existsSync(parentDir)) {
+      fs.mkdirSync(parentDir, { recursive: true });
+    }
+
+    const buffer = Buffer.from(data);
+    fs.writeFileSync(outputPath, buffer);
+
+    return {
+      success: true,
+      outputPath,
+      fileSize: buffer.byteLength,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to write output file',
+    };
+  }
 }
 
 /**

@@ -294,6 +294,15 @@ interface ElectronAPI {
     /** Show file in folder */
     showInFolder: (filePath: string) => Promise<boolean>;
 
+    /** Resolve output path using exporter naming rules */
+    resolveOutputPath: (config: ExportConfig) => Promise<string | null>;
+
+    /** Persist renderer-produced output bytes to disk */
+    writeOutputFile: (
+      outputPath: string,
+      data: ArrayBuffer,
+    ) => Promise<{ success: boolean; outputPath?: string; fileSize?: number; error?: string }>;
+
     /** Subscribe to progress updates */
     onProgress: (callback: (progress: ExportProgress) => void) => () => void;
   };

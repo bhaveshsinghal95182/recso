@@ -11,7 +11,7 @@
 
 import { Dialog } from '@base-ui/react/dialog';
 import { Download, FolderOpen, Loader2, X } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -34,6 +34,8 @@ import type {
   ExportQuality,
   ExportResolution,
 } from '@/types';
+
+import { runEngineCanvasExport } from './engine/export-pipeline';
 
 interface ExportModalProps {
   open: boolean;
@@ -98,6 +100,7 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
   const [fps, setFps] = useState<ExportFPS>(30);
   const [fileName, setFileName] = useState<string>('');
   const [outputFolder, setOutputFolder] = useState<string>('');
+  const exportCancelRef = useRef<(() => void) | null>(null);
 
   // Sync modal open state with store
   useEffect(() => {
@@ -152,25 +155,46 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
       totalFrames: 0,
       fps: 0,
       eta: 0,
-      stage: 'composition',
+      stage: 'export',
       stagePercent: 0,
     });
 
     try {
-      const exportResult = await window.electron.exporter.start(config);
-
-      // If export was cancelled while awaiting, just reset cleanly
-      if (exportResult.error === 'Export cancelled') {
-        reset();
-        return;
+      const outputPath = await window.electron.exporter.resolveOutputPath(config);
+      if (!outputPath) {
+        throw new Error('Unable to resolve export output path');
       }
 
-      setResult(exportResult);
-      setExportState(exportResult.success ? 'complete' : 'error');
+      const rendered = await runEngineCanvasExport({
+        project,
+        config,
+        onProgress: (nextProgress) => {
+          setProgress(nextProgress);
+        },
+        onCancelReady: (cancel) => {
+          exportCancelRef.current = cancel;
+        },
+      });
+
+      const writeResult = await window.electron.exporter.writeOutputFile(
+        outputPath,
+        rendered.buffer,
+      );
+      if (!writeResult.success || !writeResult.outputPath) {
+        throw new Error(writeResult.error || 'Failed to save exported file');
+      }
+
+      setResult({
+        success: true,
+        outputPath: writeResult.outputPath,
+        duration: rendered.durationSeconds,
+        fileSize: writeResult.fileSize ?? rendered.fileSize,
+      });
+      setExportState('complete');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Export failed';
 
-      // Cancelled during composition — reset to configure, don't show error
+      // Cancelled during export — reset to configure, don't show error
       if (message === 'Export cancelled') {
         reset();
         return;
@@ -181,6 +205,8 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
         error: message,
       });
       setExportState('error');
+    } finally {
+      exportCancelRef.current = null;
     }
   }, [
     project,
@@ -195,9 +221,17 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
     setExportState,
     setProgress,
     setResult,
+    reset,
   ]);
 
   const handleCancel = useCallback(async () => {
+    const cancelCurrent = exportCancelRef.current;
+    if (cancelCurrent) {
+      cancelCurrent();
+      reset();
+      return;
+    }
+
     await window.electron.exporter.cancel();
     reset();
   }, [reset]);

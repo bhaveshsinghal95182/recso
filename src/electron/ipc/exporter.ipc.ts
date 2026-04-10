@@ -66,6 +66,19 @@ export function registerExporterHandlers(): void {
     return true;
   });
 
+  // Resolve an output path using exporter naming rules
+  ipcMain.handle('exporter:resolve-output-path', async (_event, config: ExportConfig) => {
+    return exporterService.resolveOutputPath(config);
+  });
+
+  // Persist renderer-produced export bytes to disk
+  ipcMain.handle(
+    'exporter:write-output-file',
+    async (_event, outputPath: string, data: ArrayBuffer) => {
+      return exporterService.writeOutputFile(outputPath, data);
+    },
+  );
+
   // Subscribe to progress events
   ipcMain.on('exporter:subscribe-progress', (event) => {
     const webContentsId = event.sender.id.toString();
