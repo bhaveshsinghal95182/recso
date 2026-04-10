@@ -28,7 +28,7 @@ import type { ZoomRegion } from '../types/zoom.types.js';
 import { findClosestEventInWindow } from '../util.js';
 import * as CompositorService from './compositor.service.js';
 import { getRecording } from './database.service.js';
-import * as ffmpegService from './ffmpeg.service.js';
+import * as mediaMetadataService from './media-metadata.service.js';
 import { type MouseEvent, mouseTrackerService } from './mouse-tracker.service.js';
 import * as projectStorage from './project-storage.service.js';
 import { upsertRecentProject } from './recent-projects.service.js';
@@ -68,11 +68,10 @@ export async function createProject(recordingId: string): Promise<Project | null
   }
 
   // Probe video for metadata
-  await ffmpegService.ensureInitialized();
   let metadata;
   try {
-    metadata = await ffmpegService.probeVideo(recording.finalPath);
-    console.log('[EditorService] Probed video metadata:', metadata);
+    metadata = await mediaMetadataService.probeVideoMetadata(recording.finalPath);
+    console.log('[EditorService] Probed video metadata (MediaBunny):', metadata);
   } catch (err) {
     console.error('[EditorService] Failed to probe video:', err);
     // Fallback to defaults if probe fails

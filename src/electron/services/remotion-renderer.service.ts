@@ -27,7 +27,7 @@ import type { Project } from '../types/project.types.js';
 import type { RemotionRenderProgress, RemotionRenderResult } from '../types/remotion.types.js';
 import { ensureChromeBrowser } from './chrome-resolver.service.js';
 import * as compositorService from './compositor.service.js';
-import * as ffmpegService from './ffmpeg.service.js';
+import * as mediaMetadataService from './media-metadata.service.js';
 
 /**
  * Cache for bundled composition.
@@ -390,7 +390,7 @@ export async function renderWithRemotion(
     console.log('[RemotionRenderer] Resolving Chrome browser + probing video (parallel)...');
     const [browserExecutable, metadata] = await Promise.all([
       ensureChromeBrowser(),
-      ffmpegService.probeVideo(project.rawVideoPath),
+      mediaMetadataService.probeVideoMetadata(project.rawVideoPath),
     ]);
     console.log('[RemotionRenderer] Browser executable:', browserExecutable);
 
