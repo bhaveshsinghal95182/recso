@@ -30,7 +30,6 @@ import type {
   ExportConfig,
   ExportFormat,
   ExportFPS,
-  ExportProgress,
   ExportQuality,
   ExportResolution,
 } from '@/types';
@@ -122,15 +121,6 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
       }
     }
   }, [open, exportState, reset]);
-
-  // Subscribe to progress updates (always, not just when modal is open)
-  useEffect(() => {
-    const unsubscribe = window.electron.exporter.onProgress((prog: ExportProgress) => {
-      setProgress(prog);
-    });
-
-    return unsubscribe;
-  }, [setProgress]);
 
   const handleExport = useCallback(async () => {
     if (!project) return;
@@ -231,8 +221,6 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
       reset();
       return;
     }
-
-    await window.electron.exporter.cancel();
     reset();
   }, [reset]);
 
@@ -280,8 +268,8 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Backdrop className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 transition-opacity duration-200" />
-        <Dialog.Popup className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-full max-w-md bg-card border border-border rounded-xl shadow-xl p-6 data-[starting-style]:opacity-0 data-[starting-style]:scale-95 data-[ending-style]:opacity-0 data-[ending-style]:scale-95 transition-all duration-200">
+        <Dialog.Backdrop className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 data-starting-style:opacity-0 data-ending-style:opacity-0 transition-opacity duration-200" />
+        <Dialog.Popup className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-full max-w-md bg-card border border-border rounded-xl shadow-xl p-6 data-starting-style:opacity-0 data-starting-style:scale-95 data-ending-style:opacity-0 data-ending-style:scale-95 transition-all duration-200">
           {/* Header */}
           <div className="flex items-center justify-between mb-6">
             <Dialog.Title className="text-lg font-semibold">

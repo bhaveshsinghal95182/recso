@@ -261,30 +261,6 @@ interface ElectronAPI {
   };
 
   exporter: {
-    /** Start export with configuration */
-    start: (config: ExportConfig) => Promise<ExportResult>;
-
-    /** Cancel ongoing export */
-    cancel: () => Promise<boolean>;
-
-    /** Get current progress */
-    getProgress: () => Promise<ExportProgress | null>;
-
-    /** Get current export state */
-    getState: () => Promise<ExportState>;
-
-    /** Get current job info */
-    getJob: () => Promise<{
-      id: string;
-      projectId: string;
-      state: ExportState;
-      config: ExportConfig;
-      outputPath: string;
-      progress: ExportProgress;
-      startedAt: number;
-      error?: string;
-    } | null>;
-
     /** Get exports folder path */
     getExportsFolder: () => Promise<string | null>;
 
@@ -302,9 +278,6 @@ interface ElectronAPI {
       outputPath: string,
       data: ArrayBuffer,
     ) => Promise<{ success: boolean; outputPath?: string; fileSize?: number; error?: string }>;
-
-    /** Subscribe to progress updates */
-    onProgress: (callback: (progress: ExportProgress) => void) => () => void;
   };
 
   telemetry: {

@@ -1,7 +1,6 @@
 import { app, BrowserWindow, screen } from 'electron';
 
 // APPX/MSIX Store apps launch with cwd = C:\WINDOWS\system32 (read-only).
-// Remotion resolves its .remotion cache relative to process.cwd().
 // Redirect to writable userData folder before anything else runs.
 if (app.isPackaged) {
   process.chdir(app.getPath('userData'));
@@ -11,7 +10,6 @@ import path from 'path';
 
 import { initializeWithWindow, registerAllIpcHandlers } from './ipc/index.js';
 import { initializeDatabase } from './services/database.service.js';
-import { preWarm as preWarmRemotion } from './services/remotion-renderer.service.js';
 import { initializeTelemetry } from './services/telemetry/telemetry.service.js';
 import { createTray } from './services/tray.service.js';
 import { initializeLogging } from './utils/logger.js';
@@ -72,8 +70,4 @@ app.on('ready', () => {
 
   // Create system tray
   createTray(mainWindow);
-
-  // Pre-warm Remotion dependencies (Chrome path resolution)
-  // Fire-and-forget: runs in background so export starts faster
-  preWarmRemotion();
 });

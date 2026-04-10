@@ -334,22 +334,6 @@ electron.contextBridge.exposeInMainWorld('electron', {
 
   // Exporter
   exporter: {
-    /** Start export with configuration */
-    start: (config: Record<string, unknown>) =>
-      electron.ipcRenderer.invoke('exporter:start', config),
-
-    /** Cancel ongoing export */
-    cancel: (): Promise<boolean> => electron.ipcRenderer.invoke('exporter:cancel'),
-
-    /** Get current progress */
-    getProgress: () => electron.ipcRenderer.invoke('exporter:get-progress'),
-
-    /** Get current export state */
-    getState: (): Promise<string> => electron.ipcRenderer.invoke('exporter:get-state'),
-
-    /** Get current job info */
-    getJob: () => electron.ipcRenderer.invoke('exporter:get-job'),
-
     /** Get exports folder path */
     getExportsFolder: (): Promise<string | null> =>
       electron.ipcRenderer.invoke('exporter:get-exports-folder'),
@@ -372,19 +356,6 @@ electron.contextBridge.exposeInMainWorld('electron', {
       data: ArrayBuffer,
     ): Promise<{ success: boolean; outputPath?: string; fileSize?: number; error?: string }> =>
       electron.ipcRenderer.invoke('exporter:write-output-file', outputPath, data),
-
-    /** Subscribe to progress updates */
-    onProgress: (callback: (progress: Record<string, unknown>) => void) => {
-      electron.ipcRenderer.send('exporter:subscribe-progress');
-      const handler = (_event: IpcRendererEvent, progress: Record<string, unknown>) =>
-        callback(progress);
-      electron.ipcRenderer.on('exporter:progress', handler);
-      // Return unsubscribe function
-      return () => {
-        electron.ipcRenderer.send('exporter:unsubscribe-progress');
-        electron.ipcRenderer.removeListener('exporter:progress', handler);
-      };
-    },
   },
 
   // Debug tools
