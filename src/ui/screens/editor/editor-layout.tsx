@@ -25,11 +25,9 @@ export function EditorLayout({ viewport, properties, timeline }: EditorLayoutPro
         <div className="flex-1 min-w-0 flex items-center justify-center bg-background/50 border-r border-border relative">
           {viewport}
         </div>
-        <div className="w-[280px] bg-sidebar border-l border-border overflow-y-auto">
-          {properties}
-        </div>
+        <div className="w-70 bg-sidebar border-l border-border overflow-y-auto">{properties}</div>
       </div>
-      <div className="h-[200px] bg-card border-t border-border">{timeline}</div>
+      <div className="h-50 bg-card border-t border-border">{timeline}</div>
     </div>
   );
 }

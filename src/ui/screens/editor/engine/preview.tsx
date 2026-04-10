@@ -385,14 +385,7 @@ export function EnginePreview() {
 
           <canvas ref={previewCanvasRef} className="absolute inset-0 w-full h-full" />
 
-          <video
-            ref={videoRef}
-            src={videoSrc}
-            className="hidden"
-            muted
-            playsInline
-            preload="auto"
-          />
+          <video ref={videoRef} src={videoSrc} className="hidden" playsInline preload="auto" />
 
           {isEditingFocalPoint && selectedZoomId && selectedZoom && project.videoDimensions && (
             <FocalPointOverlay
