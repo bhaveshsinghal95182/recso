@@ -1,4 +1,4 @@
-import { ChevronDown, FolderOpen, Mic, Settings, Video } from 'lucide-react';
+import { ChevronDown, FolderOpen, Mic, Settings, Video, Volume2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -25,6 +25,7 @@ interface SettingsPanelProps {
   format: string;
   recordMic: boolean;
   recordCamera: boolean;
+  recordSystemAudio: boolean;
   cameraDeviceId: string | null;
   micDeviceId: string | null;
   cameras: MediaDeviceInfo[];
@@ -35,6 +36,7 @@ interface SettingsPanelProps {
   onFormatChange: (format: string) => void;
   onRecordMicChange: (enabled: boolean) => void;
   onRecordCameraChange: (enabled: boolean) => void;
+  onRecordSystemAudioChange: (enabled: boolean) => void;
   onCameraDeviceChange: (deviceId: string) => void;
   onMicDeviceChange: (deviceId: string) => void;
 }
@@ -46,6 +48,7 @@ export function SettingsPanel({
   format,
   recordMic,
   recordCamera,
+  recordSystemAudio,
   cameraDeviceId,
   micDeviceId,
   cameras,
@@ -56,6 +59,7 @@ export function SettingsPanel({
   onFormatChange,
   onRecordMicChange,
   onRecordCameraChange,
+  onRecordSystemAudioChange,
   onCameraDeviceChange,
   onMicDeviceChange,
 }: SettingsPanelProps) {
@@ -130,7 +134,7 @@ export function SettingsPanel({
         </div>
 
         {/* Add-on Devices */}
-        <div className="grid grid-cols-2 gap-4 pb-2 border-b border-border/50">
+        <div className="grid grid-cols-3 gap-4 pb-2 border-b border-border/50">
           {/* Microphone Card */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
@@ -196,6 +200,26 @@ export function SettingsPanel({
                 </SelectContent>
               </Select>
             )}
+          </div>
+
+          {/* System Audio Card */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Volume2
+                  size={16}
+                  className={cn('text-muted-foreground', recordSystemAudio && 'text-brand')}
+                />
+                <Label htmlFor="record-system-audio" className="cursor-pointer">
+                  System Audio
+                </Label>
+              </div>
+              <Switch
+                id="record-system-audio"
+                checked={recordSystemAudio}
+                onCheckedChange={onRecordSystemAudioChange}
+              />
+            </div>
           </div>
         </div>
 

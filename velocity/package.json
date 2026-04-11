@@ -71,13 +71,13 @@
   },
   "lint-staged": {
     "*.@(js|ts|tsx)": [
-      "oxlint --fix"
+      "pnpm dlx oxlint --fix"
     ],
     "*.@(js|ts|tsx|yml|yaml|md|json)": [
-      "prettier --write"
+      "pnpm exec prettier --write"
     ],
     "*.toml": [
-      "taplo format"
+      "pnpm dlx @taplo/cli format"
     ]
   },
   "ava": {

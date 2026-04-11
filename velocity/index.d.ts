@@ -15,4 +15,5 @@ export declare function startWindowRecording(windowTitle: string, outputPath: st
 export interface WindowInfo {
   title: string
   className: string
+  thumbnailDataUrl?: string
 }

@@ -1,8 +1,9 @@
 /**
- * useScreenRecorder — modified for multi-stream recording:
- * - Manages screen, camera, and microphone capture.
- * - Uses StreamTarget to stream video chunks to main process for crash-safe disk writes.
- * - Embeds microphone audio into the screen (and optionally camera) video directly.
+ * useScreenRecorder
+ *
+ * Hybrid recording flow:
+ * - Native velocity capture for screen/window (driven by Electron recorder service)
+ * - Auxiliary streams (camera / mic / desktop-audio) written through Electron via mediabunny
  */
 
 import type {
@@ -16,9 +17,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DesktopSource, RecorderState } from '@/types';
 
 interface UseScreenRecorderOptions {
-  /** Video frame rate (default: 30) */
   frameRate?: number;
-  /** Include system audio */
   audio?: boolean;
 }
 
@@ -34,7 +33,9 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
   });
   const [error, setError] = useState<string | null>(null);
 
-  // References to active mediabunny pipelines and streams
+  const recordingIdRef = useRef<string | null>(null);
+  const isStoppingRef = useRef(false);
+
   const pipelinesRef = useRef<{
     outputs: OutputType[];
     videoSources: MediaStreamVideoTrackSourceType[];
@@ -49,24 +50,57 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
     mediaStreams: [],
   });
 
-  // Ref to track recording ID across async closures (e.g. track.onended)
-  const recordingIdRef = useRef<string | null>(null);
-  // Guard against double-stop (e.g. track ends + user clicks stop)
-  const isStoppingRef = useRef(false);
+  const frameRateRef = useRef(frameRate);
+  const audioRef = useRef(audio);
 
-  // Fetch available sources
+  useEffect(() => {
+    frameRateRef.current = frameRate;
+    audioRef.current = audio;
+  }, [frameRate, audio]);
+
+  const resetPipelines = useCallback(() => {
+    pipelinesRef.current = {
+      outputs: [],
+      videoSources: [],
+      audioSources: [],
+      streamTargets: [],
+      mediaStreams: [],
+    };
+  }, []);
+
+  const stopAuxPipelines = useCallback(async () => {
+    const pipelines = pipelinesRef.current;
+
+    await Promise.all(
+      pipelines.outputs.map(async (output) => {
+        if (output.state === 'started') {
+          try {
+            await output.finalize();
+          } catch (err) {
+            console.warn('[Recorder] output.finalize error:', err);
+          }
+        }
+      }),
+    );
+
+    pipelines.mediaStreams.forEach((stream) => {
+      stream.getTracks().forEach((track) => track.stop());
+    });
+
+    resetPipelines();
+  }, [resetPipelines]);
+
   const refreshSources = useCallback(async () => {
     try {
-      const sources = await window.electron.recorder.getSources();
-      setSources(sources);
-      return sources;
+      const nextSources = await window.electron.recorder.getSources();
+      setSources(nextSources);
+      return nextSources;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to get sources');
       return [];
     }
   }, []);
 
-  // Subscribe to state updates from main process
   useEffect(() => {
     const unsubscribe = window.electron.recorder.onStateChange((newState) => {
       setState({
@@ -75,9 +109,10 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
         duration: newState.duration,
         bytesWritten: newState.bytesWritten,
       });
+
+      recordingIdRef.current = newState.recordingId;
     });
 
-    // Initial source fetch
     refreshSources();
     const delayedRefresh = window.setTimeout(() => {
       refreshSources();
@@ -86,65 +121,39 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
     return () => {
       window.clearTimeout(delayedRefresh);
       unsubscribe();
-      // Cleanup on unmount
       pipelinesRef.current.mediaStreams.forEach((stream) => {
         stream.getTracks().forEach((track) => track.stop());
       });
+      resetPipelines();
     };
-  }, [refreshSources]);
+  }, [refreshSources, resetPipelines]);
 
-  // Internal stop helper
   const stopRecordingInternal = useCallback(async () => {
-    // Guard against double-stop
     if (isStoppingRef.current) {
       return { success: true };
     }
+
     isStoppingRef.current = true;
 
     try {
-      const pipelines = pipelinesRef.current;
+      await stopAuxPipelines();
 
-      // Finalize the mediabunny outputs
-      await Promise.all(
-        pipelines.outputs.map(async (output) => {
-          if (output.state === 'started') {
-            try {
-              await output.finalize();
-            } catch (err) {
-              console.warn('[Recorder] output.finalize error:', err);
-            }
-          }
-        }),
-      );
-
-      // Stop media stream tracks
-      pipelines.mediaStreams.forEach((stream) => {
-        stream.getTracks().forEach((track) => track.stop());
-      });
-
-      // Clean up refs
-      pipelinesRef.current = {
-        outputs: [],
-        videoSources: [],
-        audioSources: [],
-        streamTargets: [],
-        mediaStreams: [],
-      };
-
-      const recId = recordingIdRef.current;
-      if (recId) {
-        recordingIdRef.current = null;
-        const result = await window.electron.recorder.stop(recId);
-        setState({
-          status: 'idle',
-          recordingId: null,
-          duration: 0,
-          bytesWritten: 0,
-        });
-        return result;
+      const recordingId = recordingIdRef.current;
+      if (!recordingId) {
+        return { success: false, error: 'No active recording' };
       }
 
-      return { success: false, error: 'No active recording' };
+      const result = await window.electron.recorder.stop(recordingId);
+      recordingIdRef.current = null;
+
+      setState({
+        status: 'idle',
+        recordingId: null,
+        duration: 0,
+        bytesWritten: 0,
+      });
+
+      return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to stop recording';
       setError(message);
@@ -152,11 +161,8 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
     } finally {
       isStoppingRef.current = false;
     }
-  }, []);
+  }, [stopAuxPipelines]);
 
-  /**
-   * Start recording
-   */
   const startRecording = useCallback(
     async (
       sourceId: string,
@@ -169,11 +175,50 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
       recordMic: boolean = false,
       cameraDeviceId?: string,
       micDeviceId?: string,
+      recordSystemAudio: boolean = false,
     ) => {
+      let recordingId: string | null = null;
+
       try {
         setError(null);
 
-        // Dynamically import mediabunny
+        const extension: 'mp4' | 'mkv' = fileExtension || 'mp4';
+
+        const startResult = await window.electron.recorder.start({
+          sourceId,
+          outputDir,
+          fileName,
+          fileExtension: extension,
+          recordCamera,
+          recordMic,
+          recordSystemAudio,
+          cameraDeviceId,
+          micDeviceId,
+          options: {
+            videoBitrate,
+            audioBitrate: audioRef.current ? 128000 : 0,
+          },
+        });
+
+        if (!startResult.success || !startResult.recordingId) {
+          throw new Error(startResult.error || 'Failed to start recording');
+        }
+
+        recordingId = startResult.recordingId;
+        recordingIdRef.current = recordingId;
+
+        // If no auxiliary tracks are enabled, native recording is enough.
+        if (!recordCamera && !recordMic && !recordSystemAudio) {
+          setState({
+            status: 'recording',
+            recordingId,
+            duration: 0,
+            bytesWritten: 0,
+          });
+
+          return { success: true, recordingId };
+        }
+
         const {
           MediaStreamVideoTrackSource,
           MediaStreamAudioTrackSource,
@@ -183,139 +228,12 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
           MkvOutputFormat,
         } = await import('mediabunny');
 
-        const extension: 'mp4' | 'mkv' = fileExtension || 'mp4';
-
-        // Start recording in main process to create temp files
-        const result = await window.electron.recorder.start({
-          sourceId,
-          outputDir,
-          fileName,
-          fileExtension: extension,
-          recordCamera,
-          recordMic,
-        });
-
-        if (!result.success || !result.recordingId) {
-          throw new Error(result.error || 'Failed to start recording');
-        }
-
-        const recordingId = result.recordingId;
-        recordingIdRef.current = recordingId;
-
         const pipelines = pipelinesRef.current;
+        const mediaStreams: MediaStream[] = [];
         const newOutputs: OutputType[] = [];
 
-        // 1. Acquire Streams
-        const mediaStreams: MediaStream[] = [];
-
-        // Screen Stream
-        const screenStream = await navigator.mediaDevices.getUserMedia({
-          audio: audio ? ({ mandatory: { chromeMediaSource: 'desktop' } } as any) : false,
-          video: {
-            mandatory: {
-              chromeMediaSource: 'desktop',
-              chromeMediaSourceId: sourceId,
-              maxFrameRate: frameRate,
-            },
-          } as any,
-        });
-        mediaStreams.push(screenStream);
-
-        let micStream: MediaStream | null = null;
-        let cameraStream: MediaStream | null = null;
-
-        if (recordMic) {
-          try {
-            micStream = await navigator.mediaDevices.getUserMedia({
-              audio: micDeviceId ? { deviceId: { exact: micDeviceId } } : true,
-            });
-            mediaStreams.push(micStream);
-          } catch (err) {
-            console.warn('[Recorder] Failed to get microphone stream:', err);
-          }
-        }
-
-        if (recordCamera) {
-          try {
-            cameraStream = await navigator.mediaDevices.getUserMedia({
-              video: cameraDeviceId
-                ? { deviceId: { exact: cameraDeviceId }, width: 1280, height: 720 }
-                : { width: 1280, height: 720 },
-            });
-            mediaStreams.push(cameraStream);
-          } catch (err) {
-            console.warn('[Recorder] Failed to get camera stream:', err);
-          }
-        }
-
-        pipelines.mediaStreams = mediaStreams;
-
-        // 2. Setup Screen Pipeline (always)
-        const screenWritable = new WritableStream<{ data: Uint8Array; position: number }>({
-          async write(chunk) {
-            const data = chunk.data;
-            const exactChunk =
-              data.byteOffset === 0 && data.byteLength === data.buffer.byteLength
-                ? (data.buffer as ArrayBuffer)
-                : data.slice().buffer;
-            await window.electron.recorder.writeChunk(
-              recordingId,
-              'screen',
-              chunk.position,
-              exactChunk,
-            );
-          },
-        });
-
-        const screenTarget = new StreamTarget(screenWritable, {
-          chunked: true,
-          chunkSize: 2 ** 20,
-        });
-        pipelines.streamTargets.push(screenTarget);
-
-        const screenFormat =
-          extension === 'mkv'
-            ? new MkvOutputFormat()
-            : new Mp4OutputFormat({ fastStart: 'in-memory' });
-
-        const screenOutput = new Output({ format: screenFormat, target: screenTarget });
-        newOutputs.push(screenOutput);
-
-        const screenVideoTrack = screenStream.getVideoTracks()[0];
-        const screenVidSource = new MediaStreamVideoTrackSource(screenVideoTrack, {
-          codec: extension === 'mkv' ? 'vp9' : 'avc',
-          bitrate: videoBitrate,
-        });
-        screenVidSource.errorPromise.catch((err) => {
-          console.error('[Recorder] Screen video error:', err);
-          stopRecordingInternal();
-        });
-        pipelines.videoSources.push(screenVidSource);
-        screenOutput.addVideoTrack(screenVidSource, { frameRate });
-
-        if (micStream) {
-          const micTrack = micStream.getAudioTracks()[0];
-          const micAudioSource1 = new MediaStreamAudioTrackSource(micTrack, {
-            codec: 'aac',
-            bitrate: 128000,
-          });
-          micAudioSource1.errorPromise.catch((err) =>
-            console.error('[Recorder] Screen mic error:', err),
-          );
-          pipelines.audioSources.push(micAudioSource1);
-          screenOutput.addAudioTrack(micAudioSource1);
-        }
-
-        // Listen for user stopping screen
-        screenVideoTrack.onended = () => {
-          console.log('[Recorder] Screen track ended, auto-stopping');
-          stopRecordingInternal();
-        };
-
-        // 3. Setup Camera Pipeline (if enabled)
-        let cameraOutput: OutputType | null = null;
-        if (cameraStream) {
-          const cameraWritable = new WritableStream<{ data: Uint8Array; position: number }>({
+        const createTarget = (streamId: string) => {
+          const writable = new WritableStream<{ data: Uint8Array; position: number }>({
             async write(chunk) {
               const data = chunk.data;
               const exactChunk =
@@ -323,59 +241,211 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
                   ? (data.buffer as ArrayBuffer)
                   : data.slice().buffer;
               await window.electron.recorder.writeChunk(
-                recordingId,
-                'camera',
+                recordingId!,
+                streamId,
                 chunk.position,
                 exactChunk,
               );
             },
           });
 
-          const cameraTarget = new StreamTarget(cameraWritable, {
+          return new StreamTarget(writable, {
             chunked: true,
             chunkSize: 2 ** 20,
           });
-          pipelines.streamTargets.push(cameraTarget);
+        };
 
-          const camFormat =
-            extension === 'mkv'
-              ? new MkvOutputFormat()
-              : new Mp4OutputFormat({ fastStart: 'in-memory' });
+        const outputFormat =
+          extension === 'mkv'
+            ? new MkvOutputFormat()
+            : new Mp4OutputFormat({ fastStart: 'in-memory' });
 
-          cameraOutput = new Output({ format: camFormat, target: cameraTarget });
-          newOutputs.push(cameraOutput);
+        const resolveDesktopAudioSourceId = (): string | null => {
+          if (sourceId.startsWith('screen:')) {
+            return sourceId;
+          }
 
-          const camVideoTrack = cameraStream.getVideoTracks()[0];
-          const camVidSource = new MediaStreamVideoTrackSource(camVideoTrack, {
-            codec: extension === 'mkv' ? 'vp9' : 'avc',
-            bitrate: 3000000, // 3 Mbps is enough for 720p webcam
-          });
-          camVidSource.errorPromise.catch((err) => {
-            console.error('[Recorder] Camera video error:', err);
-          });
-          pipelines.videoSources.push(camVidSource);
-          // Set frameRate explicitly to 30 for the camera
-          cameraOutput.addVideoTrack(camVidSource, { frameRate: 30 });
+          if (sourceId.startsWith('velocity-window:') || sourceId.startsWith('fallback-window:')) {
+            const primaryScreen = sources.find((s) => s.isScreen && s.isPrimary);
+            if (primaryScreen?.id) {
+              return primaryScreen.id;
+            }
 
-          if (micStream) {
-            // Need a second clone of the mic track for the second Pipeline
-            const micTrack2 = micStream.getAudioTracks()[0].clone();
-            const micAudioSource2 = new MediaStreamAudioTrackSource(micTrack2, {
-              codec: 'aac',
-              bitrate: 128000,
+            const anyScreen = sources.find((s) => s.isScreen);
+            return anyScreen?.id ?? null;
+          }
+
+          return null;
+        };
+
+        const openDesktopAudioCapture = async (
+          desktopAudioSourceId: string,
+        ): Promise<MediaStream> => {
+          const audioConstraints = {
+            mandatory: {
+              chromeMediaSource: 'desktop',
+              chromeMediaSourceId: desktopAudioSourceId,
+            },
+          } as unknown as MediaTrackConstraints;
+
+          const videoProfiles: MediaTrackConstraints[] = [
+            {
+              mandatory: {
+                chromeMediaSource: 'desktop',
+                chromeMediaSourceId: desktopAudioSourceId,
+                maxFrameRate: 5,
+                maxWidth: 1280,
+                maxHeight: 720,
+              },
+            } as unknown as MediaTrackConstraints,
+            {
+              mandatory: {
+                chromeMediaSource: 'desktop',
+                chromeMediaSourceId: desktopAudioSourceId,
+              },
+            } as unknown as MediaTrackConstraints,
+          ];
+
+          let lastError: unknown = null;
+
+          for (let profileIndex = 0; profileIndex < videoProfiles.length; profileIndex += 1) {
+            try {
+              return await navigator.mediaDevices.getUserMedia({
+                audio: audioConstraints,
+                video: videoProfiles[profileIndex],
+              });
+            } catch (err) {
+              lastError = err;
+              console.warn(
+                `[Recorder] Desktop audio capture profile ${profileIndex + 1}/${videoProfiles.length} failed.`,
+                err,
+              );
+            }
+          }
+
+          throw lastError instanceof Error
+            ? lastError
+            : new Error('Failed to open desktop capture stream.');
+        };
+
+        let micStream: MediaStream | null = null;
+        if (recordMic) {
+          try {
+            micStream = await navigator.mediaDevices.getUserMedia({
+              audio: micDeviceId ? { deviceId: { exact: micDeviceId } } : true,
             });
-            micAudioSource2.errorPromise.catch((err) =>
-              console.error('[Recorder] Camera mic error:', err),
-            );
-            pipelines.audioSources.push(micAudioSource2);
-            cameraOutput.addAudioTrack(micAudioSource2);
+            mediaStreams.push(micStream);
+          } catch (err) {
+            console.warn('[Recorder] Failed to open microphone stream:', err);
           }
         }
 
+        if (recordCamera) {
+          try {
+            const cameraStream = await navigator.mediaDevices.getUserMedia({
+              video: cameraDeviceId
+                ? { deviceId: { exact: cameraDeviceId }, width: 1280, height: 720 }
+                : { width: 1280, height: 720 },
+            });
+            mediaStreams.push(cameraStream);
+
+            const cameraTarget = createTarget('camera');
+            pipelines.streamTargets.push(cameraTarget);
+
+            const cameraOutput = new Output({ format: outputFormat, target: cameraTarget });
+            newOutputs.push(cameraOutput);
+
+            const cameraVideoTrack = cameraStream.getVideoTracks()[0];
+            const cameraVideoSource = new MediaStreamVideoTrackSource(cameraVideoTrack, {
+              codec: extension === 'mkv' ? 'vp9' : 'avc',
+              bitrate: 3_000_000,
+            });
+            pipelines.videoSources.push(cameraVideoSource);
+            cameraOutput.addVideoTrack(cameraVideoSource, { frameRate: frameRateRef.current });
+
+            if (micStream) {
+              const micTrackForCamera = micStream.getAudioTracks()[0]?.clone();
+              if (micTrackForCamera) {
+                const micForCameraSource = new MediaStreamAudioTrackSource(micTrackForCamera, {
+                  codec: 'aac',
+                  bitrate: 128_000,
+                });
+                pipelines.audioSources.push(micForCameraSource);
+                cameraOutput.addAudioTrack(micForCameraSource);
+              }
+            }
+          } catch (err) {
+            console.warn('[Recorder] Failed to open camera stream:', err);
+          }
+        }
+
+        if (recordMic && !recordCamera && micStream) {
+          const micTarget = createTarget('mic');
+          pipelines.streamTargets.push(micTarget);
+
+          const micOutput = new Output({ format: outputFormat, target: micTarget });
+          newOutputs.push(micOutput);
+
+          const micTrack = micStream.getAudioTracks()[0];
+          if (micTrack) {
+            const micSource = new MediaStreamAudioTrackSource(micTrack, {
+              codec: 'aac',
+              bitrate: 128_000,
+            });
+            pipelines.audioSources.push(micSource);
+            micOutput.addAudioTrack(micSource);
+          }
+        }
+
+        if (recordSystemAudio) {
+          try {
+            const desktopAudioSourceId = resolveDesktopAudioSourceId();
+
+            if (!desktopAudioSourceId) {
+              throw new Error('No desktop source available for system audio capture.');
+            }
+
+            // Request desktop video + audio together for Chromium desktop constraints compatibility,
+            // then discard the temporary video track and keep only audio.
+            const desktopCaptureStream = await openDesktopAudioCapture(desktopAudioSourceId);
+
+            desktopCaptureStream.getVideoTracks().forEach((track) => track.stop());
+
+            const capturedDesktopAudioTrack = desktopCaptureStream.getAudioTracks()[0];
+            if (!capturedDesktopAudioTrack) {
+              throw new Error('Desktop capture returned no audio track.');
+            }
+
+            const systemAudioStream = new MediaStream([capturedDesktopAudioTrack]);
+            mediaStreams.push(systemAudioStream);
+
+            const desktopAudioTarget = createTarget('desktop-audio');
+            pipelines.streamTargets.push(desktopAudioTarget);
+
+            const desktopAudioOutput = new Output({
+              format: outputFormat,
+              target: desktopAudioTarget,
+            });
+            newOutputs.push(desktopAudioOutput);
+
+            const systemAudioTrack = systemAudioStream.getAudioTracks()[0];
+            if (systemAudioTrack) {
+              const desktopAudioSource = new MediaStreamAudioTrackSource(systemAudioTrack, {
+                codec: 'aac',
+                bitrate: 160_000,
+              });
+              pipelines.audioSources.push(desktopAudioSource);
+              desktopAudioOutput.addAudioTrack(desktopAudioSource);
+            }
+          } catch (err) {
+            console.warn('[Recorder] Failed to open desktop audio stream:', err);
+          }
+        }
+
+        pipelines.mediaStreams = mediaStreams;
         pipelines.outputs = newOutputs;
 
-        // Start both pipelines
-        await Promise.all(newOutputs.map((out) => out.start()));
+        await Promise.all(newOutputs.map((output) => output.start()));
 
         setState({
           status: 'recording',
@@ -386,34 +456,36 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
 
         return { success: true, recordingId };
       } catch (err) {
+        await stopAuxPipelines();
+
+        if (recordingId) {
+          try {
+            await window.electron.recorder.stop(recordingId);
+          } catch {
+            // ignored
+          }
+          recordingIdRef.current = null;
+        }
+
         const message = err instanceof Error ? err.message : 'Failed to start recording';
         setError(message);
         return { success: false, error: message };
       }
     },
-    [audio, frameRate, stopRecordingInternal],
+    [sources, stopAuxPipelines],
   );
 
-  // Stop recording
   const stopRecording = useCallback(async () => {
     return stopRecordingInternal();
   }, [stopRecordingInternal]);
 
-  // Pause recording
   const pauseRecording = useCallback(() => {
-    pipelinesRef.current.videoSources.forEach((s) => s.pause());
-    pipelinesRef.current.audioSources.forEach((s) => s.pause());
-
     if (state.recordingId) {
       window.electron.recorder.pause(state.recordingId);
     }
   }, [state.recordingId]);
 
-  // Resume recording
   const resumeRecording = useCallback(() => {
-    pipelinesRef.current.videoSources.forEach((s) => s.resume());
-    pipelinesRef.current.audioSources.forEach((s) => s.resume());
-
     if (state.recordingId) {
       window.electron.recorder.resume(state.recordingId);
     }

@@ -3,8 +3,8 @@ import { useEffect, useState } from 'react';
 
 import { Card } from '@/components/ui/card';
 import { formats } from '@/constants';
-import { useScreenRecorder } from '@/hooks/useScreenRecorder';
 
+import { useScreenRecorder } from '../../hooks/useScreenRecorder.ts';
 import { CameraPreview } from './camera-preview';
 import Header from './header';
 import { RecordingControls } from './recording-controls';
@@ -39,6 +39,7 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
   // Add-on Devices State
   const [recordMic, setRecordMic] = useState(false);
   const [recordCamera, setRecordCamera] = useState(false);
+  const [recordSystemAudio, setRecordSystemAudio] = useState(true);
   const [cameraDeviceId, setCameraDeviceId] = useState<string | null>(null);
   const [micDeviceId, setMicDeviceId] = useState<string | null>(null);
   const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
@@ -54,7 +55,6 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
       setOutputDir(defaultDir);
       setFileName(`recording_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}`);
 
-      // Enumerate devices
       try {
         const devices = await navigator.mediaDevices.enumerateDevices();
         setCameras(devices.filter((d) => d.kind === 'videoinput'));
@@ -87,6 +87,7 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
       recordMic,
       cameraDeviceId || undefined,
       micDeviceId || undefined,
+      recordSystemAudio,
     );
     setIsStarting(false);
 
@@ -222,6 +223,7 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
                     format={format}
                     recordMic={recordMic}
                     recordCamera={recordCamera}
+                    recordSystemAudio={recordSystemAudio}
                     cameraDeviceId={cameraDeviceId}
                     micDeviceId={micDeviceId}
                     cameras={cameras}
@@ -232,6 +234,7 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
                     onFormatChange={setFormat}
                     onRecordMicChange={setRecordMic}
                     onRecordCameraChange={setRecordCamera}
+                    onRecordSystemAudioChange={setRecordSystemAudio}
                     onCameraDeviceChange={setCameraDeviceId}
                     onMicDeviceChange={setMicDeviceId}
                   />

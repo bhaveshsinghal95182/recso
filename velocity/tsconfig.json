@@ -4,6 +4,7 @@
     "strict": true,
     "moduleResolution": "node",
     "module": "CommonJS",
+    "ignoreDeprecations": "6.0",
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "esModuleInterop": true,

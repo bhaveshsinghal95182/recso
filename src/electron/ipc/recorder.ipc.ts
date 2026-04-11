@@ -20,6 +20,25 @@ let mainWindowRef: BrowserWindow | null = null;
  */
 export function setRecorderMainWindow(window: BrowserWindow): void {
   mainWindowRef = window;
+
+  window.once('closed', () => {
+    if (mainWindowRef === window) {
+      mainWindowRef = null;
+      stopStatePolling(false);
+    }
+  });
+
+  window.webContents.on('render-process-gone', () => {
+    if (mainWindowRef === window) {
+      stopStatePolling(false);
+    }
+  });
+
+  window.webContents.once('destroyed', () => {
+    if (mainWindowRef === window) {
+      stopStatePolling(false);
+    }
+  });
 }
 
 /**
@@ -180,17 +199,34 @@ function startStatePolling(): void {
   }, 500);
 }
 
-function stopStatePolling(): void {
+function stopStatePolling(pushFinalState: boolean = true): void {
   if (statePollingInterval) {
     clearInterval(statePollingInterval);
     statePollingInterval = null;
   }
-  pushState(); // Final state update
+
+  if (pushFinalState) {
+    pushState();
+  }
 }
 
 function pushState(): void {
-  if (mainWindowRef && !mainWindowRef.isDestroyed()) {
+  if (!mainWindowRef || mainWindowRef.isDestroyed()) {
+    stopStatePolling(false);
+    return;
+  }
+
+  const webContents = mainWindowRef.webContents;
+  if (webContents.isDestroyed() || webContents.isCrashed()) {
+    stopStatePolling(false);
+    return;
+  }
+
+  try {
     const state = RecorderService.getState();
-    mainWindowRef.webContents.send('recorder:state', state);
+    webContents.send('recorder:state', state);
+  } catch (error) {
+    console.warn('[RecorderIPC] Failed to push recorder state:', error);
+    stopStatePolling(false);
   }
 }
