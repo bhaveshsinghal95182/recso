@@ -5,6 +5,10 @@ export interface DesktopSource {
   thumbnailDataUrl: string;
   /** Whether this source is a screen (vs window) */
   isScreen: boolean;
+  /** Source origin X in global pixels */
+  x?: number;
+  /** Source origin Y in global pixels */
+  y?: number;
   /** Monitor width in pixels */
   width?: number;
   /** Monitor height in pixels */
@@ -18,8 +22,14 @@ export interface RecordedMouseEvent {
   id?: number;
   recordingId: string;
   timestampMs: number;
+  /** Monitor-local cursor X in pixels (legacy field used for backward compatibility). */
   x: number;
+  /** Monitor-local cursor Y in pixels (legacy field used for backward compatibility). */
   y: number;
+  /** Cursor X normalized to 0..1 relative to the recorded area, when available. */
+  normalizedX?: number;
+  /** Cursor Y normalized to 0..1 relative to the recorded area, when available. */
+  normalizedY?: number;
   eventType: 'click' | 'mousemove';
   button?: 'left' | 'right' | 'middle';
 }
@@ -38,7 +48,7 @@ export interface UseScreenRecorderOptions {
   audio?: boolean;
 }
 // --- UI Types ---
-export type PropertiesTab = 'general' | 'zoom' | 'pattern' | 'export';
+export type PropertiesTab = 'general' | 'cursor' | 'zoom' | 'pattern' | 'export';
 
 // --- Types mirrored from Backend ---
 

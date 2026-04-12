@@ -1,6 +1,34 @@
 import { MIN_REGION_DURATION_MS } from '@/constants';
 import type { FocalKeyframe, RecordedMouseEvent, ZoomRegion } from '@/types';
 
+function clampUnit(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(1, value));
+}
+
+function resolveNormalizedEventCoordinates(
+  event: RecordedMouseEvent,
+  videoWidth: number,
+  videoHeight: number,
+): { x: number; y: number } {
+  const normalizedX = event.normalizedX;
+  const normalizedY = event.normalizedY;
+
+  if (typeof normalizedX === 'number' && typeof normalizedY === 'number') {
+    return {
+      x: clampUnit(normalizedX),
+      y: clampUnit(normalizedY),
+    };
+  }
+
+  return {
+    x: clampUnit(event.x / Math.max(1, videoWidth)),
+    y: clampUnit(event.y / Math.max(1, videoHeight)),
+  };
+}
+
 /**
  * Analyse mouse **click** events within a zoom region and produce
  * focal-point keyframes so the camera jumps to each click position.
@@ -35,9 +63,11 @@ export function smartPanSingleRegion(
     const elapsed = click.timestampMs - lastKeyframeMs;
     if (elapsed < MIN_REGION_DURATION_MS) continue;
 
-    // Normalise click position to 0-1 and clamp
-    const focalX = Math.max(0, Math.min(1, click.x / videoWidth));
-    const focalY = Math.max(0, Math.min(1, click.y / videoHeight));
+    const { x: focalX, y: focalY } = resolveNormalizedEventCoordinates(
+      click,
+      videoWidth,
+      videoHeight,
+    );
 
     keyframes.push({
       timestampMs: click.timestampMs,

@@ -34,9 +34,22 @@ interface VelocityBindings {
     title: string;
     className: string;
     thumbnailDataUrl?: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
   }>;
-  startMonitorRecording(outputPath: string, bitrate: number): VelocityStopper;
-  startWindowRecording(windowTitle: string, outputPath: string, bitrate: number): VelocityStopper;
+  startMonitorRecording(
+    outputPath: string,
+    bitrate: number,
+    includeSystemAudio?: boolean,
+  ): VelocityStopper;
+  startWindowRecording(
+    windowTitle: string,
+    outputPath: string,
+    bitrate: number,
+    includeSystemAudio?: boolean,
+  ): VelocityStopper;
 }
 
 interface AuxStreamState {
@@ -53,22 +66,30 @@ interface ActiveRecording {
   fileName: string;
   fileExtension: 'mp4' | 'mkv';
   sourceId: string;
+  nativeSystemAudioRequested: boolean;
   state: RecordingState;
   startedAt: number;
   stopper: VelocityStopper;
   auxStreams: Record<string, AuxStreamState>;
 }
 
+interface SourceCaptureBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+interface SourceMeta {
+  name: string;
+  isScreen: boolean;
+  isPrimary: boolean;
+  bounds?: SourceCaptureBounds;
+}
+
 let activeRecording: ActiveRecording | null = null;
 let velocityBindingsCache: VelocityBindings | null = null;
-let sourceMetaById = new Map<
-  string,
-  {
-    name: string;
-    isScreen: boolean;
-    isPrimary: boolean;
-  }
->();
+let sourceMetaById = new Map<string, SourceMeta>();
 
 const require = createRequire(import.meta.url);
 
@@ -97,6 +118,74 @@ function getVelocityBindings(): VelocityBindings {
   throw new Error(`Velocity bindings not found. Tried: ${candidatePaths.join(', ')}`);
 }
 
+function startVelocityMonitorRecording(
+  velocity: VelocityBindings,
+  outputPath: string,
+  bitrate: number,
+  includeSystemAudio: boolean,
+): VelocityStopper {
+  try {
+    return velocity.startMonitorRecording(outputPath, bitrate, includeSystemAudio);
+  } catch {
+    // Backward compatibility for older prebuilt binaries with the two-argument signature.
+    return velocity.startMonitorRecording(outputPath, bitrate);
+  }
+}
+
+function startVelocityWindowRecording(
+  velocity: VelocityBindings,
+  windowTitle: string,
+  outputPath: string,
+  bitrate: number,
+  includeSystemAudio: boolean,
+): VelocityStopper {
+  try {
+    return velocity.startWindowRecording(windowTitle, outputPath, bitrate, includeSystemAudio);
+  } catch {
+    // Backward compatibility for older prebuilt binaries with the two-argument signature.
+    return velocity.startWindowRecording(windowTitle, outputPath, bitrate);
+  }
+}
+
+function scaleDisplayBounds(
+  bounds: { x: number; y: number; width: number; height: number },
+  scaleFactor: number | undefined,
+): SourceCaptureBounds {
+  const scale =
+    Number.isFinite(scaleFactor) && (scaleFactor as number) > 0 ? (scaleFactor as number) : 1;
+
+  return {
+    x: Math.round(bounds.x * scale),
+    y: Math.round(bounds.y * scale),
+    width: Math.max(1, Math.round(bounds.width * scale)),
+    height: Math.max(1, Math.round(bounds.height * scale)),
+  };
+}
+
+function resolveBoundsFromSource(source: DesktopSource): SourceCaptureBounds | undefined {
+  if (
+    !Number.isFinite(source.x) ||
+    !Number.isFinite(source.y) ||
+    !Number.isFinite(source.width) ||
+    !Number.isFinite(source.height)
+  ) {
+    return undefined;
+  }
+
+  const width = Math.round(source.width as number);
+  const height = Math.round(source.height as number);
+  if (width <= 0 || height <= 0) {
+    return undefined;
+  }
+
+  return {
+    x: Math.round(source.x as number),
+    y: Math.round(source.y as number),
+    width,
+    height,
+  };
+}
+
 /**
  * Get available desktop sources (screens and windows).
  */
@@ -119,6 +208,9 @@ export async function getSources(): Promise<DesktopSource[]> {
     for (const source of batch) {
       const displayId = source.display_id ? String(source.display_id) : null;
       const matchedDisplay = displayId ? displayById.get(displayId) : undefined;
+      const scaledBounds = matchedDisplay
+        ? scaleDisplayBounds(matchedDisplay.bounds, matchedDisplay.scaleFactor)
+        : undefined;
 
       if (matchedDisplay && matchedDisplay.id !== primaryDisplayId) {
         continue;
@@ -129,8 +221,10 @@ export async function getSources(): Promise<DesktopSource[]> {
         name: source.name,
         thumbnailDataUrl: source.thumbnail.toDataURL(),
         isScreen: true,
-        width: matchedDisplay?.size.width,
-        height: matchedDisplay?.size.height,
+        x: scaledBounds?.x,
+        y: scaledBounds?.y,
+        width: scaledBounds?.width,
+        height: scaledBounds?.height,
         isPrimary: matchedDisplay ? matchedDisplay.id === primaryDisplayId : undefined,
       });
     }
@@ -159,6 +253,10 @@ export async function getSources(): Promise<DesktopSource[]> {
         name: windowInfo.title,
         thumbnailDataUrl: windowInfo.thumbnailDataUrl || '',
         isScreen: false,
+        x: windowInfo.x,
+        y: windowInfo.y,
+        width: windowInfo.width,
+        height: windowInfo.height,
       });
     });
   } catch (error) {
@@ -192,11 +290,33 @@ export async function getSources(): Promise<DesktopSource[]> {
         name: source.name,
         isScreen: source.isScreen,
         isPrimary: Boolean(source.isPrimary),
+        bounds: resolveBoundsFromSource(source),
       },
     ]),
   );
 
   return normalizedSources;
+}
+
+export function resolveMouseTrackingBounds(sourceId: string): SourceCaptureBounds | undefined {
+  const sourceMeta = sourceMetaById.get(sourceId);
+  if (sourceMeta?.bounds) {
+    return sourceMeta.bounds;
+  }
+
+  const likelyScreenSource =
+    sourceMeta?.isScreen !== undefined
+      ? sourceMeta.isScreen
+      : sourceId.startsWith('screen:') || sourceId === 'screen';
+
+  if (likelyScreenSource) {
+    const primaryDisplay = screen.getPrimaryDisplay();
+    return scaleDisplayBounds(primaryDisplay.bounds, primaryDisplay.scaleFactor);
+  }
+
+  // Fallback keeps cursor tracking functional on older native builds that do not expose window bounds yet.
+  const primaryDisplay = screen.getPrimaryDisplay();
+  return scaleDisplayBounds(primaryDisplay.bounds, primaryDisplay.scaleFactor);
 }
 
 function ensureTempDir(): string {
@@ -243,6 +363,24 @@ function cleanupAuxTempFiles(auxStreams: Record<string, AuxStreamState>): void {
       // ignored
     }
   });
+}
+
+async function hasPrimaryAudioTrack(filePath: string): Promise<boolean> {
+  const { ALL_FORMATS, FilePathSource, Input } = await import('mediabunny');
+
+  const input = new Input({
+    source: new FilePathSource(filePath),
+    formats: ALL_FORMATS,
+  });
+
+  try {
+    const audioTrack = await input.getPrimaryAudioTrack();
+    return Boolean(audioTrack);
+  } catch {
+    return false;
+  } finally {
+    input.dispose();
+  }
 }
 
 async function muxDesktopAudioIntoVideo(
@@ -448,8 +586,22 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
   try {
     const velocity = getVelocityBindings();
     const recordingId = randomUUID();
-    const fileExt = config.fileExtension || 'mp4';
+    if (config.fileExtension === 'mkv') {
+      console.warn(
+        '[RecorderService] MKV recording is temporarily disabled for native capture; using MP4 to avoid corruption.',
+      );
+    }
+    const fileExt: 'mp4' = 'mp4';
     const bitrate = config.options?.videoBitrate || 8_000_000;
+    const nativeSystemAudioEnabled =
+      process.platform === 'win32' && process.env.RECSO_ENABLE_NATIVE_SYSTEM_AUDIO === '1';
+    const useNativeSystemAudio = Boolean(config.recordSystemAudio) && nativeSystemAudioEnabled;
+
+    if (config.recordSystemAudio && !useNativeSystemAudio) {
+      console.log(
+        '[RecorderService] Native system audio disabled; using desktop audio sidecar + mux fallback.',
+      );
+    }
     const tempDir = ensureTempDir();
     const tempPath = path.join(tempDir, `rec_vel_${recordingId}.${fileExt}`);
 
@@ -468,7 +620,7 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
         };
       }
 
-      stopper = velocity.startMonitorRecording(tempPath, bitrate);
+      stopper = startVelocityMonitorRecording(velocity, tempPath, bitrate, useNativeSystemAudio);
     } else {
       const windowTitle = selectedSourceMeta?.name;
       if (!windowTitle) {
@@ -478,7 +630,13 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
         };
       }
 
-      stopper = velocity.startWindowRecording(windowTitle, tempPath, bitrate);
+      stopper = startVelocityWindowRecording(
+        velocity,
+        windowTitle,
+        tempPath,
+        bitrate,
+        useNativeSystemAudio,
+      );
     }
 
     if (config.recordCamera) {
@@ -512,6 +670,7 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
       fileName: config.fileName,
       fileExtension: fileExt,
       sourceId: config.sourceId,
+      nativeSystemAudioRequested: useNativeSystemAudio,
       state: 'RECORDING' as RecordingState,
       startedAt: Date.now(),
       stopper,
@@ -657,6 +816,18 @@ export async function stopRecording(recordingId: string): Promise<StopRecordingR
       if (desktopAudioStats.size === 0) {
         fs.unlinkSync(desktopAudioStream.tempPath);
       } else {
+        const nativeAudioAvailable = currentRecording.nativeSystemAudioRequested
+          ? await hasPrimaryAudioTrack(finalScreenPath)
+          : false;
+
+        if (nativeAudioAvailable) {
+          fs.unlinkSync(desktopAudioStream.tempPath);
+          console.log('[RecorderService] Native system audio was embedded by velocity.');
+          completeRecording(recordingId, finalScreenPath);
+          activeRecording = null;
+          return { success: true, filePath: finalScreenPath };
+        }
+
         const muxed = await muxDesktopAudioIntoVideo(
           finalScreenPath,
           desktopAudioStream.tempPath,

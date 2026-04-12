@@ -20,7 +20,32 @@ import {
 import { smartPanSingleRegion } from '@/lib/calculations/pan';
 import { useProjectStore } from '@/store/project-store';
 import { useTimelineStore } from '@/store/timeline-store';
-import type { ZoomRegion } from '@/types';
+import type { RecordedMouseEvent, ZoomRegion } from '@/types';
+
+function clampUnit(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(1, value));
+}
+
+function resolveNormalizedEventCoordinates(
+  event: RecordedMouseEvent,
+  videoWidth: number,
+  videoHeight: number,
+): { x: number; y: number } {
+  if (typeof event.normalizedX === 'number' && typeof event.normalizedY === 'number') {
+    return {
+      x: clampUnit(event.normalizedX),
+      y: clampUnit(event.normalizedY),
+    };
+  }
+
+  return {
+    x: clampUnit(event.x / Math.max(1, videoWidth)),
+    y: clampUnit(event.y / Math.max(1, videoHeight)),
+  };
+}
 
 export function ZoomPanel() {
   const { project } = useProjectStore();
@@ -213,9 +238,11 @@ export function ZoomPanel() {
             newZooms.push(currentRegion);
           }
 
-          // Normalize coordinates to 0-1 range
-          const focalX = Math.max(0, Math.min(1, click.x / videoWidth));
-          const focalY = Math.max(0, Math.min(1, click.y / videoHeight));
+          const { x: focalX, y: focalY } = resolveNormalizedEventCoordinates(
+            click,
+            videoWidth,
+            videoHeight,
+          );
 
           currentRegion = {
             id: crypto.randomUUID(),
@@ -246,7 +273,7 @@ export function ZoomPanel() {
   }, [project, replaceZoomRegions]);
 
   const smartPanButton = (
-    <Card className="p-4 shadow-sm border-2 border-brand/20 bg-gradient-to-br from-brand-dark/10 to-transparent gap-2">
+    <Card className="p-4 shadow-sm border-2 border-brand/20 bg-linear-to-br from-brand-dark/10 to-transparent gap-2">
       <div className="flex items-center gap-3">
         <div className="bg-brand/20 text-brand-light p-2 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_10px_rgba(16,185,129,0.2)]">
           <Ai size="24" />

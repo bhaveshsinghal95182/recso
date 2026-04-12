@@ -43,6 +43,10 @@ export interface DesktopSource {
   name: string;
   thumbnailDataUrl: string;
   isScreen: boolean;
+  /** Source origin X in global pixels */
+  x?: number;
+  /** Source origin Y in global pixels */
+  y?: number;
   /** Width in pixels */
   width?: number;
   /** Height in pixels */

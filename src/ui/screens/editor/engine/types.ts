@@ -67,6 +67,31 @@ export interface CompositionCutRegion {
   endMs: number;
 }
 
+export type CursorStyle = 'default' | 'pointer' | 'crosshair' | 'custom';
+
+export interface CompositionCursorEvent {
+  timestampMs: number;
+  x: number;
+  y: number;
+  normalizedX?: number;
+  normalizedY?: number;
+  eventType: 'click' | 'mousemove';
+  button?: 'left' | 'right' | 'middle';
+}
+
+export interface CompositionCursorConfig {
+  enabled: boolean;
+  size: number;
+  style: CursorStyle;
+  customImagePath?: string;
+  showClickAnimations: boolean;
+  clickAnimationScale: number;
+  clickDisplayDuration: number;
+  sourceWidth: number;
+  sourceHeight: number;
+  events: CompositionCursorEvent[];
+}
+
 export type BackgroundPatternConfig = BackgroundConfig;
 
 export interface RemotionInputProps {
@@ -96,6 +121,7 @@ export interface CompositionConfig {
   background: BackgroundConfig;
   video: VideoConfig;
   layout?: CompositionLayout;
+  cursor?: CompositionCursorConfig;
   zooms: ZoomKeyframe[];
   zoomRegions?: CompositionZoomRegion[];
   cuts?: CompositionCutRegion[];

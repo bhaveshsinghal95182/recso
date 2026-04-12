@@ -182,7 +182,13 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
       try {
         setError(null);
 
-        const extension: 'mp4' | 'mkv' = fileExtension || 'mp4';
+        if (fileExtension === 'mkv') {
+          console.warn(
+            '[Recorder] MKV recording is temporarily disabled for native capture; using MP4 to avoid corruption.',
+          );
+        }
+
+        const extension: 'mp4' = 'mp4';
 
         const startResult = await window.electron.recorder.start({
           sourceId,
@@ -225,7 +231,6 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
           Output,
           StreamTarget,
           Mp4OutputFormat,
-          MkvOutputFormat,
         } = await import('mediabunny');
 
         const pipelines = pipelinesRef.current;
@@ -255,10 +260,7 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
           });
         };
 
-        const outputFormat =
-          extension === 'mkv'
-            ? new MkvOutputFormat()
-            : new Mp4OutputFormat({ fastStart: 'in-memory' });
+        const outputFormat = new Mp4OutputFormat({ fastStart: 'in-memory' });
 
         const resolveDesktopAudioSourceId = (): string | null => {
           if (sourceId.startsWith('screen:')) {
@@ -357,7 +359,7 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
 
             const cameraVideoTrack = cameraStream.getVideoTracks()[0];
             const cameraVideoSource = new MediaStreamVideoTrackSource(cameraVideoTrack, {
-              codec: extension === 'mkv' ? 'vp9' : 'avc',
+              codec: 'avc',
               bitrate: 3_000_000,
             });
             pipelines.videoSources.push(cameraVideoSource);

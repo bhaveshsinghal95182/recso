@@ -5,6 +5,7 @@ import { useExportStore } from '@/store/export-store';
 import { useProjectStore } from '@/store/project-store';
 import { useUIStore } from '@/store/ui-store';
 
+import { CursorPanel } from './panels/cursor-panel';
 import { GeneralPanel } from './panels/general-panel';
 import { PatternImportPanel } from './panels/pattern-import-panel';
 import { ZoomPanel } from './panels/zoom-panel';
@@ -24,6 +25,7 @@ export function PropertiesPanel() {
   // Tab title mapping
   const tabTitles: Record<typeof activePropertiesTab, string> = {
     general: 'General',
+    cursor: 'Cursor',
     pattern: 'Pattern',
     zoom: 'Zoom',
     export: 'Export',
@@ -38,6 +40,9 @@ export function PropertiesPanel() {
 
         {/* General Tab */}
         {activePropertiesTab === 'general' && <GeneralPanel />}
+
+        {/* Cursor Tab */}
+        {activePropertiesTab === 'cursor' && <CursorPanel />}
 
         {/* Pattern Tab */}
         {activePropertiesTab === 'pattern' && <PatternImportPanel />}

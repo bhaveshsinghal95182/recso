@@ -8,7 +8,7 @@
  * - Spritesheet metadata access
  */
 
-import { ipcMain } from 'electron';
+import { dialog, ipcMain } from 'electron';
 
 import * as editorService from '../services/editor.service.js';
 import { mouseTrackerService } from '../services/mouse-tracker.service.js';
@@ -61,6 +61,21 @@ export function registerEditorHandlers(): void {
   ipcMain.handle('editor:update-cursor-config', async (_event, config: Partial<CursorConfig>) => {
     editorService.updateCursorConfig(config);
     return editorService.getActiveProject()?.cursorConfig;
+  });
+
+  // Open file picker for custom cursor image
+  ipcMain.handle('editor:show-cursor-picker', async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Select Cursor Image',
+      properties: ['openFile'],
+      filters: [{ name: 'Cursor Images', extensions: ['png', 'svg', 'jpg', 'jpeg', 'webp'] }],
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return null;
+    }
+
+    return result.filePaths[0];
   });
 
   // Update zoom configuration

@@ -224,6 +224,9 @@ electron.contextBridge.exposeInMainWorld('electron', {
     updateCursorConfig: (config: Record<string, unknown>) =>
       electron.ipcRenderer.invoke('editor:update-cursor-config', config),
 
+    showCursorPicker: (): Promise<string | null> =>
+      electron.ipcRenderer.invoke('editor:show-cursor-picker'),
+
     updateZoomConfig: (config: Record<string, unknown>) =>
       electron.ipcRenderer.invoke('editor:update-zoom-config', config),
 
@@ -309,6 +312,8 @@ electron.contextBridge.exposeInMainWorld('electron', {
         timestampMs: number;
         x: number;
         y: number;
+        normalizedX?: number;
+        normalizedY?: number;
         eventType: 'click' | 'mousemove';
         button?: 'left' | 'right' | 'middle';
       }[]

@@ -31,7 +31,7 @@ function syncVideoTime(video: HTMLVideoElement, targetMs: number, toleranceSecon
 }
 
 export function EnginePreview() {
-  const { project } = useProjectStore();
+  const { project, mouseEvents } = useProjectStore();
   const { zoomRegions, cuts, isEditingFocalPoint, selectedZoomId, updateZoom } = useTimelineStore();
   const { isPlaying, currentTime, play, pause, setDuration } = usePlaybackStore();
 
@@ -55,7 +55,7 @@ export function EnginePreview() {
     backgroundContainerStyle,
     selectedPattern,
     hasPattern,
-  } = useEnginePreviewConfigMapper(project, zoomRegions, cuts);
+  } = useEnginePreviewConfigMapper(project, zoomRegions, cuts, mouseEvents);
 
   const selectedZoom = useMemo(
     () => zoomRegions.find((region) => region.id === selectedZoomId) ?? null,

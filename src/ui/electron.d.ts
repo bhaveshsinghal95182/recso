@@ -188,6 +188,9 @@ interface ElectronAPI {
     /** Update cursor configuration */
     updateCursorConfig: (config: Partial<CursorConfig>) => Promise<CursorConfig | undefined>;
 
+    /** Open file picker for custom cursor image */
+    showCursorPicker: () => Promise<string | null>;
+
     /** Update zoom configuration */
     updateZoomConfig: (config: Partial<ZoomConfig>) => Promise<ZoomConfig | undefined>;
 

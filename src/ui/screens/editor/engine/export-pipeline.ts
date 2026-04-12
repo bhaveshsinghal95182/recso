@@ -1,6 +1,6 @@
 import type { AudioSample, VideoSample } from 'mediabunny';
 
-import type { ExportConfig, ExportProgress, Project } from '@/types';
+import type { ExportConfig, ExportProgress, Project, RecordedMouseEvent } from '@/types';
 
 import { CanvasFrameContext, createFrameCanvas, MediabunnySampleSource } from './adapters';
 import { CompositionEngine } from './engine';
@@ -37,6 +37,7 @@ export interface EngineCanvasExportResult {
 export interface EngineCanvasExportOptions {
   project: Project;
   config: ExportConfig;
+  mouseEvents?: RecordedMouseEvent[];
   onProgress?: (progress: ExportProgress) => void;
   onCancelReady?: (cancel: () => void) => void;
 }
@@ -366,6 +367,7 @@ function buildCompositionConfig(
   layout: CompositionLayout,
   sourceDurationMs: number,
   preserveUnderlyingBackground: boolean,
+  mouseEvents: RecordedMouseEvent[],
 ): CompositionConfig {
   const hasZoomRegions = project.zoomRegions.length > 0;
   const legacyZoomFallback = mapLegacyZoomConfigToZoomKeyframes(
@@ -373,6 +375,9 @@ function buildCompositionConfig(
     sourceDurationMs,
     hasZoomRegions,
   );
+  const sourceWidth = project.videoDimensions?.width ?? 0;
+  const sourceHeight = project.videoDimensions?.height ?? 0;
+  const rawCursor = project.cursorConfig;
 
   return {
     ...defaultConfig,
@@ -407,6 +412,33 @@ function buildCompositionConfig(
       startMs: cut.startMs,
       endMs: cut.endMs,
     })),
+    cursor: {
+      enabled: true,
+      size: Number.isFinite(rawCursor?.size) ? Math.max(0.2, rawCursor.size) : 1,
+      style: rawCursor?.style ?? 'default',
+      customImagePath: rawCursor?.customImagePath,
+      showClickAnimations: rawCursor?.showClickAnimations ?? true,
+      clickAnimationScale: Number.isFinite(rawCursor?.clickAnimationScale)
+        ? Math.max(0.5, rawCursor.clickAnimationScale)
+        : 1.2,
+      clickDisplayDuration: Number.isFinite(rawCursor?.clickDisplayDuration)
+        ? Math.max(80, rawCursor.clickDisplayDuration)
+        : 500,
+      sourceWidth,
+      sourceHeight,
+      events: [...mouseEvents]
+        .filter((event) => Number.isFinite(event.timestampMs))
+        .sort((a, b) => a.timestampMs - b.timestampMs)
+        .map((event) => ({
+          timestampMs: event.timestampMs,
+          x: event.x,
+          y: event.y,
+          normalizedX: event.normalizedX,
+          normalizedY: event.normalizedY,
+          eventType: event.eventType,
+          button: event.button,
+        })),
+    },
   };
 }
 
@@ -450,6 +482,7 @@ function createProgressSnapshot(
 export async function runEngineCanvasExport({
   project,
   config,
+  mouseEvents = [],
   onProgress,
   onCancelReady,
 }: EngineCanvasExportOptions): Promise<EngineCanvasExportResult> {
@@ -515,6 +548,7 @@ export async function runEngineCanvasExport({
       layout,
       sourceDurationMs,
       backgroundLayer !== null,
+      mouseEvents,
     );
     const engine = new CompositionEngine(compositionConfig);
     engine.setDuration(compositionDurationMs / 1000);

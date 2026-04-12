@@ -1,7 +1,7 @@
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 
-import type { CutRegion, Project, ZoomRegion } from '@/types';
+import type { CutRegion, Project, RecordedMouseEvent, ZoomRegion } from '@/types';
 
 import { defaultConfig } from './functions';
 import type { CompositionConfig, CompositionLayout, ZoomKeyframe } from './types';
@@ -128,11 +128,17 @@ function mapLegacyZoomConfigToZoomKeyframes(
 }
 
 function buildCompositionConfig(
+  project: Project | null,
   layout: CompositionLayout,
   zoomRegions: ZoomRegion[],
   cuts: CutRegion[],
   legacyZoomFallback: ZoomKeyframe[],
+  mouseEvents: RecordedMouseEvent[],
 ): CompositionConfig {
+  const sourceWidth = project?.videoDimensions?.width ?? 0;
+  const sourceHeight = project?.videoDimensions?.height ?? 0;
+  const rawCursor = project?.cursorConfig;
+
   return {
     ...defaultConfig,
     background: {
@@ -165,6 +171,33 @@ function buildCompositionConfig(
       startMs: cut.startMs,
       endMs: cut.endMs,
     })),
+    cursor: {
+      enabled: true,
+      size: Number.isFinite(rawCursor?.size) ? Math.max(0.2, rawCursor?.size ?? 1) : 1,
+      style: rawCursor?.style ?? 'default',
+      customImagePath: rawCursor?.customImagePath,
+      showClickAnimations: rawCursor?.showClickAnimations ?? true,
+      clickAnimationScale: Number.isFinite(rawCursor?.clickAnimationScale)
+        ? Math.max(0.5, rawCursor?.clickAnimationScale ?? 1.2)
+        : 1.2,
+      clickDisplayDuration: Number.isFinite(rawCursor?.clickDisplayDuration)
+        ? Math.max(80, rawCursor?.clickDisplayDuration ?? 500)
+        : 500,
+      sourceWidth,
+      sourceHeight,
+      events: [...mouseEvents]
+        .filter((event) => Number.isFinite(event.timestampMs))
+        .sort((a, b) => a.timestampMs - b.timestampMs)
+        .map((event) => ({
+          timestampMs: event.timestampMs,
+          x: event.x,
+          y: event.y,
+          normalizedX: event.normalizedX,
+          normalizedY: event.normalizedY,
+          eventType: event.eventType,
+          button: event.button,
+        })),
+    },
   };
 }
 
@@ -172,6 +205,7 @@ export function useEnginePreviewConfigMapper(
   project: Project | null,
   zoomRegions: ZoomRegion[],
   cuts: CutRegion[],
+  mouseEvents: RecordedMouseEvent[],
 ): EnginePreviewMappedConfig {
   const durationMs = project?.timeline?.duration || 0;
   const [canvasSize, setCanvasSize] = useState<CanvasSize>(DEFAULT_CANVAS_SIZE);
@@ -257,8 +291,9 @@ export function useEnginePreviewConfigMapper(
   );
 
   const compositionConfig = useMemo(
-    () => buildCompositionConfig(layout, zoomRegions, cuts, legacyZoomFallback),
-    [cuts, layout, legacyZoomFallback, zoomRegions],
+    () =>
+      buildCompositionConfig(project, layout, zoomRegions, cuts, legacyZoomFallback, mouseEvents),
+    [cuts, layout, legacyZoomFallback, mouseEvents, project, zoomRegions],
   );
 
   const videoSrc = useMemo(() => toFileUrl(project?.rawVideoPath), [project?.rawVideoPath]);

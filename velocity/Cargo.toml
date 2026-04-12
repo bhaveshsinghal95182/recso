@@ -14,6 +14,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg"] }
 napi = "3.0.0"
 napi-derive = "3.0.0"
 tokio = { version = "1.49.0", features = ["rt", "macros"] }
+wasapi = "0.23.0"
 windows = { version = "0.62.2", features = [
   "Win32_Foundation",
   "Win32_UI_WindowsAndMessaging",

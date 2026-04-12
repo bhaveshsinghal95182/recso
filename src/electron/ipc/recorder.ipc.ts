@@ -55,9 +55,14 @@ export function registerRecorderHandlers(): void {
     const result = RecorderService.startRecording(config);
 
     if (result.success && result.recordingId) {
+      const trackingBounds = RecorderService.resolveMouseTrackingBounds(config.sourceId);
+
       // Start mouse tracking for this recording
-      mouseTrackerService.startTracking(result.recordingId);
+      mouseTrackerService.startTracking(result.recordingId, trackingBounds);
       console.log('[RecorderIPC] Mouse tracking started for recording:', result.recordingId);
+      if (trackingBounds) {
+        console.log('[RecorderIPC] Mouse tracking bounds:', trackingBounds);
+      }
 
       // Start pushing state updates
       startStatePolling();

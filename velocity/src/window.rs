@@ -6,10 +6,11 @@ use napi_derive::napi;
 use std::io::Cursor;
 use std::sync::mpsc::{channel, Sender};
 use std::time::Duration;
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetWindowLongW, IsWindowVisible, GWL_EXSTYLE, WS_EX_TOOLWINDOW,
+    GetClassNameW, GetClientRect, GetWindowLongW, GetWindowRect, IsWindowVisible,
+    GWL_EXSTYLE, WS_EX_TOOLWINDOW,
 };
 use windows_capture::capture::{Context, GraphicsCaptureApiHandler};
 use windows_capture::frame::Frame;
@@ -186,6 +187,10 @@ pub struct WindowInfo {
     pub title: String,
     pub class_name: String,
     pub thumbnail_data_url: Option<String>,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[napi]
@@ -206,9 +211,22 @@ pub fn list_available_windows() -> napi::Result<Vec<WindowInfo>> {
                 if (ex_style & WS_EX_TOOLWINDOW.0) != 0 { continue; }
 
                 // 4. Filter empty/purely transparent overlay rectangles
-                let mut rect = windows::Win32::Foundation::RECT::default();
-                let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::GetClientRect(hwnd, &mut rect) };
-                if rect.right == 0 || rect.bottom == 0 { continue; }
+                let mut client_rect = RECT::default();
+                let has_client_rect = unsafe { GetClientRect(hwnd, &mut client_rect).is_ok() };
+                if !has_client_rect { continue; }
+
+                if client_rect.right <= client_rect.left || client_rect.bottom <= client_rect.top {
+                    continue;
+                }
+
+                let mut window_rect = RECT::default();
+                let has_window_rect = unsafe { GetWindowRect(hwnd, &mut window_rect).is_ok() };
+                if !has_window_rect {
+                    continue;
+                }
+
+                let window_width = (window_rect.right - window_rect.left).max(1) as u32;
+                let window_height = (window_rect.bottom - window_rect.top).max(1) as u32;
 
                 let mut cloaked_val: u32 = 0;
                 let hr = unsafe {
@@ -227,7 +245,7 @@ pub fn list_available_windows() -> napi::Result<Vec<WindowInfo>> {
                 }
 
                 let mut class_name_buf = [0u16; 256];
-                let len = unsafe { windows::Win32::UI::WindowsAndMessaging::GetClassNameW(hwnd, &mut class_name_buf) };
+                let len = unsafe { GetClassNameW(hwnd, &mut class_name_buf) };
                 let class_name = String::from_utf16_lossy(&class_name_buf[..len as usize]);
 
                 // 5. Filter out specific system classes that act as background helpers
@@ -244,6 +262,10 @@ pub fn list_available_windows() -> napi::Result<Vec<WindowInfo>> {
                     title,
                     class_name,
                     thumbnail_data_url,
+                    x: window_rect.left,
+                    y: window_rect.top,
+                    width: window_width,
+                    height: window_height,
                 });
             }
         }

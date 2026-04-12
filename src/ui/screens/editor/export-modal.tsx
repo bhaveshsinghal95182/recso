@@ -68,7 +68,7 @@ const FPS_OPTIONS: { value: ExportFPS; label: string }[] = [
 ];
 
 export function ExportModal({ open, onOpenChange }: ExportModalProps) {
-  const { project } = useProjectStore();
+  const { project, mouseEvents } = useProjectStore();
   const {
     state: exportState,
     progress,
@@ -158,6 +158,7 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
       const rendered = await runEngineCanvasExport({
         project,
         config,
+        mouseEvents,
         onProgress: (nextProgress) => {
           setProgress(nextProgress);
         },

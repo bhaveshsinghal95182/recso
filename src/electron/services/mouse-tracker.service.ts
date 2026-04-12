@@ -18,8 +18,15 @@ export interface MouseEvent {
   timestampMs: number;
   x: number;
   y: number;
+  normalizedX?: number;
+  normalizedY?: number;
   eventType: 'click' | 'mousemove';
   button?: 'left' | 'right' | 'middle';
+}
+
+interface MouseEventMeta {
+  normalizedX?: number;
+  normalizedY?: number;
 }
 
 /** Monitor bounds for coordinate offset calculation */
@@ -99,14 +106,15 @@ class MouseTrackerService {
     if (event.button === 2) button = 'right';
     else if (event.button === 3) button = 'middle';
 
-    // Get normalized coordinates
-    const { x, y } = this.normalizeCoordinates(event.x, event.y);
+    const { x, y, normalizedX, normalizedY } = this.normalizeCoordinates(event.x, event.y);
 
     const mouseEvent: MouseEvent = {
       recordingId: this.recordingId,
       timestampMs: Date.now() - this.recordingStartTime,
       x,
       y,
+      normalizedX,
+      normalizedY,
       eventType: 'click',
       button,
     };
@@ -127,14 +135,15 @@ class MouseTrackerService {
     }
     this.lastMoveTime = now;
 
-    // Get normalized coordinates
-    const { x, y } = this.normalizeCoordinates(event.x, event.y);
+    const { x, y, normalizedX, normalizedY } = this.normalizeCoordinates(event.x, event.y);
 
     const mouseEvent: MouseEvent = {
       recordingId: this.recordingId,
       timestampMs: now - this.recordingStartTime,
       x,
       y,
+      normalizedX,
+      normalizedY,
       eventType: 'mousemove',
     };
 
@@ -142,16 +151,57 @@ class MouseTrackerService {
   }
 
   /**
-   * Normalize coordinates to monitor-local if bounds are set
+   * Convert global coordinates to monitor-local pixels and optional 0..1 normalized values.
    */
-  private normalizeCoordinates(x: number, y: number): { x: number; y: number } {
+  private normalizeCoordinates(
+    x: number,
+    y: number,
+  ): { x: number; y: number; normalizedX?: number; normalizedY?: number } {
     if (this.monitorBounds) {
+      const localX = x - this.monitorBounds.x;
+      const localY = y - this.monitorBounds.y;
+      const hasValidSize = this.monitorBounds.width > 0 && this.monitorBounds.height > 0;
+
       return {
-        x: x - this.monitorBounds.x,
-        y: y - this.monitorBounds.y,
+        x: localX,
+        y: localY,
+        normalizedX: hasValidSize ? clampUnit(localX / this.monitorBounds.width) : undefined,
+        normalizedY: hasValidSize ? clampUnit(localY / this.monitorBounds.height) : undefined,
       };
     }
     return { x, y };
+  }
+
+  private serialiseEventMeta(event: MouseEvent): string | null {
+    const normalizedX = toFiniteOrUndefined(event.normalizedX);
+    const normalizedY = toFiniteOrUndefined(event.normalizedY);
+
+    if (normalizedX === undefined || normalizedY === undefined) {
+      return null;
+    }
+
+    const payload: MouseEventMeta = {
+      normalizedX,
+      normalizedY,
+    };
+
+    return JSON.stringify(payload);
+  }
+
+  private parseEventMeta(rawMeta: unknown): MouseEventMeta {
+    if (typeof rawMeta !== 'string' || rawMeta.trim().length === 0) {
+      return {};
+    }
+
+    try {
+      const parsed = JSON.parse(rawMeta) as Record<string, unknown>;
+      return {
+        normalizedX: toFiniteOrUndefined(parsed.normalizedX),
+        normalizedY: toFiniteOrUndefined(parsed.normalizedY),
+      };
+    } catch {
+      return {};
+    }
   }
 
   /**
@@ -199,11 +249,12 @@ class MouseTrackerService {
       const db = getDatabase();
       const stmt = db.prepare(`
         INSERT INTO mouse_events (recording_id, timestamp_ms, x, y, event_type, button, meta)
-        VALUES (?, ?, ?, ?, ?, ?, NULL)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
       `);
 
       const insertMany = db.transaction((events: MouseEvent[]) => {
         for (const event of events) {
+          const meta = this.serialiseEventMeta(event);
           stmt.run(
             event.recordingId,
             event.timestampMs,
@@ -211,6 +262,7 @@ class MouseTrackerService {
             event.y,
             event.eventType,
             event.button ?? null,
+            meta,
           );
         }
       });
@@ -252,15 +304,20 @@ class MouseTrackerService {
       `);
       const rows = stmt.all(recordingId) as Array<Record<string, unknown>>;
 
-      return rows.map((row) => ({
-        id: row.id as number,
-        recordingId: row.recording_id as string,
-        timestampMs: row.timestamp_ms as number,
-        x: row.x as number,
-        y: row.y as number,
-        eventType: row.event_type as 'click' | 'mousemove',
-        button: row.button as 'left' | 'right' | 'middle' | undefined,
-      }));
+      return rows.map((row) => {
+        const meta = this.parseEventMeta(row.meta);
+        return {
+          id: row.id as number,
+          recordingId: row.recording_id as string,
+          timestampMs: row.timestamp_ms as number,
+          x: row.x as number,
+          y: row.y as number,
+          normalizedX: meta.normalizedX,
+          normalizedY: meta.normalizedY,
+          eventType: row.event_type as 'click' | 'mousemove',
+          button: row.button as 'left' | 'right' | 'middle' | undefined,
+        };
+      });
     } catch (error) {
       console.error('[MouseTrackerService] Failed to get events:', error);
       return [];
@@ -294,6 +351,20 @@ class MouseTrackerService {
   getCurrentRecordingId(): string | null {
     return this.recordingId;
   }
+}
+
+function clampUnit(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(1, value));
+}
+
+function toFiniteOrUndefined(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return value;
 }
 
 // Export singleton instance
