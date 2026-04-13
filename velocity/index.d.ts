@@ -4,6 +4,10 @@ export declare class Stopper {
   stop(): void
 }
 
+export declare function captureCursorSamplesJson(durationMs: number, intervalMs?: number | undefined | null): string
+
+export declare function captureCursorSnapshotJson(): string
+
 export declare function isCursorSettingsSupported(): boolean
 
 export declare function listAvailableWindows(): Array<WindowInfo>

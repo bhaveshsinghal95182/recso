@@ -30,6 +30,10 @@ export interface CursorConfig {
   clickAnimationScale: number;
   /** Click indicator duration in ms */
   clickDisplayDuration: number;
+  /** Show motion blur trail during fast cursor movement */
+  showMotionBlur: boolean;
+  /** Motion blur intensity multiplier */
+  motionBlurStrength: number;
 }
 
 /**
@@ -161,6 +165,8 @@ export const DEFAULT_CURSOR_CONFIG: CursorConfig = {
   showClickAnimations: true,
   clickAnimationScale: 1.2,
   clickDisplayDuration: 500,
+  showMotionBlur: true,
+  motionBlurStrength: 0.7,
 };
 
 /**

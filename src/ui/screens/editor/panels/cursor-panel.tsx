@@ -1,4 +1,4 @@
-import { Crosshair, Hand, ImagePlus, MousePointer2 } from 'lucide-react';
+import { ImagePlus } from 'lucide-react';
 import { useMemo } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -6,20 +6,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { useProjectStore } from '@/store/project-store';
-import type { CursorStyle } from '@/types';
-
-type CursorOption = {
-  style: CursorStyle;
-  label: string;
-  description: string;
-  Icon: React.ComponentType<{ className?: string }>;
-};
-
-type CursorPngPreset = {
-  id: string;
-  label: string;
-  dataUrl: string;
-};
 
 type SvgNode = [tag: string, attrs: Record<string, string>];
 
@@ -28,33 +14,6 @@ type CursorIconPreset = {
   label: string;
   dataUrl: string;
 };
-
-const CURSOR_OPTIONS: CursorOption[] = [
-  {
-    style: 'default',
-    label: 'Default',
-    description: 'Dark arrow cursor',
-    Icon: MousePointer2,
-  },
-  {
-    style: 'pointer',
-    label: 'Pointer',
-    description: 'Blue highlight cursor',
-    Icon: Hand,
-  },
-  {
-    style: 'crosshair',
-    label: 'Crosshair',
-    description: 'Precise crosshair cursor',
-    Icon: Crosshair,
-  },
-  {
-    style: 'custom',
-    label: 'Custom',
-    description: 'Use a PNG image',
-    Icon: ImagePlus,
-  },
-];
 
 const LUCIDE_MOUSE_POINTER_2_NODE: SvgNode[] = [
   [
@@ -98,6 +57,8 @@ const LUCIDE_CROSSHAIR_NODE: SvgNode[] = [
   ['line', { x1: '12', x2: '12', y1: '22', y2: '18' }],
 ];
 
+const LUCIDE_CURSOR_STROKE = '#ffffff';
+
 function escapeXmlAttribute(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -106,7 +67,7 @@ function escapeXmlAttribute(value: string): string {
     .replace(/>/g, '&gt;');
 }
 
-function createLucideIconDataUrl(iconNode: SvgNode[], stroke: string, strokeWidth = 2): string {
+function createLucideIconDataUrl(iconNode: SvgNode[], strokeWidth = 2): string {
   const body = iconNode
     .map(([tag, attrs]) => {
       const serializedAttrs = Object.entries(attrs)
@@ -116,7 +77,7 @@ function createLucideIconDataUrl(iconNode: SvgNode[], stroke: string, strokeWidt
     })
     .join('');
 
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="${escapeXmlAttribute(stroke)}" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="${LUCIDE_CURSOR_STROKE}" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
 
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
@@ -126,22 +87,22 @@ function buildLucideCursorPresets(): CursorIconPreset[] {
     {
       id: 'lucide-pointer-light',
       label: 'Lucide Pointer',
-      dataUrl: createLucideIconDataUrl(LUCIDE_MOUSE_POINTER_2_NODE, '#ffffff'),
+      dataUrl: createLucideIconDataUrl(LUCIDE_MOUSE_POINTER_2_NODE),
     },
     {
       id: 'lucide-pointer-click',
       label: 'Lucide Click',
-      dataUrl: createLucideIconDataUrl(LUCIDE_MOUSE_POINTER_CLICK_NODE, '#5fd3ff'),
+      dataUrl: createLucideIconDataUrl(LUCIDE_MOUSE_POINTER_CLICK_NODE),
     },
     {
       id: 'lucide-hand',
       label: 'Lucide Hand',
-      dataUrl: createLucideIconDataUrl(LUCIDE_HAND_NODE, '#f8b84d'),
+      dataUrl: createLucideIconDataUrl(LUCIDE_HAND_NODE),
     },
     {
       id: 'lucide-crosshair',
       label: 'Lucide Crosshair',
-      dataUrl: createLucideIconDataUrl(LUCIDE_CROSSHAIR_NODE, '#d7dbff'),
+      dataUrl: createLucideIconDataUrl(LUCIDE_CROSSHAIR_NODE),
     },
   ];
 }
@@ -171,67 +132,9 @@ function toImageSrc(path: string | undefined): string | null {
   return normalized;
 }
 
-function createPresetPng(fill: string, stroke: string): string {
-  const canvas = document.createElement('canvas');
-  canvas.width = 80;
-  canvas.height = 80;
-
-  const ctx = canvas.getContext('2d');
-  if (!ctx) {
-    return '';
-  }
-
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.save();
-  ctx.translate(20, 12);
-  ctx.beginPath();
-  ctx.moveTo(0, 0);
-  ctx.lineTo(22, 50);
-  ctx.lineTo(13, 48);
-  ctx.lineTo(8, 62);
-  ctx.lineTo(1, 59);
-  ctx.lineTo(6, 45);
-  ctx.lineTo(0, 45);
-  ctx.closePath();
-  ctx.fillStyle = fill;
-  ctx.strokeStyle = stroke;
-  ctx.lineWidth = 2.5;
-  ctx.fill();
-  ctx.stroke();
-  ctx.restore();
-
-  return canvas.toDataURL('image/png');
-}
-
-function buildCursorPngPresets(): CursorPngPreset[] {
-  return [
-    {
-      id: 'white-outline',
-      label: 'White Outline',
-      dataUrl: createPresetPng('rgba(25, 25, 28, 0.98)', 'rgba(255, 255, 255, 0.96)'),
-    },
-    {
-      id: 'electric-blue',
-      label: 'Electric Blue',
-      dataUrl: createPresetPng('rgba(35, 176, 255, 0.95)', 'rgba(255, 255, 255, 0.96)'),
-    },
-    {
-      id: 'lime-glow',
-      label: 'Lime Glow',
-      dataUrl: createPresetPng('rgba(114, 243, 88, 0.95)', 'rgba(15, 30, 14, 0.95)'),
-    },
-    {
-      id: 'sunset',
-      label: 'Sunset',
-      dataUrl: createPresetPng('rgba(255, 150, 90, 0.95)', 'rgba(65, 25, 14, 0.95)'),
-    },
-  ];
-}
-
 export function CursorPanel() {
   const { project, updateCursorConfig } = useProjectStore();
 
-  const pngPresets = useMemo(buildCursorPngPresets, []);
   const lucidePresets = useMemo(buildLucideCursorPresets, []);
 
   if (!project) {
@@ -240,10 +143,10 @@ export function CursorPanel() {
 
   const cursor = project.cursorConfig;
   const activeImage = toImageSrc(cursor.customImagePath);
-
-  const handleStyleSelect = (style: CursorStyle) => {
-    void updateCursorConfig({ style });
-  };
+  const showMotionBlur = cursor.showMotionBlur ?? true;
+  const motionBlurStrength = Number.isFinite(cursor.motionBlurStrength)
+    ? clamp(cursor.motionBlurStrength, 0, 2.5)
+    : 0.7;
 
   const handleSizeInput = (nextValue: number) => {
     if (!Number.isFinite(nextValue)) {
@@ -269,6 +172,14 @@ export function CursorPanel() {
     void updateCursorConfig({ clickDisplayDuration: clamp(nextValue, 80, 3000) });
   };
 
+  const handleMotionBlurStrengthInput = (nextValue: number) => {
+    if (!Number.isFinite(nextValue)) {
+      return;
+    }
+
+    void updateCursorConfig({ motionBlurStrength: clamp(nextValue, 0, 2.5) });
+  };
+
   const openCursorPicker = async () => {
     const selectedPath = await window.electron.editor.showCursorPicker();
     if (!selectedPath) {
@@ -280,70 +191,6 @@ export function CursorPanel() {
 
   return (
     <div className="space-y-6">
-      <div className="space-y-2">
-        <Label>Cursor Type</Label>
-        <div className="grid grid-cols-2 gap-2">
-          {CURSOR_OPTIONS.map((option) => {
-            const isActive = cursor.style === option.style;
-            return (
-              <button
-                key={option.style}
-                type="button"
-                onClick={() => handleStyleSelect(option.style)}
-                className={`rounded-md border p-2 text-left transition-colors ${
-                  isActive
-                    ? 'border-primary bg-primary/10 text-foreground'
-                    : 'border-border bg-card hover:border-primary/50 hover:bg-muted/40'
-                }`}
-              >
-                <div className="flex items-center gap-2 text-sm font-medium">
-                  <option.Icon className="h-4 w-4" />
-                  {option.label}
-                </div>
-                <p className="mt-1 text-[11px] text-muted-foreground leading-snug">
-                  {option.description}
-                </p>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        <Label>PNG Presets</Label>
-        <div className="grid grid-cols-2 gap-2">
-          {pngPresets.map((preset) => {
-            const isActive = cursor.style === 'custom' && cursor.customImagePath === preset.dataUrl;
-            return (
-              <button
-                key={preset.id}
-                type="button"
-                onClick={() =>
-                  void updateCursorConfig({ style: 'custom', customImagePath: preset.dataUrl })
-                }
-                className={`rounded-md border p-2 transition-colors ${
-                  isActive
-                    ? 'border-primary bg-primary/10'
-                    : 'border-border bg-card hover:border-primary/50 hover:bg-muted/40'
-                }`}
-                title={preset.label}
-              >
-                <div className="h-14 rounded-sm bg-muted/40 flex items-center justify-center">
-                  <img
-                    src={preset.dataUrl}
-                    alt={preset.label}
-                    className="h-10 w-10 object-contain"
-                  />
-                </div>
-                <div className="mt-1 text-[11px] text-muted-foreground truncate">
-                  {preset.label}
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
       <div className="space-y-2">
         <Label>Lucide Icon Presets</Label>
         <div className="grid grid-cols-2 gap-2">
@@ -363,12 +210,8 @@ export function CursorPanel() {
                 }`}
                 title={preset.label}
               >
-                <div className="h-14 rounded-sm bg-muted/40 flex items-center justify-center">
-                  <img
-                    src={preset.dataUrl}
-                    alt={preset.label}
-                    className="h-10 w-10 object-contain"
-                  />
+                <div className="h-10 rounded-sm bg-muted/40 flex items-center justify-center">
+                  <img src={preset.dataUrl} alt={preset.label} className="h-7 w-7 object-contain" />
                 </div>
                 <div className="mt-1 text-[11px] text-muted-foreground truncate">
                   {preset.label}
@@ -402,9 +245,9 @@ export function CursorPanel() {
             onClick={() => {
               void openCursorPicker();
             }}
-            className="w-full h-22 rounded-md border border-border/60 bg-muted/10 hover:bg-muted/30 hover:border-primary/50 transition-colors flex items-center justify-center"
+            className="w-full h-16 rounded-md border border-border/60 bg-muted/10 hover:bg-muted/30 hover:border-primary/50 transition-colors flex items-center justify-center"
           >
-            <img src={activeImage} alt="Custom cursor" className="h-14 w-14 object-contain" />
+            <img src={activeImage} alt="Custom cursor" className="h-10 w-10 object-contain" />
           </button>
         ) : (
           <button
@@ -412,9 +255,9 @@ export function CursorPanel() {
             onClick={() => {
               void openCursorPicker();
             }}
-            className="w-full h-22 rounded-md border border-dashed border-border/60 hover:border-primary/50 flex flex-col items-center justify-center gap-2 cursor-pointer transition-colors bg-muted/10 hover:bg-muted/30"
+            className="w-full h-16 rounded-md border border-dashed border-border/60 hover:border-primary/50 flex flex-col items-center justify-center gap-1 cursor-pointer transition-colors bg-muted/10 hover:bg-muted/30"
           >
-            <ImagePlus className="w-5 h-5 text-muted-foreground/70" />
+            <ImagePlus className="w-4 h-4 text-muted-foreground/70" />
             <span className="text-[11px] text-muted-foreground font-medium">
               Choose PNG/SVG file
             </span>
@@ -445,6 +288,45 @@ export function CursorPanel() {
             onChange={(e) => handleSizeInput(Number(e.target.value))}
             className="w-20 font-mono text-xs h-8"
           />
+        </div>
+      </div>
+
+      <div className="space-y-3 rounded-md border border-border/60 p-3 bg-muted/10">
+        <div className="flex items-center justify-between">
+          <Label htmlFor="motion-blur-toggle">Motion Blur</Label>
+          <Switch
+            id="motion-blur-toggle"
+            checked={showMotionBlur}
+            onCheckedChange={(checked) => void updateCursorConfig({ showMotionBlur: checked })}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="motion-blur-strength">Blur Strength</Label>
+          <div className="flex items-center gap-2">
+            <input
+              id="motion-blur-strength-slider"
+              type="range"
+              min="0"
+              max="2.5"
+              step="0.05"
+              value={motionBlurStrength}
+              disabled={!showMotionBlur}
+              onChange={(e) => handleMotionBlurStrengthInput(Number(e.target.value))}
+              className="flex-1"
+            />
+            <Input
+              id="motion-blur-strength"
+              type="number"
+              min="0"
+              max="2.5"
+              step="0.05"
+              value={motionBlurStrength}
+              disabled={!showMotionBlur}
+              onChange={(e) => handleMotionBlurStrengthInput(Number(e.target.value))}
+              className="w-20 font-mono text-xs h-8"
+            />
+          </div>
         </div>
       </div>
 

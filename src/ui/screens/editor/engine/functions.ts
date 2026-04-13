@@ -15,7 +15,9 @@ import type {
 
 const DEFAULT_BACKGROUND_COLOR = '#000000';
 const DEFAULT_CURSOR_SIZE_PX = 22;
-const MAX_CURSOR_INTERPOLATION_GAP_MS = 220;
+const MOTION_BLUR_TRAIL_MS = 90;
+const MAX_MOTION_BLUR_EVENT_GAP_MS = 260;
+const MOTION_BLUR_SPEED_SCALE = 220;
 const cursorImageCache = new Map<string, HTMLImageElement | null>();
 const cursorImageLoading = new Set<string>();
 
@@ -552,6 +554,12 @@ export function drawVideoLayer(
 interface CursorSample {
   normalizedX: number;
   normalizedY: number;
+  cursorDataUrl?: string;
+  cursorHotspotX?: number;
+  cursorHotspotY?: number;
+  motionBlurFromX?: number;
+  motionBlurFromY?: number;
+  motionBlurIntensity?: number;
   clickProgress?: number;
   button?: 'left' | 'right' | 'middle';
 }
@@ -666,31 +674,54 @@ function resolveCursorSample(
 
   const afterIndex = findUpperBoundEventIndex(events, timestampMs);
   const beforeEvent = afterIndex > 0 ? events[afterIndex - 1] : undefined;
+  const previousEvent = afterIndex > 1 ? events[afterIndex - 2] : undefined;
   const afterEvent = afterIndex < events.length ? events[afterIndex] : undefined;
 
   const beforePosition = resolveEventNormalisedPosition(beforeEvent, cursor);
+  const previousPosition = resolveEventNormalisedPosition(previousEvent, cursor);
   const afterPosition = resolveEventNormalisedPosition(afterEvent, cursor);
-
-  let normalizedX: number | null = null;
-  let normalizedY: number | null = null;
-
-  if (beforePosition && afterPosition && beforeEvent && afterEvent) {
-    const eventGapMs = afterEvent.timestampMs - beforeEvent.timestampMs;
-    if (eventGapMs > 0 && eventGapMs <= MAX_CURSOR_INTERPOLATION_GAP_MS) {
-      const mix = clampUnit((timestampMs - beforeEvent.timestampMs) / eventGapMs);
-      normalizedX = lerp(beforePosition.x, afterPosition.x, mix);
-      normalizedY = lerp(beforePosition.y, afterPosition.y, mix);
-    }
+  const resolvedPosition = beforePosition ?? afterPosition;
+  const sourceEvent = beforeEvent ?? afterEvent;
+  if (!resolvedPosition) {
+    return null;
   }
 
-  if (normalizedX === null || normalizedY === null) {
-    const fallbackPosition = beforePosition ?? afterPosition;
-    if (!fallbackPosition) {
-      return null;
-    }
+  let motionBlurFromX: number | undefined;
+  let motionBlurFromY: number | undefined;
+  let motionBlurIntensity: number | undefined;
 
-    normalizedX = fallbackPosition.x;
-    normalizedY = fallbackPosition.y;
+  if (
+    cursor.showMotionBlur &&
+    cursor.motionBlurStrength > 0 &&
+    beforeEvent &&
+    previousEvent &&
+    beforePosition &&
+    previousPosition
+  ) {
+    const gapMs = beforeEvent.timestampMs - previousEvent.timestampMs;
+    const ageMs = timestampMs - beforeEvent.timestampMs;
+
+    if (
+      gapMs > 0 &&
+      gapMs <= MAX_MOTION_BLUR_EVENT_GAP_MS &&
+      ageMs >= 0 &&
+      ageMs <= MOTION_BLUR_TRAIL_MS
+    ) {
+      const distance = Math.hypot(
+        beforePosition.x - previousPosition.x,
+        beforePosition.y - previousPosition.y,
+      );
+      const speedFactor = clampUnit((distance / gapMs) * MOTION_BLUR_SPEED_SCALE);
+      const ageFactor = 1 - ageMs / MOTION_BLUR_TRAIL_MS;
+      const strength = Math.max(0, cursor.motionBlurStrength);
+      const intensity = clampUnit(speedFactor * ageFactor * strength);
+
+      if (intensity > 0.015) {
+        motionBlurFromX = previousPosition.x;
+        motionBlurFromY = previousPosition.y;
+        motionBlurIntensity = intensity;
+      }
+    }
   }
 
   let clickProgress: number | undefined;
@@ -715,8 +746,23 @@ function resolveCursorSample(
   }
 
   return {
-    normalizedX: clampUnit(normalizedX),
-    normalizedY: clampUnit(normalizedY),
+    normalizedX: clampUnit(resolvedPosition.x),
+    normalizedY: clampUnit(resolvedPosition.y),
+    cursorDataUrl:
+      sourceEvent && typeof sourceEvent.cursorDataUrl === 'string'
+        ? sourceEvent.cursorDataUrl
+        : undefined,
+    cursorHotspotX:
+      sourceEvent && Number.isFinite(sourceEvent.cursorHotspotX)
+        ? sourceEvent.cursorHotspotX
+        : undefined,
+    cursorHotspotY:
+      sourceEvent && Number.isFinite(sourceEvent.cursorHotspotY)
+        ? sourceEvent.cursorHotspotY
+        : undefined,
+    motionBlurFromX,
+    motionBlurFromY,
+    motionBlurIntensity,
     clickProgress,
     button,
   };
@@ -815,21 +861,50 @@ function drawCursorGlyph(
   y: number,
   cursorSize: number,
   cursor: CompositionCursorConfig,
+  eventCursorDataUrl?: string,
+  eventCursorHotspotX?: number,
+  eventCursorHotspotY?: number,
 ): void {
+  const drawCursorImage = (
+    imageSource: string | undefined,
+    hotspotX?: number,
+    hotspotY?: number,
+  ): boolean => {
+    const image = getCustomCursorImage(imageSource);
+    if (!image) {
+      return false;
+    }
+
+    const sourceWidth = image.naturalWidth || image.width || 1;
+    const sourceHeight = image.naturalHeight || image.height || 1;
+    const aspectRatio = sourceWidth / sourceHeight;
+    const drawHeight = cursorSize * 2;
+    const drawWidth = Math.max(1, drawHeight * aspectRatio);
+
+    let drawX = x;
+    let drawY = y;
+    if (Number.isFinite(hotspotX) && Number.isFinite(hotspotY)) {
+      const safeHotspotX = Math.max(0, hotspotX as number);
+      const safeHotspotY = Math.max(0, hotspotY as number);
+      drawX = x - (safeHotspotX / sourceWidth) * drawWidth;
+      drawY = y - (safeHotspotY / sourceHeight) * drawHeight;
+    }
+
+    ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+    return true;
+  };
+
+  if (drawCursorImage(eventCursorDataUrl, eventCursorHotspotX, eventCursorHotspotY)) {
+    return;
+  }
+
   if (cursor.style === 'crosshair') {
     drawCrosshairCursor(ctx, x, y, cursorSize);
     return;
   }
 
   if (cursor.style === 'custom') {
-    const image = getCustomCursorImage(cursor.customImagePath);
-    if (image) {
-      const sourceWidth = image.naturalWidth || image.width || 1;
-      const sourceHeight = image.naturalHeight || image.height || 1;
-      const aspectRatio = sourceWidth / sourceHeight;
-      const drawHeight = cursorSize * 2;
-      const drawWidth = Math.max(1, drawHeight * aspectRatio);
-      ctx.drawImage(image, x, y, drawWidth, drawHeight);
+    if (drawCursorImage(cursor.customImagePath)) {
       return;
     }
   }
@@ -840,6 +915,57 @@ function drawCursorGlyph(
   }
 
   drawArrowCursor(ctx, x, y, cursorSize, 'rgba(18, 18, 20, 0.96)', 'rgba(255, 255, 255, 0.95)');
+}
+
+function drawMotionBlurTrail(
+  ctx: Canvas2DContext,
+  cursor: CompositionCursorConfig,
+  cursorSize: number,
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number,
+  intensity: number,
+  eventCursorDataUrl?: string,
+  eventCursorHotspotX?: number,
+  eventCursorHotspotY?: number,
+): void {
+  if (intensity <= 0) {
+    return;
+  }
+
+  const travelDistance = Math.hypot(toX - fromX, toY - fromY);
+  if (travelDistance < 0.5) {
+    return;
+  }
+
+  const sampleCount = Math.max(3, Math.min(10, Math.round(3 + intensity * 7)));
+  const baseAlpha = 0.28 * intensity;
+
+  for (let sampleIndex = 0; sampleIndex < sampleCount; sampleIndex += 1) {
+    const t = (sampleIndex + 1) / sampleCount;
+    const fade = 1 - t;
+    const x = lerp(toX, fromX, t);
+    const y = lerp(toY, fromY, t);
+    const blurPx = (0.8 + intensity * 2.4) * fade;
+
+    ctx.save();
+    ctx.globalAlpha = baseAlpha * fade * fade;
+    if (blurPx > 0.05) {
+      ctx.filter = `blur(${blurPx.toFixed(2)}px)`;
+    }
+    drawCursorGlyph(
+      ctx,
+      x,
+      y,
+      cursorSize,
+      cursor,
+      eventCursorDataUrl,
+      eventCursorHotspotX,
+      eventCursorHotspotY,
+    );
+    ctx.restore();
+  }
 }
 
 function drawCursorLayer(
@@ -875,6 +1001,29 @@ function drawCursorLayer(
   const sourceScale = Math.max(0.35, Math.min(3, (sourceScaleX + sourceScaleY) / 2));
   const cursorSize = Math.max(8, DEFAULT_CURSOR_SIZE_PX * Math.max(0.2, cursor.size) * sourceScale);
 
+  if (
+    cursor.showMotionBlur &&
+    typeof sample.motionBlurFromX === 'number' &&
+    typeof sample.motionBlurFromY === 'number' &&
+    typeof sample.motionBlurIntensity === 'number'
+  ) {
+    const blurFromX = contentX + sample.motionBlurFromX * contentWidth;
+    const blurFromY = contentY + sample.motionBlurFromY * contentHeight;
+    drawMotionBlurTrail(
+      ctx,
+      cursor,
+      cursorSize,
+      blurFromX,
+      blurFromY,
+      cursorX,
+      cursorY,
+      sample.motionBlurIntensity,
+      sample.cursorDataUrl,
+      sample.cursorHotspotX,
+      sample.cursorHotspotY,
+    );
+  }
+
   if (cursor.showClickAnimations && typeof sample.clickProgress === 'number') {
     drawClickAnimation(
       ctx,
@@ -887,7 +1036,16 @@ function drawCursorLayer(
     );
   }
 
-  drawCursorGlyph(ctx, cursorX, cursorY, cursorSize, cursor);
+  drawCursorGlyph(
+    ctx,
+    cursorX,
+    cursorY,
+    cursorSize,
+    cursor,
+    sample.cursorDataUrl,
+    sample.cursorHotspotX,
+    sample.cursorHotspotY,
+  );
 }
 
 export interface RenderCompositionFrameOptions {

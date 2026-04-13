@@ -314,6 +314,10 @@ electron.contextBridge.exposeInMainWorld('electron', {
         y: number;
         normalizedX?: number;
         normalizedY?: number;
+        cursorDataUrl?: string;
+        cursorHotspotX?: number;
+        cursorHotspotY?: number;
+        cursorHandleHex?: string;
         eventType: 'click' | 'mousemove';
         button?: 'left' | 'right' | 'middle';
       }[]

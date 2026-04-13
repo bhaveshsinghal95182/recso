@@ -30,6 +30,14 @@ export interface RecordedMouseEvent {
   normalizedX?: number;
   /** Cursor Y normalized to 0..1 relative to the recorded area, when available. */
   normalizedY?: number;
+  /** Cursor image at this timestamp as a data URL snapshot (when available). */
+  cursorDataUrl?: string;
+  /** Hotspot X coordinate in source cursor image pixels. */
+  cursorHotspotX?: number;
+  /** Hotspot Y coordinate in source cursor image pixels. */
+  cursorHotspotY?: number;
+  /** Raw cursor handle (hex) captured from Win32 for identity tracking. */
+  cursorHandleHex?: string;
   eventType: 'click' | 'mousemove';
   button?: 'left' | 'right' | 'middle';
 }
@@ -110,6 +118,8 @@ export interface CursorConfig {
   showClickAnimations: boolean;
   clickAnimationScale: number;
   clickDisplayDuration: number;
+  showMotionBlur: boolean;
+  motionBlurStrength: number;
 }
 
 export interface ZoomConfig {

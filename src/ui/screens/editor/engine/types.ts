@@ -75,6 +75,10 @@ export interface CompositionCursorEvent {
   y: number;
   normalizedX?: number;
   normalizedY?: number;
+  cursorDataUrl?: string;
+  cursorHotspotX?: number;
+  cursorHotspotY?: number;
+  cursorHandleHex?: string;
   eventType: 'click' | 'mousemove';
   button?: 'left' | 'right' | 'middle';
 }
@@ -87,6 +91,8 @@ export interface CompositionCursorConfig {
   showClickAnimations: boolean;
   clickAnimationScale: number;
   clickDisplayDuration: number;
+  showMotionBlur: boolean;
+  motionBlurStrength: number;
   sourceWidth: number;
   sourceHeight: number;
   events: CompositionCursorEvent[];

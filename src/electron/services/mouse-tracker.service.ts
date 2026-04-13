@@ -7,9 +7,53 @@
  * - Stores in SQLite for playback in editor
  */
 
+import { createRequire } from 'node:module';
+
+import { app } from 'electron';
+
+import fs from 'fs';
+import path from 'path';
 import { uIOhook, type UiohookMouseEvent } from 'uiohook-napi';
 
 import { getDatabase } from './database.service.js';
+
+const require = createRequire(import.meta.url);
+
+interface VelocityCursorBindings {
+  captureCursorSnapshotJson?: () => string;
+}
+
+let velocityCursorBindingsCache: VelocityCursorBindings | null | undefined;
+
+function getVelocityCursorBindings(): VelocityCursorBindings | null {
+  if (velocityCursorBindingsCache !== undefined) {
+    return velocityCursorBindingsCache;
+  }
+
+  const candidatePaths = [
+    path.resolve(process.cwd(), 'velocity', 'index.js'),
+    path.resolve(app.getAppPath(), 'velocity', 'index.js'),
+    path.resolve(app.getAppPath(), '..', 'velocity', 'index.js'),
+    path.resolve(process.resourcesPath, 'velocity', 'index.js'),
+    path.resolve(process.resourcesPath, 'app.asar.unpacked', 'velocity', 'index.js'),
+  ];
+
+  for (const candidatePath of candidatePaths) {
+    if (!fs.existsSync(candidatePath)) {
+      continue;
+    }
+
+    try {
+      velocityCursorBindingsCache = require(candidatePath) as VelocityCursorBindings;
+      return velocityCursorBindingsCache;
+    } catch {
+      // Try the next candidate path.
+    }
+  }
+
+  velocityCursorBindingsCache = null;
+  return velocityCursorBindingsCache;
+}
 
 // Mouse event interface
 export interface MouseEvent {
@@ -20,6 +64,10 @@ export interface MouseEvent {
   y: number;
   normalizedX?: number;
   normalizedY?: number;
+  cursorDataUrl?: string;
+  cursorHotspotX?: number;
+  cursorHotspotY?: number;
+  cursorHandleHex?: string;
   eventType: 'click' | 'mousemove';
   button?: 'left' | 'right' | 'middle';
 }
@@ -27,6 +75,10 @@ export interface MouseEvent {
 interface MouseEventMeta {
   normalizedX?: number;
   normalizedY?: number;
+  cursorDataUrl?: string;
+  cursorHotspotX?: number;
+  cursorHotspotY?: number;
+  cursorHandleHex?: string;
 }
 
 /** Monitor bounds for coordinate offset calculation */
@@ -107,6 +159,7 @@ class MouseTrackerService {
     else if (event.button === 3) button = 'middle';
 
     const { x, y, normalizedX, normalizedY } = this.normalizeCoordinates(event.x, event.y);
+    const cursorSnapshot = this.captureCursorVisualMeta();
 
     const mouseEvent: MouseEvent = {
       recordingId: this.recordingId,
@@ -115,6 +168,7 @@ class MouseTrackerService {
       y,
       normalizedX,
       normalizedY,
+      ...cursorSnapshot,
       eventType: 'click',
       button,
     };
@@ -136,6 +190,7 @@ class MouseTrackerService {
     this.lastMoveTime = now;
 
     const { x, y, normalizedX, normalizedY } = this.normalizeCoordinates(event.x, event.y);
+    const cursorSnapshot = this.captureCursorVisualMeta();
 
     const mouseEvent: MouseEvent = {
       recordingId: this.recordingId,
@@ -144,10 +199,37 @@ class MouseTrackerService {
       y,
       normalizedX,
       normalizedY,
+      ...cursorSnapshot,
       eventType: 'mousemove',
     };
 
     this.eventBuffer.push(mouseEvent);
+  }
+
+  private captureCursorVisualMeta(): Pick<
+    MouseEvent,
+    'cursorDataUrl' | 'cursorHotspotX' | 'cursorHotspotY' | 'cursorHandleHex'
+  > {
+    const velocity = getVelocityCursorBindings();
+    if (!velocity?.captureCursorSnapshotJson) {
+      return {};
+    }
+
+    try {
+      const rawSnapshot = velocity.captureCursorSnapshotJson();
+      const snapshot = asRecord(JSON.parse(rawSnapshot));
+      const cursorInfo = asRecord(snapshot?.cursorInfo);
+      const cursorImage = asRecord(cursorInfo?.cursorImage);
+
+      return {
+        cursorDataUrl: toStringOrUndefined(cursorImage?.dataUrl),
+        cursorHotspotX: toFiniteOrUndefined(cursorImage?.hotspotX),
+        cursorHotspotY: toFiniteOrUndefined(cursorImage?.hotspotY),
+        cursorHandleHex: toStringOrUndefined(cursorInfo?.hCursorHex),
+      };
+    } catch {
+      return {};
+    }
   }
 
   /**
@@ -173,17 +255,42 @@ class MouseTrackerService {
   }
 
   private serialiseEventMeta(event: MouseEvent): string | null {
+    const payload: MouseEventMeta = {};
+
     const normalizedX = toFiniteOrUndefined(event.normalizedX);
     const normalizedY = toFiniteOrUndefined(event.normalizedY);
+    const cursorHotspotX = toFiniteOrUndefined(event.cursorHotspotX);
+    const cursorHotspotY = toFiniteOrUndefined(event.cursorHotspotY);
+    const cursorDataUrl = toStringOrUndefined(event.cursorDataUrl);
+    const cursorHandleHex = toStringOrUndefined(event.cursorHandleHex);
 
-    if (normalizedX === undefined || normalizedY === undefined) {
-      return null;
+    if (normalizedX !== undefined) {
+      payload.normalizedX = normalizedX;
     }
 
-    const payload: MouseEventMeta = {
-      normalizedX,
-      normalizedY,
-    };
+    if (normalizedY !== undefined) {
+      payload.normalizedY = normalizedY;
+    }
+
+    if (cursorDataUrl) {
+      payload.cursorDataUrl = cursorDataUrl;
+    }
+
+    if (cursorHotspotX !== undefined) {
+      payload.cursorHotspotX = cursorHotspotX;
+    }
+
+    if (cursorHotspotY !== undefined) {
+      payload.cursorHotspotY = cursorHotspotY;
+    }
+
+    if (cursorHandleHex) {
+      payload.cursorHandleHex = cursorHandleHex;
+    }
+
+    if (Object.keys(payload).length === 0) {
+      return null;
+    }
 
     return JSON.stringify(payload);
   }
@@ -198,6 +305,10 @@ class MouseTrackerService {
       return {
         normalizedX: toFiniteOrUndefined(parsed.normalizedX),
         normalizedY: toFiniteOrUndefined(parsed.normalizedY),
+        cursorDataUrl: toStringOrUndefined(parsed.cursorDataUrl),
+        cursorHotspotX: toFiniteOrUndefined(parsed.cursorHotspotX),
+        cursorHotspotY: toFiniteOrUndefined(parsed.cursorHotspotY),
+        cursorHandleHex: toStringOrUndefined(parsed.cursorHandleHex),
       };
     } catch {
       return {};
@@ -314,6 +425,10 @@ class MouseTrackerService {
           y: row.y as number,
           normalizedX: meta.normalizedX,
           normalizedY: meta.normalizedY,
+          cursorDataUrl: meta.cursorDataUrl,
+          cursorHotspotX: meta.cursorHotspotX,
+          cursorHotspotY: meta.cursorHotspotY,
+          cursorHandleHex: meta.cursorHandleHex,
           eventType: row.event_type as 'click' | 'mousemove',
           button: row.button as 'left' | 'right' | 'middle' | undefined,
         };
@@ -365,6 +480,21 @@ function toFiniteOrUndefined(value: unknown): number | undefined {
     return undefined;
   }
   return value;
+}
+
+function toStringOrUndefined(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length === 0) {
+    return undefined;
+  }
+  return value;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value as Record<string, unknown>;
 }
 
 // Export singleton instance

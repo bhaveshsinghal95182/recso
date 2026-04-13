@@ -3,10 +3,12 @@
 
 const velocity = require('../index.js')
 const fs = require('fs')
+const path = require('path')
 const readline = require('readline')
 
 const RECORD_DURATION = 5000 // 5 seconds
 const BITRATE = 50000000
+const CURSOR_SAMPLE_INTERVAL_MS = 16
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -61,7 +63,9 @@ async function listSources() {
 
 async function recordSource(source, duration) {
   const timestamp = Date.now()
-  const outputPath = `tests/recording_${timestamp}.mp4`
+  const recordingBaseName = `recording_${timestamp}`
+  const outputPath = `tests/${recordingBaseName}.mp4`
+  const cursorOutputPath = `tests/${recordingBaseName}.cursor.json`
 
   // Create tests directory if it doesn't exist
   if (!fs.existsSync('tests')) {
@@ -78,8 +82,46 @@ async function recordSource(source, duration) {
       stopper = velocity.startWindowRecording(source.data.title, outputPath, BITRATE)
     }
 
-    // Wait for duration
-    await new Promise((resolve) => setTimeout(resolve, duration))
+    const cursorCaptureAvailable = typeof velocity.captureCursorSamplesJson === 'function'
+
+    if (cursorCaptureAvailable) {
+      console.log(`🖱️ Capturing cursor snapshots for ${duration / 1000}s (interval=${CURSOR_SAMPLE_INTERVAL_MS}ms)...`)
+
+      const captureStartedAt = Date.now()
+      const samplesJson = velocity.captureCursorSamplesJson(duration, CURSOR_SAMPLE_INTERVAL_MS)
+      const captureEndedAt = Date.now()
+
+      let parsedSamples
+      try {
+        parsedSamples = JSON.parse(samplesJson)
+      } catch {
+        parsedSamples = {
+          parseError: true,
+          raw: samplesJson,
+        }
+      }
+
+      const cursorPayload = {
+        recording: {
+          id: recordingBaseName,
+          outputPath: path.resolve(outputPath),
+          sourceType: source.type,
+          sourceName: source.name,
+          sourceDetails: source.data,
+          startedAtEpochMs: captureStartedAt,
+          endedAtEpochMs: captureEndedAt,
+          requestedDurationMs: duration,
+          actualCaptureDurationMs: captureEndedAt - captureStartedAt,
+        },
+        cursorCapture: parsedSamples,
+      }
+
+      fs.writeFileSync(cursorOutputPath, JSON.stringify(cursorPayload, null, 2), 'utf-8')
+      console.log(`🧾 Cursor data saved: ${cursorOutputPath}`)
+    } else {
+      console.log('ℹ️ captureCursorSamplesJson is not available in this velocity build; skipping cursor JSON capture.')
+      await new Promise((resolve) => setTimeout(resolve, duration))
+    }
 
     console.log('🛑 Stopping recording...')
     stopper.stop()
@@ -91,6 +133,11 @@ async function recordSource(source, duration) {
       const stats = fs.statSync(outputPath)
       const sizeInMB = (stats.size / 1024 / 1024).toFixed(2)
       console.log(`✅ Recording saved: ${outputPath} (${sizeInMB} MB)`)
+      if (fs.existsSync(cursorOutputPath)) {
+        const cursorStats = fs.statSync(cursorOutputPath)
+        const cursorSizeKB = (cursorStats.size / 1024).toFixed(1)
+        console.log(`✅ Cursor JSON saved: ${cursorOutputPath} (${cursorSizeKB} KB)`)
+      }
     } else {
       console.log('❌ Recording file not found!')
     }

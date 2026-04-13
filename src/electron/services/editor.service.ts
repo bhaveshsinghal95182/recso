@@ -135,11 +135,23 @@ export function getActiveProject(): Project | null {
  */
 export function loadProject(recordingDir: string): Project | null {
   try {
-    const project = projectStorage.loadProjectMetadata(recordingDir);
-    if (!project) {
+    const loadedProject = projectStorage.loadProjectMetadata(recordingDir);
+    if (!loadedProject) {
       console.error('[EditorService] No project found in:', recordingDir);
       return null;
     }
+
+    const project: Project = {
+      ...loadedProject,
+      cursorConfig: {
+        ...DEFAULT_CURSOR_CONFIG,
+        ...loadedProject.cursorConfig,
+      },
+      zoomConfig: {
+        ...DEFAULT_ZOOM_CONFIG,
+        ...loadedProject.zoomConfig,
+      },
+    };
 
     activeProject = project;
 

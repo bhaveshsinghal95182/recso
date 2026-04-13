@@ -424,6 +424,10 @@ function buildCompositionConfig(
       clickDisplayDuration: Number.isFinite(rawCursor?.clickDisplayDuration)
         ? Math.max(80, rawCursor.clickDisplayDuration)
         : 500,
+      showMotionBlur: rawCursor?.showMotionBlur ?? true,
+      motionBlurStrength: Number.isFinite(rawCursor?.motionBlurStrength)
+        ? Math.max(0, Math.min(2.5, rawCursor.motionBlurStrength))
+        : 0.7,
       sourceWidth,
       sourceHeight,
       events: [...mouseEvents]
@@ -435,6 +439,10 @@ function buildCompositionConfig(
           y: event.y,
           normalizedX: event.normalizedX,
           normalizedY: event.normalizedY,
+          cursorDataUrl: event.cursorDataUrl,
+          cursorHotspotX: event.cursorHotspotX,
+          cursorHotspotY: event.cursorHotspotY,
+          cursorHandleHex: event.cursorHandleHex,
           eventType: event.eventType,
           button: event.button,
         })),
