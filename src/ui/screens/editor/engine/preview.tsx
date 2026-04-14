@@ -7,7 +7,7 @@ import { useTimelineStore } from '@/store/timeline-store';
 
 import { FocalPointOverlay } from '../focal-point-overlay';
 import { VerticalTabs } from '../vertical-tabs';
-import { CanvasFrameContext, HtmlVideoFrameSource } from './adapters';
+import { CanvasFrameContext, HtmlVideoCoverFrameSource, HtmlVideoFrameSource } from './adapters';
 import { CompositionEngine } from './engine';
 import { defaultConfig } from './functions';
 import { useEnginePreviewConfigMapper } from './preview-config-mapper';
@@ -31,13 +31,14 @@ function syncVideoTime(video: HTMLVideoElement, targetMs: number, toleranceSecon
 }
 
 export function EnginePreview() {
-  const { project, mouseEvents } = useProjectStore();
+  const { project, mouseEvents, updateWebcamOverlay } = useProjectStore();
   const { zoomRegions, cuts, isEditingFocalPoint, selectedZoomId, updateZoom } = useTimelineStore();
   const { isPlaying, currentTime, play, pause, setDuration } = usePlaybackStore();
 
   const previewViewportRef = useRef<HTMLDivElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const webcamVideoRef = useRef<HTMLVideoElement>(null);
   const previewContextRef = useRef<CanvasFrameContext | null>(null);
   const rafRef = useRef<number | null>(null);
   const lastRenderMsRef = useRef(0);
@@ -51,6 +52,7 @@ export function EnginePreview() {
     durationMs,
     compositionConfig,
     videoSrc,
+    webcamSrc,
     backgroundImageSrc,
     backgroundContainerStyle,
     selectedPattern,
@@ -61,6 +63,10 @@ export function EnginePreview() {
     () => zoomRegions.find((region) => region.id === selectedZoomId) ?? null,
     [zoomRegions, selectedZoomId],
   );
+
+  const webcamSourcePath = project?.webcamOverlay?.sourcePath;
+  const webcamToggleAvailable = Boolean(webcamSourcePath);
+  const webcamEnabled = Boolean(project?.webcamOverlay?.enabled && webcamToggleAvailable);
 
   useEffect(() => {
     const viewport = previewViewportRef.current;
@@ -162,21 +168,31 @@ export function EnginePreview() {
 
   useEffect(() => {
     const video = videoRef.current;
+    const webcamVideo = webcamVideoRef.current;
     if (!video) {
       return;
     }
 
     if (isPlaying) {
-      engineRef.current.play(currentTime / 1000);
+      const startTimeMs = usePlaybackStore.getState().currentTime;
+      engineRef.current.play(startTimeMs / 1000);
       void video.play().catch(() => {
         pause();
       });
+      if (webcamVideo && webcamSrc) {
+        // Align webcam once on play start, then let it play continuously to avoid seek flicker.
+        syncVideoTime(webcamVideo, startTimeMs, 0);
+        void webcamVideo.play().catch(() => {
+          // Webcam stream is optional in preview.
+        });
+      }
       return;
     }
 
     video.pause();
+    webcamVideo?.pause();
     engineRef.current.pause();
-  }, [isPlaying, currentTime, pause]);
+  }, [isPlaying, pause, webcamSrc]);
 
   useEffect(() => {
     if (isPlaying) {
@@ -184,15 +200,19 @@ export function EnginePreview() {
     }
 
     const video = videoRef.current;
+    const webcamVideo = webcamVideoRef.current;
     if (!video) {
       return;
     }
 
     // Keep editor preview/timeline in source-time; cuts are applied only during render/export.
     syncVideoTime(video, currentTime);
+    if (webcamVideo && webcamSrc) {
+      syncVideoTime(webcamVideo, currentTime, 0.1);
+    }
     engineRef.current.seek(currentTime / 1000);
     renderCurrentFrame();
-  }, [currentTime, isPlaying, renderCurrentFrame]);
+  }, [currentTime, isPlaying, renderCurrentFrame, webcamSrc]);
 
   useEffect(() => {
     if (!project || !videoSrc) {
@@ -287,10 +307,20 @@ export function EnginePreview() {
         );
         engine.setVideoSource(new HtmlVideoFrameSource(video));
 
+        const webcamVideo = webcamVideoRef.current;
+        if (webcamVideo && webcamSrc) {
+          engine.setWebcamSource(new HtmlVideoCoverFrameSource(webcamVideo));
+        } else {
+          engine.setWebcamSource(null);
+        }
+
         const compositionMs = usePlaybackStore.getState().currentTime;
         const sourceMs = compositionMs;
 
         syncVideoTime(video, sourceMs, 0);
+        if (webcamVideo && webcamSrc) {
+          syncVideoTime(webcamVideo, sourceMs, 0);
+        }
         engine.seek(compositionMs / 1000);
         renderCurrentFrame();
         rafRef.current = requestAnimationFrame(renderLoop);
@@ -328,12 +358,22 @@ export function EnginePreview() {
       video.removeEventListener('canplay', handleCanPlay);
 
       video.pause();
+      webcamVideoRef.current?.pause();
       engine.pause();
       engine.setVideoSource(null);
+      engine.setWebcamSource(null);
 
       previewContextRef.current = null;
     };
-  }, [canvasSize.height, canvasSize.width, durationMs, project, renderCurrentFrame, videoSrc]);
+  }, [
+    canvasSize.height,
+    canvasSize.width,
+    durationMs,
+    project,
+    renderCurrentFrame,
+    videoSrc,
+    webcamSrc,
+  ]);
 
   useEffect(() => {
     return () => {
@@ -354,6 +394,16 @@ export function EnginePreview() {
     play();
   }, [isPlaying, pause, play]);
 
+  const handleToggleWebcam = useCallback(() => {
+    if (!project || !webcamToggleAvailable) {
+      return;
+    }
+
+    void updateWebcamOverlay({
+      enabled: !webcamEnabled,
+    });
+  }, [project, webcamEnabled, webcamToggleAvailable, updateWebcamOverlay]);
+
   if (!project) {
     return null;
   }
@@ -371,6 +421,15 @@ export function EnginePreview() {
             height: `${previewDisplaySize.height}px`,
           }}
         >
+          <button
+            onClick={handleToggleWebcam}
+            disabled={!webcamToggleAvailable}
+            className="absolute top-3 right-3 z-30 bg-black/60 backdrop-blur px-3 py-1.5 rounded-md text-white text-xs font-medium border border-white/20 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-black/70 transition-colors"
+            title={webcamToggleAvailable ? 'Toggle webcam overlay' : 'No webcam recording found'}
+          >
+            {webcamEnabled ? 'Webcam: On' : 'Webcam: Off'}
+          </button>
+
           <div className="absolute inset-0" style={backgroundContainerStyle}>
             {backgroundImageSrc ? (
               <img
@@ -386,6 +445,14 @@ export function EnginePreview() {
           <canvas ref={previewCanvasRef} className="absolute inset-0 w-full h-full" />
 
           <video ref={videoRef} src={videoSrc} className="hidden" playsInline preload="auto" />
+          <video
+            ref={webcamVideoRef}
+            src={webcamSrc || undefined}
+            className="hidden"
+            playsInline
+            preload="auto"
+            muted
+          />
 
           {isEditingFocalPoint && selectedZoomId && selectedZoom && project.videoDimensions && (
             <FocalPointOverlay

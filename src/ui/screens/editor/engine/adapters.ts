@@ -35,7 +35,45 @@ export class HtmlVideoFrameSource implements FrameVideoSource {
   }
 
   draw(ctx: Canvas2DContext, x: number, y: number, width: number, height: number): void {
+    if (this.video.readyState < 2 || this.video.videoWidth <= 0 || this.video.videoHeight <= 0) {
+      return;
+    }
     ctx.drawImage(this.video, x, y, width, height);
+  }
+}
+
+export class HtmlVideoCoverFrameSource implements FrameVideoSource {
+  private video: HTMLVideoElement;
+
+  constructor(video: HTMLVideoElement) {
+    this.video = video;
+  }
+
+  draw(ctx: Canvas2DContext, x: number, y: number, width: number, height: number): void {
+    if (this.video.readyState < 2 || this.video.videoWidth <= 0 || this.video.videoHeight <= 0) {
+      return;
+    }
+
+    const sourceWidth = this.video.videoWidth;
+    const sourceHeight = this.video.videoHeight;
+    const sourceAspect = sourceWidth / sourceHeight;
+    const targetAspect = width / height;
+
+    let cropWidth = sourceWidth;
+    let cropHeight = sourceHeight;
+    let cropX = 0;
+    let cropY = 0;
+
+    // Center-crop source to target aspect ratio to avoid webcam stretching.
+    if (sourceAspect > targetAspect) {
+      cropWidth = sourceHeight * targetAspect;
+      cropX = (sourceWidth - cropWidth) / 2;
+    } else if (sourceAspect < targetAspect) {
+      cropHeight = sourceWidth / targetAspect;
+      cropY = (sourceHeight - cropHeight) / 2;
+    }
+
+    ctx.drawImage(this.video, cropX, cropY, cropWidth, cropHeight, x, y, width, height);
   }
 }
 

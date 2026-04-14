@@ -34,6 +34,12 @@ export interface RecordingConfig {
   cameraDeviceId?: string;
   /** Specific microphone device ID (defaults to system default) */
   micDeviceId?: string;
+  /** Recording engine mode. Defaults to legacy hybrid capture. */
+  nativeCaptureMode?: 'legacy' | 'native-singular-clock';
+  /** Target fps for native singular-clock capture path. */
+  targetFps?: 30 | 60;
+  /** Optional native webcam device id used by velocity v2 path. */
+  nativeWebcamDeviceId?: string;
   options?: RecordingOptions;
 }
 
@@ -89,6 +95,8 @@ export interface StartRecordingResult {
   success: boolean;
   recordingId?: string;
   tempPath?: string;
+  /** True when webcam capture is handled fully in native velocity path. */
+  nativeWebcamHandled?: boolean;
   error?: string;
 }
 

@@ -41,6 +41,21 @@ export interface LayoutResult {
   scale: number;
 }
 
+export type WebcamAnchor = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
+
+export interface WebcamLayoutRequest {
+  /** Optional anchor point on canvas. Default: bottom-right */
+  anchor?: WebcamAnchor;
+  /** Webcam width/height ratio. Vertical 9:16 is 0.5625. Default: 9 / 16 */
+  aspectRatio?: number;
+  /** Webcam height as ratio of canvas height. Default: 0.28 */
+  heightRatio?: number;
+  /** Margin from canvas edges in pixels. Default: 24 */
+  marginPx?: number;
+}
+
+export type WebcamLayoutResult = LayoutResult;
+
 /** Full compositor configuration */
 export interface CompositorConfig {
   /** Path to background image, or null for solid color */

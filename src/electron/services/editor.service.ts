@@ -21,6 +21,7 @@ import type {
   Project,
   Timeline,
   TransformedCursorPosition,
+  WebcamOverlayConfig,
   ZoomConfig,
 } from '../types/project.types.js';
 import { DEFAULT_CURSOR_CONFIG, DEFAULT_ZOOM_CONFIG } from '../types/project.types.js';
@@ -38,6 +39,31 @@ let activeProject: Project | null = null;
 
 // Cache for click events (key: recordingId)
 const clickEventsCache = new Map<string, MouseEvent[]>();
+
+function inferWebcamSidecarPath(rawVideoPath: string): string | null {
+  if (!rawVideoPath) {
+    return null;
+  }
+
+  const parsed = path.parse(rawVideoPath);
+  if (!parsed.dir || !parsed.name || !parsed.ext) {
+    return null;
+  }
+
+  return path.join(parsed.dir, `${parsed.name}_camera${parsed.ext}`);
+}
+
+function createDefaultWebcamOverlay(rawVideoPath: string): Project['webcamOverlay'] {
+  const webcamPath = inferWebcamSidecarPath(rawVideoPath);
+  if (!webcamPath || !fs.existsSync(webcamPath)) {
+    return null;
+  }
+
+  return {
+    enabled: false,
+    sourcePath: webcamPath,
+  };
+}
 
 /**
  * Create a new editing project from a recording
@@ -97,6 +123,7 @@ export async function createProject(recordingId: string): Promise<Project | null
     spritesheetMeta,
     backgroundColor: '#000000',
     backgroundPattern: null,
+    webcamOverlay: createDefaultWebcamOverlay(recording.finalPath),
     cuts: [],
     zoomRegions: [],
     createdAt: Date.now(),
@@ -152,6 +179,15 @@ export function loadProject(recordingDir: string): Project | null {
         ...loadedProject.zoomConfig,
       },
     };
+
+    if (!project.webcamOverlay) {
+      project.webcamOverlay = createDefaultWebcamOverlay(project.rawVideoPath);
+    } else if (!project.webcamOverlay.sourcePath) {
+      const inferredPath = inferWebcamSidecarPath(project.rawVideoPath);
+      if (inferredPath && fs.existsSync(inferredPath)) {
+        project.webcamOverlay.sourcePath = inferredPath;
+      }
+    }
 
     activeProject = project;
 
@@ -213,6 +249,36 @@ export function updateZoomConfig(config: Partial<ZoomConfig>): void {
 
   activeProject.zoomConfig = { ...activeProject.zoomConfig, ...config };
   activeProject.modifiedAt = Date.now();
+}
+
+/**
+ * Update webcam overlay configuration
+ */
+export function updateWebcamOverlay(
+  config: Partial<WebcamOverlayConfig>,
+): WebcamOverlayConfig | null | undefined {
+  if (!activeProject) return undefined;
+
+  const currentWebcam = activeProject.webcamOverlay ?? {
+    enabled: false,
+  };
+  const nextWebcam: WebcamOverlayConfig = {
+    ...currentWebcam,
+    ...config,
+  };
+
+  if (!nextWebcam.sourcePath) {
+    const inferredPath = inferWebcamSidecarPath(activeProject.rawVideoPath);
+    if (inferredPath && fs.existsSync(inferredPath)) {
+      nextWebcam.sourcePath = inferredPath;
+    }
+  }
+
+  activeProject.webcamOverlay = nextWebcam;
+  activeProject.modifiedAt = Date.now();
+  projectStorage.saveProjectMetadata(activeProject);
+
+  return activeProject.webcamOverlay;
 }
 
 /**

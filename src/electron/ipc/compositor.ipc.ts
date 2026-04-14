@@ -10,7 +10,12 @@
 import { dialog, ipcMain } from 'electron';
 
 import * as CompositorService from '../services/compositor.service.js';
-import type { LayoutConfig, Rectangle, Size } from '../types/compositor.types.js';
+import type {
+  LayoutConfig,
+  Rectangle,
+  Size,
+  WebcamLayoutRequest,
+} from '../types/compositor.types.js';
 
 /**
  * Register all compositor IPC handlers
@@ -80,6 +85,14 @@ export function registerCompositorHandlers(): void {
     'compositor:calculate-layout',
     async (_event, videoBounds: Rectangle | Size, canvasSize?: Size) => {
       return CompositorService.calculateLayout(videoBounds, canvasSize);
+    },
+  );
+
+  // Calculate layout for webcam overlay
+  ipcMain.handle(
+    'compositor:calculate-webcam-layout',
+    async (_event, canvasSize?: Size, request?: WebcamLayoutRequest) => {
+      return CompositorService.calculateWebcamLayout(canvasSize, request);
     },
   );
 

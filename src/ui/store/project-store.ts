@@ -2,7 +2,13 @@ import { create } from 'zustand';
 
 import type { BackgroundPatternConfig } from '../../shared/patterns';
 import { debounce } from '../lib/utils';
-import type { CursorConfig, Project, RecordedMouseEvent, ZoomConfig } from '../types';
+import type {
+  CursorConfig,
+  Project,
+  RecordedMouseEvent,
+  WebcamOverlayConfig,
+  ZoomConfig,
+} from '../types';
 import { usePlaybackStore } from './playback-store';
 import { useTimelineStore } from './timeline-store';
 
@@ -21,6 +27,7 @@ interface ProjectState {
   updateBackgroundColor: (color: string) => void;
   updateBackgroundPath: (path: string | null) => void;
   updateBackgroundPattern: (pattern: BackgroundPatternConfig | null) => void;
+  updateWebcamOverlay: (config: Partial<WebcamOverlayConfig>) => Promise<void>;
   updateDuration: (durationMs: number) => Promise<void>;
 
   // Setters for syncing from other stores (if needed) or internal updates
@@ -184,6 +191,29 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     window.electron.background.updatePattern(pattern).catch((err) => {
       console.error('[ProjectStore] updateBackgroundPattern error:', err);
     });
+  },
+
+  updateWebcamOverlay: async (config: Partial<WebcamOverlayConfig>) => {
+    const { project } = get();
+    if (!project) return;
+
+    try {
+      const updated = await window.electron.editor.updateWebcamOverlay(config);
+      if (updated === undefined) {
+        return;
+      }
+
+      set((state) => ({
+        project: state.project
+          ? {
+              ...state.project,
+              webcamOverlay: updated,
+            }
+          : null,
+      }));
+    } catch (err) {
+      console.error('[ProjectStore] updateWebcamOverlay error:', err);
+    }
   },
 
   updateDuration: async (durationMs: number) => {

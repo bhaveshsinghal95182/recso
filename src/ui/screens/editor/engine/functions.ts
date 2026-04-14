@@ -9,6 +9,7 @@ import type {
   FrameVideoSource,
   VideoConfig,
   VideoLayout,
+  WebcamOverlayConfig,
   ZoomKeyframe,
   ZoomState,
 } from './types';
@@ -18,6 +19,9 @@ const DEFAULT_CURSOR_SIZE_PX = 22;
 const MOTION_BLUR_TRAIL_MS = 90;
 const MAX_MOTION_BLUR_EVENT_GAP_MS = 260;
 const MOTION_BLUR_SPEED_SCALE = 220;
+const DEFAULT_WEBCAM_ASPECT_RATIO = 9 / 16;
+const DEFAULT_WEBCAM_HEIGHT_RATIO = 0.28;
+const DEFAULT_WEBCAM_MARGIN_PX = 24;
 const cursorImageCache = new Map<string, HTMLImageElement | null>();
 const cursorImageLoading = new Set<string>();
 
@@ -47,6 +51,10 @@ export function lerp(a: number, b: number, t: number): number {
 export function smoothstep(value: number): number {
   const clamped = Math.max(0, Math.min(1, value));
   return clamped * clamped * (3 - 2 * clamped);
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
 }
 
 export function roundRectPath(
@@ -93,6 +101,90 @@ export function computeVideoLayout(
   const y = (frameHeight - height) / 2;
 
   return { x, y, width, height, scale: videoScale };
+}
+
+export function computeWebcamLayout(
+  frameWidth: number,
+  frameHeight: number,
+  webcamConfig: WebcamOverlayConfig,
+): VideoLayout {
+  if (webcamConfig.layout) {
+    return {
+      x: webcamConfig.layout.x,
+      y: webcamConfig.layout.y,
+      width: webcamConfig.layout.width,
+      height: webcamConfig.layout.height,
+      scale: webcamConfig.layout.scale,
+    };
+  }
+
+  const aspectRatio =
+    Number.isFinite(webcamConfig.aspectRatio) && webcamConfig.aspectRatio > 0
+      ? webcamConfig.aspectRatio
+      : DEFAULT_WEBCAM_ASPECT_RATIO;
+  const heightRatio = clamp(
+    Number.isFinite(webcamConfig.heightRatio)
+      ? webcamConfig.heightRatio
+      : DEFAULT_WEBCAM_HEIGHT_RATIO,
+    0.08,
+    0.75,
+  );
+  const margin = clamp(
+    Math.round(
+      Number.isFinite(webcamConfig.marginPx) ? webcamConfig.marginPx : DEFAULT_WEBCAM_MARGIN_PX,
+    ),
+    0,
+    Math.max(0, Math.floor(Math.min(frameWidth, frameHeight) / 2)),
+  );
+
+  let height = Math.max(1, Math.round(frameHeight * heightRatio));
+  let width = Math.max(1, Math.round(height * aspectRatio));
+
+  const maxWidth = Math.max(1, frameWidth - margin * 2);
+  const maxHeight = Math.max(1, frameHeight - margin * 2);
+
+  if (width > maxWidth) {
+    width = maxWidth;
+    height = Math.max(1, Math.round(width / aspectRatio));
+  }
+
+  if (height > maxHeight) {
+    height = maxHeight;
+    width = Math.max(1, Math.round(height * aspectRatio));
+  }
+
+  let x = margin;
+  let y = margin;
+  switch (webcamConfig.anchor) {
+    case 'top-right':
+      x = frameWidth - width - margin;
+      y = margin;
+      break;
+    case 'bottom-left':
+      x = margin;
+      y = frameHeight - height - margin;
+      break;
+    case 'bottom-right':
+      x = frameWidth - width - margin;
+      y = frameHeight - height - margin;
+      break;
+    case 'top-left':
+    default:
+      x = margin;
+      y = margin;
+      break;
+  }
+
+  x = clamp(Math.round(x), 0, Math.max(0, frameWidth - width));
+  y = clamp(Math.round(y), 0, Math.max(0, frameHeight - height));
+
+  return {
+    x,
+    y,
+    width,
+    height,
+    scale: height / Math.max(1, frameHeight),
+  };
 }
 
 function clampNormalised(value: number): number {
@@ -549,6 +641,72 @@ export function drawVideoLayer(
   }
 
   source.draw(ctx, layout.x, layout.y, layout.width, layout.height);
+}
+
+function drawWebcamShadowLayers(
+  ctx: Canvas2DContext,
+  layout: VideoLayout,
+  webcamConfig: WebcamOverlayConfig,
+): void {
+  if (!webcamConfig.shadows || webcamConfig.shadows.length === 0) {
+    return;
+  }
+
+  for (const shadow of webcamConfig.shadows) {
+    const blur = Number.isFinite(shadow.blur) ? Math.max(0, shadow.blur) : 0;
+    if (blur <= 0 && shadow.offsetX === 0 && shadow.offsetY === 0) {
+      continue;
+    }
+
+    ctx.save();
+    ctx.shadowColor = shadow.color;
+    ctx.shadowBlur = blur;
+    ctx.shadowOffsetX = shadow.offsetX;
+    ctx.shadowOffsetY = shadow.offsetY;
+    roundRectPath(ctx, layout.x, layout.y, layout.width, layout.height, webcamConfig.borderRadius);
+    // The webcam layer is drawn immediately after this, so the fill is covered.
+    // Keep fill opaque so low-alpha shadows remain visible.
+    ctx.fillStyle = 'rgba(0, 0, 0, 1)';
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+export function drawWebcamLayer(
+  ctx: Canvas2DContext,
+  frameWidth: number,
+  frameHeight: number,
+  webcamConfig: WebcamOverlayConfig,
+  source: FrameVideoSource,
+): void {
+  const layout = computeWebcamLayout(frameWidth, frameHeight, webcamConfig);
+
+  drawWebcamShadowLayers(ctx, layout, webcamConfig);
+
+  ctx.save();
+  const opacity = clamp(Number.isFinite(webcamConfig.opacity) ? webcamConfig.opacity : 1, 0, 1);
+  if (opacity < 1) {
+    ctx.globalAlpha = opacity;
+  }
+
+  if (webcamConfig.border.width > 0) {
+    const borderWidth = webcamConfig.border.width;
+    roundRectPath(
+      ctx,
+      layout.x - borderWidth,
+      layout.y - borderWidth,
+      layout.width + borderWidth * 2,
+      layout.height + borderWidth * 2,
+      webcamConfig.borderRadius + borderWidth,
+    );
+    ctx.fillStyle = webcamConfig.border.color;
+    ctx.fill();
+  }
+
+  roundRectPath(ctx, layout.x, layout.y, layout.width, layout.height, webcamConfig.borderRadius);
+  ctx.clip();
+  source.draw(ctx, layout.x, layout.y, layout.width, layout.height);
+  ctx.restore();
 }
 
 interface CursorSample {
@@ -1055,6 +1213,7 @@ export interface RenderCompositionFrameOptions {
   t: number;
   config: CompositionConfig;
   source: FrameVideoSource;
+  webcamSource?: FrameVideoSource | null;
 }
 
 export function renderCompositionFrame({
@@ -1064,6 +1223,7 @@ export function renderCompositionFrame({
   t,
   config,
   source,
+  webcamSource,
 }: RenderCompositionFrameOptions): void {
   const zoomState = computeZoomStateFromConfig(t, config, frameWidth, frameHeight);
   const videoLayout = computeVideoLayout(frameWidth, frameHeight, config);
@@ -1081,5 +1241,8 @@ export function renderCompositionFrame({
 
   drawVideoLayer(ctx, videoLayout, config.video, source);
   drawCursorLayer(ctx, t, videoLayout, config.cursor);
+  if (config.webcam?.enabled && webcamSource) {
+    drawWebcamLayer(ctx, frameWidth, frameHeight, config.webcam, webcamSource);
+  }
   ctx.restore();
 }

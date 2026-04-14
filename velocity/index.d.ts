@@ -12,11 +12,15 @@ export declare function isCursorSettingsSupported(): boolean
 
 export declare function listAvailableWindows(): Array<WindowInfo>
 
+export declare function listWebcamDevices(): Array<WebcamDeviceInfo>
+
 export declare function startMonitorRecording(
   outputPath: string,
   bitrate: number,
   includeSystemAudio?: boolean | undefined | null,
 ): Stopper
+
+export declare function startMonitorRecordingV2(options: NativeRecordingOptions): Stopper
 
 export declare function startWindowRecording(
   windowTitle: string,
@@ -24,6 +28,33 @@ export declare function startWindowRecording(
   bitrate: number,
   includeSystemAudio?: boolean | undefined | null,
 ): Stopper
+
+export declare function startWindowRecordingV2(options: NativeWindowRecordingOptions): Stopper
+
+export interface NativeRecordingOptions {
+  outputPath: string
+  bitrate: number
+  includeSystemAudio?: boolean
+  targetFps?: number
+  enableWebcam?: boolean
+  webcamDeviceId?: string
+}
+
+export interface NativeWindowRecordingOptions {
+  windowTitle: string
+  outputPath: string
+  bitrate: number
+  includeSystemAudio?: boolean
+  targetFps?: number
+  enableWebcam?: boolean
+  webcamDeviceId?: string
+}
+
+export interface WebcamDeviceInfo {
+  id: string
+  label: string
+  isDefault: boolean
+}
 
 export interface WindowInfo {
   title: string

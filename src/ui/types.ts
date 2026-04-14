@@ -81,6 +81,12 @@ export interface RecordingConfig {
   cameraDeviceId?: string;
   /** Specific microphone device ID (defaults to system default) */
   micDeviceId?: string;
+  /** Recording engine mode. Defaults to legacy hybrid capture. */
+  nativeCaptureMode?: 'legacy' | 'native-singular-clock';
+  /** Target fps for native singular-clock capture path. */
+  targetFps?: 30 | 60;
+  /** Optional native webcam device id used by velocity v2 path. */
+  nativeWebcamDeviceId?: string;
   options?: RecordingOptions;
 }
 
@@ -88,6 +94,8 @@ export interface StartRecordingResult {
   success: boolean;
   recordingId?: string;
   tempPath?: string;
+  /** True when webcam capture is handled fully in native velocity path. */
+  nativeWebcamHandled?: boolean;
   error?: string;
 }
 
@@ -204,6 +212,29 @@ export interface ZoomRegion {
   focalKeyframes?: FocalKeyframe[];
 }
 
+export type WebcamOverlayAnchor = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
+
+export interface WebcamShadowLayer {
+  offsetX: number;
+  offsetY: number;
+  blur: number;
+  color: string;
+}
+
+export interface WebcamOverlayConfig {
+  enabled: boolean;
+  sourcePath?: string;
+  anchor?: WebcamOverlayAnchor;
+  aspectRatio?: number;
+  heightRatio?: number;
+  marginPx?: number;
+  borderRadiusPx?: number;
+  borderWidthPx?: number;
+  borderColor?: string;
+  opacity?: number;
+  shadows?: WebcamShadowLayer[];
+}
+
 import type { BackgroundPatternConfig } from '../shared/patterns';
 
 export interface Project {
@@ -223,6 +254,7 @@ export interface Project {
   backgroundPath?: string;
   backgroundColor: string;
   backgroundPattern?: BackgroundPatternConfig | null;
+  webcamOverlay?: WebcamOverlayConfig | null;
   cuts: CutRegion[];
   zoomRegions: ZoomRegion[];
   createdAt: number;

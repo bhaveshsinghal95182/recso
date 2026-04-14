@@ -196,6 +196,17 @@ electron.contextBridge.exposeInMainWorld('electron', {
     ): Promise<{ x: number; y: number; width: number; height: number; scale: number }> =>
       electron.ipcRenderer.invoke('compositor:calculate-layout', videoBounds, canvasSize),
 
+    calculateWebcamLayout: (
+      canvasSize?: { width: number; height: number },
+      request?: {
+        anchor?: 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
+        aspectRatio?: number;
+        heightRatio?: number;
+        marginPx?: number;
+      },
+    ): Promise<{ x: number; y: number; width: number; height: number; scale: number }> =>
+      electron.ipcRenderer.invoke('compositor:calculate-webcam-layout', canvasSize, request),
+
     resetConfig: () => electron.ipcRenderer.invoke('compositor:reset-config'),
 
     showBackgroundPicker: (): Promise<string | null> =>
@@ -229,6 +240,9 @@ electron.contextBridge.exposeInMainWorld('electron', {
 
     updateZoomConfig: (config: Record<string, unknown>) =>
       electron.ipcRenderer.invoke('editor:update-zoom-config', config),
+
+    updateWebcamOverlay: (config: Record<string, unknown>) =>
+      electron.ipcRenderer.invoke('editor:update-webcam-overlay', config),
 
     /** Update project duration */
     updateProjectDuration: (durationMs: number) =>

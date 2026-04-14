@@ -17,6 +17,7 @@ export interface EnginePreviewMappedConfig {
   durationMs: number;
   compositionConfig: CompositionConfig;
   videoSrc: string;
+  webcamSrc: string;
   backgroundImageSrc: string;
   backgroundContainerStyle: React.CSSProperties;
   selectedPattern: Project['backgroundPattern'];
@@ -40,7 +41,147 @@ const DEFAULT_VIDEO_STYLE = {
   borderColor: 'rgba(255, 255, 255, 0.2)',
 };
 
+const DEFAULT_WEBCAM_STYLE = {
+  anchor: 'bottom-right' as const,
+  aspectRatio: 9 / 16,
+  heightRatio: 0.28,
+  marginPx: 24,
+  borderRadius: 3,
+  borderWidth: 0,
+  borderColor: 'rgba(255, 255, 255, 0.42)',
+  opacity: 1,
+  shadows: [
+    { offsetX: -1, offsetY: 2, blur: 4, color: 'rgba(0, 0, 0, 0.16)' },
+    { offsetX: -3, offsetY: 6, blur: 10, color: 'rgba(0, 0, 0, 0.10)' },
+    { offsetX: 0, offsetY: 1, blur: 2, color: 'rgba(0, 0, 0, 0.12)' },
+  ],
+};
+
 const DEFAULT_ZOOM_EPSILON = 0.001;
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function inferWebcamPathFromRawVideo(rawVideoPath: string | undefined): string | undefined {
+  if (!rawVideoPath) {
+    return undefined;
+  }
+
+  const lastDot = rawVideoPath.lastIndexOf('.');
+  if (lastDot <= 0 || lastDot === rawVideoPath.length - 1) {
+    return undefined;
+  }
+
+  return `${rawVideoPath.slice(0, lastDot)}_camera${rawVideoPath.slice(lastDot)}`;
+}
+
+function resolveProjectWebcamSourcePath(project: Project | null): string | undefined {
+  const explicitPath = project?.webcamOverlay?.sourcePath?.trim();
+  if (explicitPath) {
+    return explicitPath;
+  }
+
+  return inferWebcamPathFromRawVideo(project?.rawVideoPath);
+}
+
+function resolveWebcamShadows(raw: Project['webcamOverlay']) {
+  if (!raw?.shadows || raw.shadows.length === 0) {
+    return DEFAULT_WEBCAM_STYLE.shadows;
+  }
+
+  const mapped = raw.shadows
+    .map((shadow) => {
+      const blur = Number.isFinite(shadow.blur) ? Math.max(0, shadow.blur) : 0;
+      const offsetX = Number.isFinite(shadow.offsetX) ? shadow.offsetX : 0;
+      const offsetY = Number.isFinite(shadow.offsetY) ? shadow.offsetY : 0;
+      const color = typeof shadow.color === 'string' ? shadow.color : 'rgba(0, 0, 0, 0.12)';
+
+      return {
+        blur,
+        offsetX,
+        offsetY,
+        color,
+      };
+    })
+    .filter((shadow) => shadow.blur > 0 || shadow.offsetX !== 0 || shadow.offsetY !== 0);
+
+  return mapped.length > 0 ? mapped : DEFAULT_WEBCAM_STYLE.shadows;
+}
+
+function calculateFallbackWebcamLayout(
+  canvasWidth: number,
+  canvasHeight: number,
+  webcamOverlay: Project['webcamOverlay'],
+): CompositionLayout {
+  const aspectRatio =
+    Number.isFinite(webcamOverlay?.aspectRatio) && (webcamOverlay?.aspectRatio as number) > 0
+      ? (webcamOverlay?.aspectRatio as number)
+      : DEFAULT_WEBCAM_STYLE.aspectRatio;
+  const heightRatio = clamp(
+    Number.isFinite(webcamOverlay?.heightRatio)
+      ? (webcamOverlay?.heightRatio as number)
+      : DEFAULT_WEBCAM_STYLE.heightRatio,
+    0.08,
+    0.75,
+  );
+  const marginPx = clamp(
+    Math.round(
+      Number.isFinite(webcamOverlay?.marginPx)
+        ? (webcamOverlay?.marginPx as number)
+        : DEFAULT_WEBCAM_STYLE.marginPx,
+    ),
+    0,
+    Math.floor(Math.min(canvasWidth, canvasHeight) / 2),
+  );
+
+  let height = Math.max(1, Math.round(canvasHeight * heightRatio));
+  let width = Math.max(1, Math.round(height * aspectRatio));
+
+  const maxWidth = Math.max(1, canvasWidth - marginPx * 2);
+  const maxHeight = Math.max(1, canvasHeight - marginPx * 2);
+
+  if (width > maxWidth) {
+    width = maxWidth;
+    height = Math.max(1, Math.round(width / aspectRatio));
+  }
+
+  if (height > maxHeight) {
+    height = maxHeight;
+    width = Math.max(1, Math.round(height * aspectRatio));
+  }
+
+  const anchor = webcamOverlay?.anchor ?? DEFAULT_WEBCAM_STYLE.anchor;
+  let x = marginPx;
+  let y = marginPx;
+  switch (anchor) {
+    case 'top-right':
+      x = canvasWidth - width - marginPx;
+      y = marginPx;
+      break;
+    case 'bottom-left':
+      x = marginPx;
+      y = canvasHeight - height - marginPx;
+      break;
+    case 'bottom-right':
+      x = canvasWidth - width - marginPx;
+      y = canvasHeight - height - marginPx;
+      break;
+    case 'top-left':
+    default:
+      x = marginPx;
+      y = marginPx;
+      break;
+  }
+
+  return {
+    x: clamp(Math.round(x), 0, Math.max(0, canvasWidth - width)),
+    y: clamp(Math.round(y), 0, Math.max(0, canvasHeight - height)),
+    width,
+    height,
+    scale: height / Math.max(1, canvasHeight),
+  };
+}
 
 function toFileUrl(path: string | undefined): string {
   if (!path) {
@@ -134,10 +275,27 @@ function buildCompositionConfig(
   cuts: CutRegion[],
   legacyZoomFallback: ZoomKeyframe[],
   mouseEvents: RecordedMouseEvent[],
+  webcamLayout: CompositionLayout | null,
+  webcamSourcePath: string | undefined,
 ): CompositionConfig {
   const sourceWidth = project?.videoDimensions?.width ?? 0;
   const sourceHeight = project?.videoDimensions?.height ?? 0;
   const rawCursor = project?.cursorConfig;
+  const rawWebcam = project?.webcamOverlay;
+  const webcamEnabled = Boolean(rawWebcam?.enabled && webcamSourcePath);
+  const webcamBorderRadius = Number.isFinite(rawWebcam?.borderRadiusPx)
+    ? Math.max(0, rawWebcam?.borderRadiusPx ?? DEFAULT_WEBCAM_STYLE.borderRadius)
+    : DEFAULT_WEBCAM_STYLE.borderRadius;
+  const webcamBorderWidth = Number.isFinite(rawWebcam?.borderWidthPx)
+    ? Math.max(0, rawWebcam?.borderWidthPx ?? DEFAULT_WEBCAM_STYLE.borderWidth)
+    : DEFAULT_WEBCAM_STYLE.borderWidth;
+  const webcamOpacity = clamp(
+    Number.isFinite(rawWebcam?.opacity)
+      ? (rawWebcam?.opacity as number)
+      : DEFAULT_WEBCAM_STYLE.opacity,
+    0,
+    1,
+  );
 
   return {
     ...defaultConfig,
@@ -154,6 +312,35 @@ function buildCompositionConfig(
         color: DEFAULT_VIDEO_STYLE.borderColor,
       },
     },
+    webcam: webcamEnabled
+      ? {
+          enabled: true,
+          sourcePath: webcamSourcePath,
+          anchor: rawWebcam?.anchor ?? DEFAULT_WEBCAM_STYLE.anchor,
+          aspectRatio:
+            Number.isFinite(rawWebcam?.aspectRatio) && (rawWebcam?.aspectRatio as number) > 0
+              ? (rawWebcam?.aspectRatio as number)
+              : DEFAULT_WEBCAM_STYLE.aspectRatio,
+          heightRatio: clamp(
+            Number.isFinite(rawWebcam?.heightRatio)
+              ? (rawWebcam?.heightRatio as number)
+              : DEFAULT_WEBCAM_STYLE.heightRatio,
+            0.08,
+            0.75,
+          ),
+          marginPx: Number.isFinite(rawWebcam?.marginPx)
+            ? Math.max(0, rawWebcam?.marginPx as number)
+            : DEFAULT_WEBCAM_STYLE.marginPx,
+          borderRadius: webcamBorderRadius,
+          opacity: webcamOpacity,
+          border: {
+            width: webcamBorderWidth,
+            color: rawWebcam?.borderColor ?? DEFAULT_WEBCAM_STYLE.borderColor,
+          },
+          shadows: resolveWebcamShadows(rawWebcam),
+          layout: webcamLayout ?? undefined,
+        }
+      : undefined,
     layout,
     zooms: legacyZoomFallback,
     zoomRegions: zoomRegions.map((region) => ({
@@ -218,11 +405,15 @@ export function useEnginePreviewConfigMapper(
   const durationMs = project?.timeline?.duration || 0;
   const [canvasSize, setCanvasSize] = useState<CanvasSize>(DEFAULT_CANVAS_SIZE);
   const [backendLayout, setBackendLayout] = useState<CompositionLayout | null>(null);
+  const [backendWebcamLayout, setBackendWebcamLayout] = useState<CompositionLayout | null>(null);
+
+  const webcamSourcePath = useMemo(() => resolveProjectWebcamSourcePath(project), [project]);
 
   useEffect(() => {
     if (!project?.videoDimensions) {
       setCanvasSize(DEFAULT_CANVAS_SIZE);
       setBackendLayout(null);
+      setBackendWebcamLayout(null);
       return;
     }
 
@@ -239,12 +430,33 @@ export function useEnginePreviewConfigMapper(
           nextCanvas,
         );
 
+        let nextWebcamLayout: CompositionLayout | null = null;
+        if (project.webcamOverlay?.enabled && webcamSourcePath) {
+          nextWebcamLayout = await window.electron.compositor.calculateWebcamLayout(nextCanvas, {
+            anchor: project.webcamOverlay.anchor ?? DEFAULT_WEBCAM_STYLE.anchor,
+            aspectRatio:
+              Number.isFinite(project.webcamOverlay.aspectRatio) &&
+              (project.webcamOverlay.aspectRatio as number) > 0
+                ? (project.webcamOverlay.aspectRatio as number)
+                : DEFAULT_WEBCAM_STYLE.aspectRatio,
+            heightRatio:
+              Number.isFinite(project.webcamOverlay.heightRatio) &&
+              (project.webcamOverlay.heightRatio as number) > 0
+                ? (project.webcamOverlay.heightRatio as number)
+                : DEFAULT_WEBCAM_STYLE.heightRatio,
+            marginPx: Number.isFinite(project.webcamOverlay.marginPx)
+              ? Math.max(0, project.webcamOverlay.marginPx as number)
+              : DEFAULT_WEBCAM_STYLE.marginPx,
+          });
+        }
+
         if (cancelled) {
           return;
         }
 
         setCanvasSize(nextCanvas);
         setBackendLayout(nextLayout);
+        setBackendWebcamLayout(nextWebcamLayout);
       } catch {
         if (cancelled) {
           return;
@@ -259,6 +471,18 @@ export function useEnginePreviewConfigMapper(
             DEFAULT_CANVAS_SIZE.height,
           ),
         );
+
+        if (project.webcamOverlay?.enabled && webcamSourcePath) {
+          setBackendWebcamLayout(
+            calculateFallbackWebcamLayout(
+              DEFAULT_CANVAS_SIZE.width,
+              DEFAULT_CANVAS_SIZE.height,
+              project.webcamOverlay,
+            ),
+          );
+        } else {
+          setBackendWebcamLayout(null);
+        }
       }
     };
 
@@ -267,7 +491,12 @@ export function useEnginePreviewConfigMapper(
     return () => {
       cancelled = true;
     };
-  }, [project?.videoDimensions?.height, project?.videoDimensions?.width]);
+  }, [
+    project?.videoDimensions?.height,
+    project?.videoDimensions?.width,
+    project?.webcamOverlay,
+    webcamSourcePath,
+  ]);
 
   const layout = useMemo<CompositionLayout>(() => {
     if (!project?.videoDimensions) {
@@ -298,13 +527,54 @@ export function useEnginePreviewConfigMapper(
     [durationMs, project?.zoomConfig, zoomRegions.length],
   );
 
+  const webcamLayout = useMemo<CompositionLayout | null>(() => {
+    if (!project?.webcamOverlay?.enabled || !webcamSourcePath) {
+      return null;
+    }
+
+    if (backendWebcamLayout) {
+      return backendWebcamLayout;
+    }
+
+    return calculateFallbackWebcamLayout(
+      canvasSize.width,
+      canvasSize.height,
+      project.webcamOverlay,
+    );
+  }, [
+    backendWebcamLayout,
+    canvasSize.height,
+    canvasSize.width,
+    project?.webcamOverlay,
+    webcamSourcePath,
+  ]);
+
   const compositionConfig = useMemo(
     () =>
-      buildCompositionConfig(project, layout, zoomRegions, cuts, legacyZoomFallback, mouseEvents),
-    [cuts, layout, legacyZoomFallback, mouseEvents, project, zoomRegions],
+      buildCompositionConfig(
+        project,
+        layout,
+        zoomRegions,
+        cuts,
+        legacyZoomFallback,
+        mouseEvents,
+        webcamLayout,
+        webcamSourcePath,
+      ),
+    [
+      cuts,
+      layout,
+      legacyZoomFallback,
+      mouseEvents,
+      project,
+      webcamLayout,
+      webcamSourcePath,
+      zoomRegions,
+    ],
   );
 
   const videoSrc = useMemo(() => toFileUrl(project?.rawVideoPath), [project?.rawVideoPath]);
+  const webcamSrc = useMemo(() => toFileUrl(webcamSourcePath), [webcamSourcePath]);
   const backgroundImageSrc = useMemo(
     () => toFileUrl(project?.backgroundPath),
     [project?.backgroundPath],
@@ -327,6 +597,7 @@ export function useEnginePreviewConfigMapper(
     durationMs,
     compositionConfig,
     videoSrc,
+    webcamSrc,
     backgroundImageSrc,
     backgroundContainerStyle,
     selectedPattern,

@@ -14,7 +14,7 @@ import * as editorService from '../services/editor.service.js';
 import { mouseTrackerService } from '../services/mouse-tracker.service.js';
 import * as projectStorage from '../services/project-storage.service.js';
 import type { CutRegion } from '../types/cut.types.js';
-import type { CursorConfig, ZoomConfig } from '../types/project.types.js';
+import type { CursorConfig, WebcamOverlayConfig, ZoomConfig } from '../types/project.types.js';
 import type { ZoomRegion } from '../types/zoom.types.js';
 
 /**
@@ -83,6 +83,14 @@ export function registerEditorHandlers(): void {
     editorService.updateZoomConfig(config);
     return editorService.getActiveProject()?.zoomConfig;
   });
+
+  // Update webcam overlay configuration
+  ipcMain.handle(
+    'editor:update-webcam-overlay',
+    async (_event, config: Partial<WebcamOverlayConfig>) => {
+      return editorService.updateWebcamOverlay(config);
+    },
+  );
 
   // Update project duration
   ipcMain.handle('editor:update-project-duration', async (_event, durationMs: number) => {

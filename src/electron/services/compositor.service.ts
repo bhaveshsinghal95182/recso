@@ -20,8 +20,22 @@ import type {
   LayoutResult,
   Rectangle,
   Size,
+  WebcamLayoutRequest,
+  WebcamLayoutResult,
 } from '../types/compositor.types.js';
 import { DEFAULT_COMPOSITOR_CONFIG } from '../types/compositor.types.js';
+
+const DEFAULT_WEBCAM_ASPECT_RATIO = 9 / 16;
+const DEFAULT_WEBCAM_HEIGHT_RATIO = 0.28;
+const DEFAULT_WEBCAM_MARGIN_PX = 24;
+const MIN_WEBCAM_HEIGHT_RATIO = 0.08;
+const MAX_WEBCAM_HEIGHT_RATIO = 0.75;
+const MAX_WEBCAM_CANVAS_WIDTH_RATIO = 0.5;
+const MAX_WEBCAM_CANVAS_HEIGHT_RATIO = 0.9;
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
 
 // Current compositor configuration
 let config: CompositorConfig = { ...DEFAULT_COMPOSITOR_CONFIG };
@@ -191,6 +205,102 @@ export function calculateLayout(videoBounds: Rectangle | Size, canvasSize?: Size
   });
 
   return result;
+}
+
+/**
+ * Calculate a webcam overlay layout on the canvas.
+ *
+ * Defaults:
+ * - bottom-right anchor
+ * - 9:16 vertical aspect ratio
+ * - 28% of canvas height
+ * - 24px margin
+ */
+export function calculateWebcamLayout(
+  canvasSize?: Size,
+  request?: WebcamLayoutRequest,
+): WebcamLayoutResult {
+  const canvas = canvasSize || config.canvasSize;
+  const anchor = request?.anchor ?? 'bottom-right';
+  const aspectRatio =
+    Number.isFinite(request?.aspectRatio) && (request?.aspectRatio as number) > 0
+      ? (request?.aspectRatio as number)
+      : DEFAULT_WEBCAM_ASPECT_RATIO;
+  const heightRatio = clamp(
+    Number.isFinite(request?.heightRatio)
+      ? (request?.heightRatio as number)
+      : DEFAULT_WEBCAM_HEIGHT_RATIO,
+    MIN_WEBCAM_HEIGHT_RATIO,
+    MAX_WEBCAM_HEIGHT_RATIO,
+  );
+
+  const rawMargin = Number.isFinite(request?.marginPx)
+    ? (request?.marginPx as number)
+    : DEFAULT_WEBCAM_MARGIN_PX;
+  const maxMargin = Math.floor(Math.min(canvas.width, canvas.height) / 2);
+  const marginPx = clamp(Math.round(rawMargin), 0, Math.max(0, maxMargin));
+
+  let height = Math.max(1, Math.round(canvas.height * heightRatio));
+  let width = Math.max(1, Math.round(height * aspectRatio));
+
+  const maxWidth = Math.max(
+    1,
+    Math.min(
+      Math.round(canvas.width * MAX_WEBCAM_CANVAS_WIDTH_RATIO),
+      Math.round(canvas.width - marginPx * 2),
+    ),
+  );
+  const maxHeight = Math.max(
+    1,
+    Math.min(
+      Math.round(canvas.height * MAX_WEBCAM_CANVAS_HEIGHT_RATIO),
+      Math.round(canvas.height - marginPx * 2),
+    ),
+  );
+
+  if (width > maxWidth) {
+    width = maxWidth;
+    height = Math.max(1, Math.round(width / aspectRatio));
+  }
+
+  if (height > maxHeight) {
+    height = maxHeight;
+    width = Math.max(1, Math.round(height * aspectRatio));
+  }
+
+  let x = marginPx;
+  let y = marginPx;
+
+  switch (anchor) {
+    case 'top-right':
+      x = canvas.width - width - marginPx;
+      y = marginPx;
+      break;
+    case 'bottom-left':
+      x = marginPx;
+      y = canvas.height - height - marginPx;
+      break;
+    case 'bottom-right':
+      x = canvas.width - width - marginPx;
+      y = canvas.height - height - marginPx;
+      break;
+    case 'top-left':
+    default:
+      x = marginPx;
+      y = marginPx;
+      break;
+  }
+
+  x = clamp(Math.round(x), 0, Math.max(0, canvas.width - width));
+  y = clamp(Math.round(y), 0, Math.max(0, canvas.height - height));
+
+  return {
+    x,
+    y,
+    width,
+    height,
+    scale: height / Math.max(1, canvas.height),
+  };
 }
 
 /**

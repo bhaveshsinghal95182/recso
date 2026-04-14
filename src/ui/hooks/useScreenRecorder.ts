@@ -176,6 +176,9 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
       cameraDeviceId?: string,
       micDeviceId?: string,
       recordSystemAudio: boolean = false,
+      nativeCaptureMode?: 'legacy' | 'native-singular-clock',
+      targetFps: 30 | 60 = 60,
+      nativeWebcamDeviceId?: string,
     ) => {
       let recordingId: string | null = null;
 
@@ -200,6 +203,9 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
           recordSystemAudio,
           cameraDeviceId,
           micDeviceId,
+          nativeCaptureMode,
+          targetFps,
+          nativeWebcamDeviceId,
           options: {
             videoBitrate,
             audioBitrate: audioRef.current ? 128000 : 0,
@@ -212,9 +218,12 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
 
         recordingId = startResult.recordingId;
         recordingIdRef.current = recordingId;
+        const nativeWebcamHandled = Boolean(startResult.nativeWebcamHandled);
+        const shouldRecordCameraSidecar = recordCamera && !nativeWebcamHandled;
+        const shouldRecordStandaloneMic = recordMic && (!recordCamera || nativeWebcamHandled);
 
         // If no auxiliary tracks are enabled, native recording is enough.
-        if (!recordCamera && !recordMic && !recordSystemAudio) {
+        if (!shouldRecordCameraSidecar && !shouldRecordStandaloneMic && !recordSystemAudio) {
           setState({
             status: 'recording',
             recordingId,
@@ -342,7 +351,7 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
           }
         }
 
-        if (recordCamera) {
+        if (shouldRecordCameraSidecar) {
           try {
             const cameraStream = await navigator.mediaDevices.getUserMedia({
               video: cameraDeviceId
@@ -381,7 +390,7 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
           }
         }
 
-        if (recordMic && !recordCamera && micStream) {
+        if (shouldRecordStandaloneMic && micStream) {
           const micTarget = createTarget('mic');
           pipelines.streamTargets.push(micTarget);
 

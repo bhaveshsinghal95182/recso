@@ -13,6 +13,7 @@ import type {
   StartRecordingResult,
   StopRecordingResult,
   TransformedCursorPosition,
+  WebcamOverlayConfig,
   ZoomConfig,
 } from './types';
 
@@ -151,6 +152,17 @@ interface ElectronAPI {
       canvasSize?: { width: number; height: number },
     ) => Promise<{ x: number; y: number; width: number; height: number; scale: number }>;
 
+    /** Calculate layout for webcam overlay on canvas */
+    calculateWebcamLayout: (
+      canvasSize?: { width: number; height: number },
+      request?: {
+        anchor?: 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
+        aspectRatio?: number;
+        heightRatio?: number;
+        marginPx?: number;
+      },
+    ) => Promise<{ x: number; y: number; width: number; height: number; scale: number }>;
+
     /** Reset configuration to defaults */
     resetConfig: () => Promise<{
       backgroundPath: string | null;
@@ -193,6 +205,11 @@ interface ElectronAPI {
 
     /** Update zoom configuration */
     updateZoomConfig: (config: Partial<ZoomConfig>) => Promise<ZoomConfig | undefined>;
+
+    /** Update webcam overlay configuration */
+    updateWebcamOverlay: (
+      config: Partial<WebcamOverlayConfig>,
+    ) => Promise<WebcamOverlayConfig | null | undefined>;
 
     /** Update project duration */
     updateProjectDuration: (durationMs: number) => Promise<boolean>;

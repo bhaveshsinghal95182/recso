@@ -17,6 +17,7 @@ export interface TransportState {
 export class CompositionEngine {
   private config: CompositionConfig;
   private source: FrameVideoSource | null = null;
+  private webcamSource: FrameVideoSource | null = null;
   private transport: TransportState = {
     currentTime: 0,
     isPlaying: false,
@@ -34,6 +35,10 @@ export class CompositionEngine {
 
   setVideoSource(source: FrameVideoSource | null): void {
     this.source = source;
+  }
+
+  setWebcamSource(source: FrameVideoSource | null): void {
+    this.webcamSource = source;
   }
 
   setDuration(duration: number | null): void {
@@ -112,8 +117,14 @@ export class CompositionEngine {
     this.renderFrameAt(this.transport.currentTime, ctx);
   }
 
-  renderFrameAt(t: number, ctx: FrameContext, sourceOverride?: FrameVideoSource): void {
+  renderFrameAt(
+    t: number,
+    ctx: FrameContext,
+    sourceOverride?: FrameVideoSource,
+    webcamSourceOverride?: FrameVideoSource | null,
+  ): void {
     const source = sourceOverride ?? this.source;
+    const webcamSource = webcamSourceOverride ?? this.webcamSource;
     const context2d = ctx.get2DContext();
     const clampedTime = this.clampTime(t);
 
@@ -128,6 +139,7 @@ export class CompositionEngine {
       t: clampedTime,
       config: this.config,
       source,
+      webcamSource,
     });
   }
 

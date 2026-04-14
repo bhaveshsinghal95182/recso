@@ -48,6 +48,29 @@ export interface ZoomConfig {
   focalY: number;
 }
 
+export type WebcamOverlayAnchor = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
+
+export interface WebcamShadowLayer {
+  offsetX: number;
+  offsetY: number;
+  blur: number;
+  color: string;
+}
+
+export interface WebcamOverlayConfig {
+  enabled: boolean;
+  sourcePath?: string;
+  anchor?: WebcamOverlayAnchor;
+  aspectRatio?: number;
+  heightRatio?: number;
+  marginPx?: number;
+  borderRadiusPx?: number;
+  borderWidthPx?: number;
+  borderColor?: string;
+  opacity?: number;
+  shadows?: WebcamShadowLayer[];
+}
+
 /**
  * A single clip on the timeline
  */
@@ -116,6 +139,8 @@ export interface Project {
   backgroundColor: string;
   /** Optional background pattern */
   backgroundPattern?: BackgroundPatternConfig | null;
+  /** Optional webcam overlay settings */
+  webcamOverlay?: WebcamOverlayConfig | null;
   /** Cut regions to exclude from export */
   cuts: CutRegion[];
   /** Zoom regions for zoom effects during export */

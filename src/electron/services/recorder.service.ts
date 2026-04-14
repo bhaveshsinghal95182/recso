@@ -30,6 +30,11 @@ interface VelocityStopper {
 }
 
 interface VelocityBindings {
+  listWebcamDevices?(): Array<{
+    id: string;
+    label: string;
+    isDefault: boolean;
+  }>;
   listAvailableWindows(): Array<{
     title: string;
     className: string;
@@ -50,6 +55,36 @@ interface VelocityBindings {
     bitrate: number,
     includeSystemAudio?: boolean,
   ): VelocityStopper;
+  startMonitorRecordingV2?: (options: {
+    outputPath: string;
+    bitrate: number;
+    includeSystemAudio?: boolean;
+    targetFps?: number;
+    enableWebcam?: boolean;
+    webcamDeviceId?: string;
+  }) => VelocityStopper;
+  startWindowRecordingV2?: (options: {
+    windowTitle: string;
+    outputPath: string;
+    bitrate: number;
+    includeSystemAudio?: boolean;
+    targetFps?: number;
+    enableWebcam?: boolean;
+    webcamDeviceId?: string;
+  }) => VelocityStopper;
+}
+
+interface NativeClockOptions {
+  useSingularClock: boolean;
+  targetFps: 30 | 60;
+  enableWebcam: boolean;
+  webcamDeviceId?: string;
+}
+
+interface NativeWebcamCapability {
+  supported: boolean;
+  selectedDeviceId?: string;
+  reason?: string;
 }
 
 interface AuxStreamState {
@@ -123,7 +158,22 @@ function startVelocityMonitorRecording(
   outputPath: string,
   bitrate: number,
   includeSystemAudio: boolean,
+  nativeClockOptions?: NativeClockOptions,
 ): VelocityStopper {
+  if (
+    nativeClockOptions?.useSingularClock &&
+    typeof velocity.startMonitorRecordingV2 === 'function'
+  ) {
+    return velocity.startMonitorRecordingV2({
+      outputPath,
+      bitrate,
+      includeSystemAudio,
+      targetFps: nativeClockOptions.targetFps,
+      enableWebcam: nativeClockOptions.enableWebcam,
+      webcamDeviceId: nativeClockOptions.webcamDeviceId,
+    });
+  }
+
   try {
     return velocity.startMonitorRecording(outputPath, bitrate, includeSystemAudio);
   } catch {
@@ -138,12 +188,78 @@ function startVelocityWindowRecording(
   outputPath: string,
   bitrate: number,
   includeSystemAudio: boolean,
+  nativeClockOptions?: NativeClockOptions,
 ): VelocityStopper {
+  if (
+    nativeClockOptions?.useSingularClock &&
+    typeof velocity.startWindowRecordingV2 === 'function'
+  ) {
+    return velocity.startWindowRecordingV2({
+      windowTitle,
+      outputPath,
+      bitrate,
+      includeSystemAudio,
+      targetFps: nativeClockOptions.targetFps,
+      enableWebcam: nativeClockOptions.enableWebcam,
+      webcamDeviceId: nativeClockOptions.webcamDeviceId,
+    });
+  }
+
   try {
     return velocity.startWindowRecording(windowTitle, outputPath, bitrate, includeSystemAudio);
   } catch {
     // Backward compatibility for older prebuilt binaries with the two-argument signature.
     return velocity.startWindowRecording(windowTitle, outputPath, bitrate);
+  }
+}
+
+function shouldUseNativeSingularClock(config: RecordingConfig): boolean {
+  if (config.nativeCaptureMode === 'native-singular-clock') {
+    return true;
+  }
+
+  return process.env.RECSO_NATIVE_SINGULAR_CLOCK === '1';
+}
+
+function resolveNativeWebcamCapability(
+  velocity: VelocityBindings,
+  requestedDeviceId?: string,
+): NativeWebcamCapability {
+  if (typeof velocity.listWebcamDevices !== 'function') {
+    return {
+      supported: false,
+      reason: 'native webcam device enumeration is unavailable in this velocity build',
+    };
+  }
+
+  try {
+    const devices = velocity.listWebcamDevices();
+    if (!Array.isArray(devices) || devices.length === 0) {
+      return {
+        supported: false,
+        reason: 'no native webcam devices were reported by velocity',
+      };
+    }
+
+    if (requestedDeviceId) {
+      const requested = devices.find((device) => device.id === requestedDeviceId);
+      if (requested) {
+        return { supported: true, selectedDeviceId: requested.id };
+      }
+
+      return {
+        supported: false,
+        reason: `requested webcam device '${requestedDeviceId}' was not found in native device list`,
+      };
+    }
+
+    const defaultDevice = devices.find((device) => device.isDefault) ?? devices[0];
+    return { supported: true, selectedDeviceId: defaultDevice?.id };
+  } catch (error) {
+    return {
+      supported: false,
+      reason: error instanceof Error ? error.message : 'native webcam capability check failed',
+    };
   }
 }
 
@@ -325,6 +441,11 @@ function ensureTempDir(): string {
     fs.mkdirSync(tempDir, { recursive: true });
   }
   return tempDir;
+}
+
+function inferNativeCameraSidecarPath(videoPath: string): string {
+  const parsed = path.parse(videoPath);
+  return path.join(parsed.dir, `${parsed.name}_camera${parsed.ext || '.mp4'}`);
 }
 
 function openAuxStream(
@@ -610,6 +731,45 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
     const isScreenSource = selectedSourceMeta
       ? selectedSourceMeta.isScreen
       : selectedSourceId.startsWith('screen:') || selectedSourceId === 'screen';
+    const useNativeSingularClock = shouldUseNativeSingularClock(config);
+    const nativeClockOptions: NativeClockOptions = {
+      useSingularClock: useNativeSingularClock,
+      targetFps: config.targetFps === 30 ? 30 : 60,
+      enableWebcam: Boolean(config.recordCamera),
+      webcamDeviceId: config.nativeWebcamDeviceId || config.cameraDeviceId,
+    };
+    let useNativeWebcam = false;
+    let nativeWebcamDeviceId = nativeClockOptions.webcamDeviceId;
+
+    if (nativeClockOptions.useSingularClock && nativeClockOptions.enableWebcam) {
+      const webcamCapability = resolveNativeWebcamCapability(
+        velocity,
+        nativeClockOptions.webcamDeviceId,
+      );
+
+      if (webcamCapability.supported) {
+        useNativeWebcam = true;
+        nativeWebcamDeviceId = webcamCapability.selectedDeviceId || nativeWebcamDeviceId;
+      } else {
+        console.warn(
+          `[RecorderService] Native webcam capture unavailable; falling back to renderer camera sidecar (${webcamCapability.reason || 'unknown reason'}).`,
+        );
+      }
+    }
+
+    const effectiveNativeClockOptions: NativeClockOptions = {
+      ...nativeClockOptions,
+      enableWebcam: useNativeWebcam,
+      webcamDeviceId: useNativeWebcam ? nativeWebcamDeviceId : undefined,
+    };
+
+    if (nativeClockOptions.useSingularClock) {
+      console.log('[RecorderService] Native singular-clock capture mode enabled', {
+        targetFps: nativeClockOptions.targetFps,
+        webcamEnabled: useNativeWebcam,
+        webcamRequested: nativeClockOptions.enableWebcam,
+      });
+    }
 
     if (isScreenSource) {
       if (selectedSourceMeta && !selectedSourceMeta.isPrimary) {
@@ -620,7 +780,31 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
         };
       }
 
-      stopper = startVelocityMonitorRecording(velocity, tempPath, bitrate, useNativeSystemAudio);
+      try {
+        stopper = startVelocityMonitorRecording(
+          velocity,
+          tempPath,
+          bitrate,
+          useNativeSystemAudio,
+          effectiveNativeClockOptions,
+        );
+      } catch (error) {
+        if (!useNativeWebcam) {
+          throw error;
+        }
+
+        console.warn(
+          '[RecorderService] Native webcam start failed; falling back to renderer camera sidecar.',
+          error,
+        );
+
+        useNativeWebcam = false;
+        stopper = startVelocityMonitorRecording(velocity, tempPath, bitrate, useNativeSystemAudio, {
+          ...effectiveNativeClockOptions,
+          enableWebcam: false,
+          webcamDeviceId: undefined,
+        });
+      }
     } else {
       const windowTitle = selectedSourceMeta?.name;
       if (!windowTitle) {
@@ -630,20 +814,47 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
         };
       }
 
-      stopper = startVelocityWindowRecording(
-        velocity,
-        windowTitle,
-        tempPath,
-        bitrate,
-        useNativeSystemAudio,
-      );
+      try {
+        stopper = startVelocityWindowRecording(
+          velocity,
+          windowTitle,
+          tempPath,
+          bitrate,
+          useNativeSystemAudio,
+          effectiveNativeClockOptions,
+        );
+      } catch (error) {
+        if (!useNativeWebcam) {
+          throw error;
+        }
+
+        console.warn(
+          '[RecorderService] Native webcam start failed; falling back to renderer camera sidecar.',
+          error,
+        );
+
+        useNativeWebcam = false;
+        stopper = startVelocityWindowRecording(
+          velocity,
+          windowTitle,
+          tempPath,
+          bitrate,
+          useNativeSystemAudio,
+          {
+            ...effectiveNativeClockOptions,
+            enableWebcam: false,
+            webcamDeviceId: undefined,
+          },
+        );
+      }
     }
 
-    if (config.recordCamera) {
+    if (config.recordCamera && !useNativeWebcam) {
       auxStreams.camera = openAuxStream(tempDir, recordingId, 'camera', fileExt);
     }
 
-    if (config.recordMic && !config.recordCamera) {
+    const shouldWriteStandaloneMic = config.recordMic && (!config.recordCamera || useNativeWebcam);
+    if (shouldWriteStandaloneMic) {
       auxStreams.mic = openAuxStream(tempDir, recordingId, 'mic', fileExt);
     }
 
@@ -687,6 +898,7 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
       success: true,
       recordingId,
       tempPath,
+      nativeWebcamHandled: useNativeWebcam,
     };
   } catch (error) {
     if (stopper) {
@@ -785,7 +997,27 @@ export async function stopRecording(recordingId: string): Promise<StopRecordingR
       `${folderName}.${currentRecording.fileExtension}`,
     );
 
+    const nativeCameraTempPath = inferNativeCameraSidecarPath(currentRecording.tempPath);
+    const nativeCameraFinalPath = inferNativeCameraSidecarPath(finalScreenPath);
+
     fs.renameSync(currentRecording.tempPath, finalScreenPath);
+
+    if (fs.existsSync(nativeCameraTempPath)) {
+      try {
+        const nativeCameraStats = fs.statSync(nativeCameraTempPath);
+        if (nativeCameraStats.size > 0) {
+          if (fs.existsSync(nativeCameraFinalPath)) {
+            fs.unlinkSync(nativeCameraFinalPath);
+          }
+          fs.renameSync(nativeCameraTempPath, nativeCameraFinalPath);
+          console.log('[RecorderService] Saved native webcam sidecar:', nativeCameraFinalPath);
+        } else {
+          fs.unlinkSync(nativeCameraTempPath);
+        }
+      } catch (error) {
+        console.warn('[RecorderService] Failed to finalize native webcam sidecar:', error);
+      }
+    }
 
     const desktopAudioStream = currentRecording.auxStreams['desktop-audio'];
 

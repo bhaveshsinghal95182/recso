@@ -36,6 +36,32 @@ export interface VideoConfig {
   };
 }
 
+export type WebcamOverlayAnchor = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
+
+export interface WebcamShadowLayer {
+  offsetX: number;
+  offsetY: number;
+  blur: number;
+  color: string;
+}
+
+export interface WebcamOverlayConfig {
+  enabled: boolean;
+  sourcePath?: string;
+  anchor: WebcamOverlayAnchor;
+  aspectRatio: number;
+  heightRatio: number;
+  marginPx: number;
+  borderRadius: number;
+  opacity: number;
+  border: {
+    width: number;
+    color: string;
+  };
+  shadows: WebcamShadowLayer[];
+  layout?: CompositionLayout;
+}
+
 export interface CompositionLayout {
   x: number;
   y: number;
@@ -126,6 +152,7 @@ export interface ZoomKeyframe {
 export interface CompositionConfig {
   background: BackgroundConfig;
   video: VideoConfig;
+  webcam?: WebcamOverlayConfig;
   layout?: CompositionLayout;
   cursor?: CompositionCursorConfig;
   zooms: ZoomKeyframe[];

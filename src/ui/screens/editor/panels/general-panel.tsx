@@ -39,13 +39,21 @@ function hslToHex(h: number, s: number, l: number) {
 }
 
 export function GeneralPanel() {
-  const { project, updateBackgroundColor, updateBackgroundPattern, updateBackgroundPath } =
-    useProjectStore();
+  const {
+    project,
+    updateBackgroundColor,
+    updateBackgroundPattern,
+    updateBackgroundPath,
+    updateWebcamOverlay,
+  } = useProjectStore();
   const [presetColors, setPresetColors] = useState<string[]>(PASTEL_COLORS);
 
   if (!project) return null;
 
   const isBackgroundEnabled = project.backgroundColor !== 'transparent';
+  const webcamSourcePath = project.webcamOverlay?.sourcePath;
+  const canToggleWebcam = Boolean(webcamSourcePath);
+  const isWebcamEnabled = Boolean(project.webcamOverlay?.enabled && canToggleWebcam);
 
   const handleBackgroundToggle = (checked: boolean) => {
     if (checked) {
@@ -54,6 +62,14 @@ export function GeneralPanel() {
       updateBackgroundColor('transparent');
       updateBackgroundPattern(null); // Clear the pattern when background is disabled
     }
+  };
+
+  const handleWebcamToggle = (checked: boolean) => {
+    if (!canToggleWebcam) {
+      return;
+    }
+
+    void updateWebcamOverlay({ enabled: checked });
   };
 
   const handleRefreshColors = () => {
@@ -96,6 +112,23 @@ export function GeneralPanel() {
           </label>
           <Switch checked={isBackgroundEnabled} onCheckedChange={handleBackgroundToggle} />
         </div>
+
+        <div className="flex items-center justify-between gap-3">
+          <div className="space-y-0.5">
+            <label className="text-sm font-medium">Webcam Overlay</label>
+            <p className="text-[11px] text-muted-foreground">
+              {canToggleWebcam
+                ? 'Show recorded webcam overlay in preview/export'
+                : 'No webcam recording found for this project'}
+            </p>
+          </div>
+          <Switch
+            checked={isWebcamEnabled}
+            onCheckedChange={handleWebcamToggle}
+            disabled={!canToggleWebcam}
+          />
+        </div>
+
         <AnimatePresence initial={false}>
           {isBackgroundEnabled && (
             <motion.div
