@@ -451,7 +451,6 @@ export function EnginePreview() {
             className="hidden"
             playsInline
             preload="auto"
-            muted
           />
 
           {isEditingFocalPoint && selectedZoomId && selectedZoom && project.videoDimensions && (
