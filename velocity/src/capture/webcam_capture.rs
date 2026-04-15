@@ -7,12 +7,13 @@ use nokhwa::{query, Camera};
 use std::path::Path;
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use windows_capture::encoder::{
   AudioSettingsBuilder, ContainerSettingsBuilder, VideoEncoder, VideoSettingsBuilder,
 };
 
 const WEBCAM_DEFAULT_BITRATE: u32 = 3_000_000;
+const WEBCAM_READY_FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[napi(object)]
 pub struct WebcamDeviceInfo {
@@ -141,6 +142,39 @@ fn rgb_to_bgra_bottom_up(rgb: &[u8], width: usize, height: usize) -> Vec<u8> {
   output
 }
 
+fn capture_next_bgra_frame(
+  camera: &mut Camera,
+ ) -> Result<(Vec<u8>, usize, usize), String> {
+  let frame = camera
+    .frame()
+    .map_err(|error| format!("capture failed: {error}"))?;
+
+  let rgb_frame = frame
+    .decode_image::<RgbFormat>()
+    .map_err(|error| format!("decode failed: {error}"))?;
+
+  let frame_width = rgb_frame.width() as usize;
+  let frame_height = rgb_frame.height() as usize;
+
+  let rgb_raw = rgb_frame.into_raw();
+  let expected_len = frame_width
+    .saturating_mul(frame_height)
+    .saturating_mul(3);
+  if rgb_raw.len() < expected_len {
+    return Err(format!(
+      "decoded frame buffer too small (have={}, need={})",
+      rgb_raw.len(),
+      expected_len
+    ));
+  }
+
+  Ok((
+    rgb_to_bgra_bottom_up(&rgb_raw, frame_width, frame_height),
+    frame_width,
+    frame_height,
+  ))
+}
+
 fn run_webcam_recording_loop(
   output_path: String,
   webcam_device_id: Option<String>,
@@ -181,8 +215,54 @@ fn run_webcam_recording_loop(
   };
   let frame_period_100ns = fps_to_period_100ns(effective_fps);
 
+  let _ = (width, height);
+
+  let mut frame_index_100ns: i64 = 0;
+  let frame_period_nanos = (1_000_000_000u64 / effective_fps.max(1) as u64).max(1);
+  let frame_period_duration = Duration::from_nanos(frame_period_nanos);
+
+  // Do not report startup success until we can actually deliver a webcam frame.
+  let startup_deadline = Instant::now() + WEBCAM_READY_FRAME_TIMEOUT;
+  let mut latest_bgra: Option<Vec<u8>> = None;
+  let mut expected_frame_width: usize = 0;
+  let mut expected_frame_height: usize = 0;
+  let mut startup_error = String::from("no frame produced");
+
+  while Instant::now() < startup_deadline {
+    match stop_rx.try_recv() {
+      Ok(_) | Err(TryRecvError::Disconnected) => {
+        let _ = camera.stop_stream();
+        return;
+      }
+      Err(TryRecvError::Empty) => {}
+    }
+
+    match capture_next_bgra_frame(&mut camera) {
+      Ok((frame, frame_width, frame_height)) => {
+        latest_bgra = Some(frame);
+        expected_frame_width = frame_width;
+        expected_frame_height = frame_height;
+        break;
+      }
+      Err(error) => {
+        startup_error = error;
+        thread::sleep(Duration::from_millis(12));
+      }
+    }
+  }
+
+  if latest_bgra.is_none() {
+    let _ = camera.stop_stream();
+    let _ = ready_tx.send(Err(format!(
+      "webcam stream produced no valid frame in startup window: {}",
+      startup_error
+    )));
+    return;
+  }
+
   let mut encoder = match VideoEncoder::new(
-    VideoSettingsBuilder::new(width, height).bitrate(WEBCAM_DEFAULT_BITRATE),
+    VideoSettingsBuilder::new(expected_frame_width as u32, expected_frame_height as u32)
+      .bitrate(WEBCAM_DEFAULT_BITRATE),
     AudioSettingsBuilder::default().disabled(true),
     ContainerSettingsBuilder::default(),
     &sidecar_path,
@@ -195,11 +275,22 @@ fn run_webcam_recording_loop(
     }
   };
 
+  if let Some(first_frame) = latest_bgra.as_ref() {
+    if let Err(error) = encoder.send_frame_buffer(first_frame, frame_index_100ns) {
+      let _ = camera.stop_stream();
+      let _ = encoder.finish();
+      let _ = ready_tx.send(Err(format!(
+        "failed to encode first webcam frame: {}",
+        error
+      )));
+      return;
+    }
+  }
+
   let _ = ready_tx.send(Ok(()));
 
-  let frame_width = width as usize;
-  let frame_height = height as usize;
-  let mut frame_index_100ns: i64 = 0;
+  frame_index_100ns = frame_index_100ns.saturating_add(frame_period_100ns);
+  let mut mismatched_dimension_counter: u64 = 0;
 
   loop {
     match stop_rx.try_recv() {
@@ -207,33 +298,48 @@ fn run_webcam_recording_loop(
       Err(TryRecvError::Empty) => {}
     }
 
-    let frame = match camera.frame() {
-      Ok(frame) => frame,
-      Err(error) => {
-        eprintln!("[VelocityCapture] Failed to capture webcam frame: {error}");
-        thread::sleep(Duration::from_millis(8));
-        continue;
+    let frame_start = Instant::now();
+
+    match capture_next_bgra_frame(&mut camera) {
+      Ok((frame, frame_width, frame_height)) => {
+        if frame_width == expected_frame_width && frame_height == expected_frame_height {
+          latest_bgra = Some(frame);
+        } else {
+          mismatched_dimension_counter = mismatched_dimension_counter.saturating_add(1);
+          if mismatched_dimension_counter <= 3 || mismatched_dimension_counter % 60 == 0 {
+            eprintln!(
+              "[VelocityCapture] Webcam frame resolution changed unexpectedly (got={}x{}, expected={}x{}); reusing last frame.",
+              frame_width,
+              frame_height,
+              expected_frame_width,
+              expected_frame_height,
+            );
+          }
+        }
       }
-    };
-
-    let rgb_frame = match frame.decode_image::<RgbFormat>() {
-      Ok(decoded) => decoded,
       Err(error) => {
-        eprintln!("[VelocityCapture] Failed to decode webcam frame: {error}");
-        continue;
+        // Hold-last-frame interpolation: keep timeline smooth when capture drops intermittently.
+        eprintln!("[VelocityCapture] Webcam frame read error; reusing last frame: {error}");
       }
-    };
+    }
 
-    let rgb_raw = rgb_frame.into_raw();
-    let bgra = rgb_to_bgra_bottom_up(&rgb_raw, frame_width, frame_height);
-
-    if let Err(error) = encoder.send_frame_buffer(&bgra, frame_index_100ns) {
-      eprintln!("[VelocityCapture] Failed to encode webcam frame: {error}");
-      thread::sleep(Duration::from_millis(4));
+    if let Some(frame) = latest_bgra.as_ref() {
+      if let Err(error) = encoder.send_frame_buffer(frame, frame_index_100ns) {
+        eprintln!("[VelocityCapture] Failed to encode webcam frame: {error}");
+      }
+      // Always advance timestamp to stay in sync with singular_clock, regardless of encode success.
+      // This ensures webcam and desktop durations match, preventing export stutter from seek clamping.
+      frame_index_100ns = frame_index_100ns.saturating_add(frame_period_100ns);
+    } else {
+      eprintln!("[VelocityCapture] Webcam frame unavailable and no fallback frame cached.");
+      thread::sleep(Duration::from_millis(6));
       continue;
     }
 
-    frame_index_100ns = frame_index_100ns.saturating_add(frame_period_100ns);
+    let elapsed = frame_start.elapsed();
+    if elapsed < frame_period_duration {
+      thread::sleep(frame_period_duration - elapsed);
+    }
   }
 
   let _ = camera.stop_stream();

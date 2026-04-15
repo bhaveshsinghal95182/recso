@@ -14,23 +14,6 @@ export declare function listAvailableWindows(): Array<WindowInfo>
 
 export declare function listWebcamDevices(): Array<WebcamDeviceInfo>
 
-export declare function startMonitorRecording(
-  outputPath: string,
-  bitrate: number,
-  includeSystemAudio?: boolean | undefined | null,
-): Stopper
-
-export declare function startMonitorRecordingV2(options: NativeRecordingOptions): Stopper
-
-export declare function startWindowRecording(
-  windowTitle: string,
-  outputPath: string,
-  bitrate: number,
-  includeSystemAudio?: boolean | undefined | null,
-): Stopper
-
-export declare function startWindowRecordingV2(options: NativeWindowRecordingOptions): Stopper
-
 export interface NativeRecordingOptions {
   outputPath: string
   bitrate: number
@@ -49,6 +32,23 @@ export interface NativeWindowRecordingOptions {
   enableWebcam?: boolean
   webcamDeviceId?: string
 }
+
+export declare function startMonitorRecording(
+  outputPath: string,
+  bitrate: number,
+  includeSystemAudio?: boolean | undefined | null,
+): Stopper
+
+export declare function startMonitorRecordingV2(options: NativeRecordingOptions): Stopper
+
+export declare function startWindowRecording(
+  windowTitle: string,
+  outputPath: string,
+  bitrate: number,
+  includeSystemAudio?: boolean | undefined | null,
+): Stopper
+
+export declare function startWindowRecordingV2(options: NativeWindowRecordingOptions): Stopper
 
 export interface WebcamDeviceInfo {
   id: string

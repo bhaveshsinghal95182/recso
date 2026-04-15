@@ -77,6 +77,41 @@ export class HtmlVideoCoverFrameSource implements FrameVideoSource {
   }
 }
 
+export class CanvasCoverFrameSource implements FrameVideoSource {
+  private canvas: HTMLCanvasElement | OffscreenCanvas | null = null;
+
+  setCanvas(canvas: HTMLCanvasElement | OffscreenCanvas | null): void {
+    this.canvas = canvas;
+  }
+
+  draw(ctx: Canvas2DContext, x: number, y: number, width: number, height: number): void {
+    if (!this.canvas || this.canvas.width <= 0 || this.canvas.height <= 0) {
+      return;
+    }
+
+    const sourceWidth = this.canvas.width;
+    const sourceHeight = this.canvas.height;
+    const sourceAspect = sourceWidth / sourceHeight;
+    const targetAspect = width / height;
+
+    let cropWidth = sourceWidth;
+    let cropHeight = sourceHeight;
+    let cropX = 0;
+    let cropY = 0;
+
+    // Center-crop source to target aspect ratio to avoid webcam stretching.
+    if (sourceAspect > targetAspect) {
+      cropWidth = sourceHeight * targetAspect;
+      cropX = (sourceWidth - cropWidth) / 2;
+    } else if (sourceAspect < targetAspect) {
+      cropHeight = sourceWidth / targetAspect;
+      cropY = (sourceHeight - cropHeight) / 2;
+    }
+
+    ctx.drawImage(this.canvas, cropX, cropY, cropWidth, cropHeight, x, y, width, height);
+  }
+}
+
 export interface MediabunnyVideoSample {
   displayWidth: number;
   displayHeight: number;

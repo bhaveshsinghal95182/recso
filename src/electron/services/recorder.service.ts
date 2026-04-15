@@ -247,9 +247,11 @@ function resolveNativeWebcamCapability(
         return { supported: true, selectedDeviceId: requested.id };
       }
 
+      const defaultDevice = devices.find((device) => device.isDefault) ?? devices[0];
       return {
-        supported: false,
-        reason: `requested webcam device '${requestedDeviceId}' was not found in native device list`,
+        supported: true,
+        selectedDeviceId: defaultDevice?.id,
+        reason: `requested webcam device '${requestedDeviceId}' was not found; using native default webcam '${defaultDevice?.id || 'unknown'}'`,
       };
     }
 
@@ -750,6 +752,11 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
       if (webcamCapability.supported) {
         useNativeWebcam = true;
         nativeWebcamDeviceId = webcamCapability.selectedDeviceId || nativeWebcamDeviceId;
+        if (webcamCapability.reason) {
+          console.warn(
+            `[RecorderService] Native webcam selection note: ${webcamCapability.reason}.`,
+          );
+        }
       } else {
         console.warn(
           `[RecorderService] Native webcam capture unavailable; falling back to renderer camera sidecar (${webcamCapability.reason || 'unknown reason'}).`,

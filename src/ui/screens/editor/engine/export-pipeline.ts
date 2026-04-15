@@ -3,9 +3,9 @@ import type { AudioSample, VideoSample } from 'mediabunny';
 import type { ExportConfig, ExportProgress, Project, RecordedMouseEvent } from '@/types';
 
 import {
+  CanvasCoverFrameSource,
   CanvasFrameContext,
   createFrameCanvas,
-  HtmlVideoCoverFrameSource,
   MediabunnySampleSource,
 } from './adapters';
 import { CompositionEngine } from './engine';
@@ -502,101 +502,75 @@ async function resolveWebcamLayout(
 }
 
 interface PreparedWebcamSource {
-  frameSource: HtmlVideoCoverFrameSource;
-  syncToSeconds: (targetSeconds: number) => void;
+  frameSource: CanvasCoverFrameSource;
+  syncToSeconds: (targetSeconds: number) => Promise<void>;
   dispose: () => void;
 }
 
 async function prepareWebcamSource(sourceUrl: string): Promise<PreparedWebcamSource | null> {
-  if (typeof document === 'undefined') {
+  const { ALL_FORMATS, BlobSource, CanvasSink, Input } = await import('mediabunny');
+
+  let webcamResponse: Response;
+  try {
+    webcamResponse = await fetch(sourceUrl);
+    if (!webcamResponse.ok && webcamResponse.status !== 0) {
+      console.warn('[EngineCanvasExport] Failed to fetch webcam source:', webcamResponse.status);
+      return null;
+    }
+  } catch (error) {
+    console.warn('[EngineCanvasExport] Failed to fetch webcam source:', error);
     return null;
   }
 
-  const video = document.createElement('video');
-  video.src = sourceUrl;
-  video.preload = 'auto';
-  video.muted = true;
-  video.playsInline = true;
-
-  const loaded = await new Promise<boolean>((resolve) => {
-    const onReady = () => {
-      cleanup();
-      resolve(true);
-    };
-    const onError = () => {
-      cleanup();
-      resolve(false);
-    };
-    const timer = window.setTimeout(() => {
-      cleanup();
-      resolve(false);
-    }, 4500);
-
-    const cleanup = () => {
-      window.clearTimeout(timer);
-      video.removeEventListener('loadedmetadata', onReady);
-      video.removeEventListener('canplay', onReady);
-      video.removeEventListener('error', onError);
-    };
-
-    video.addEventListener('loadedmetadata', onReady, { once: true });
-    video.addEventListener('canplay', onReady, { once: true });
-    video.addEventListener('error', onError, { once: true });
+  const webcamBlob = await webcamResponse.blob();
+  const webcamInput = new Input({
+    source: new BlobSource(webcamBlob),
+    formats: ALL_FORMATS,
   });
 
-  if (!loaded) {
-    video.removeAttribute('src');
+  const webcamVideoTrack = await webcamInput.getPrimaryVideoTrack();
+  if (!webcamVideoTrack) {
+    console.warn('[EngineCanvasExport] Webcam source has no video track.');
+    webcamInput.dispose();
     return null;
   }
 
-  video.playbackRate = 1;
-  void video.play().catch(() => {
-    // Playback can fail in some environments; sync fallback still uses hard seeks.
-  });
+  const canvasSink = new CanvasSink(webcamVideoTrack);
+  const frameSource = new CanvasCoverFrameSource();
 
-  const syncToSeconds = (targetSeconds: number) => {
+  // Use sequential iterator instead of random-access getCanvas().
+  // canvases() pre-decodes frames ahead and decodes each packet at most once,
+  // whereas getCanvas() re-seeks from the nearest keyframe every call.
+  const frameIterator = canvasSink.canvases();
+  let currentCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
+  let nextFrame = await frameIterator.next();
+
+  const syncToSeconds = async (targetSeconds: number): Promise<void> => {
     if (!Number.isFinite(targetSeconds)) {
+      frameSource.setCanvas(null);
       return;
     }
 
-    const maxDuration =
-      Number.isFinite(video.duration) && video.duration > 0 ? video.duration : null;
-    const clampedTarget =
-      maxDuration !== null
-        ? Math.max(0, Math.min(targetSeconds, Math.max(0, maxDuration - 0.001)))
-        : Math.max(0, targetSeconds);
+    const target = Math.max(0, targetSeconds);
 
-    const driftSeconds = clampedTarget - video.currentTime;
-
-    // Keep playback smooth first; only hard-seek when drift grows large.
-    if (Math.abs(driftSeconds) <= 0.24) {
-      if (video.paused) {
-        void video.play().catch(() => {
-          // Ignore playback errors and let hard-seek fallback handle alignment.
-        });
-      }
-
-      const rateCorrection = 1 + driftSeconds * 0.6;
-      video.playbackRate = clamp(rateCorrection, 0.9, 1.1);
-      return;
+    // Advance the iterator forward until we reach or pass the target timestamp.
+    // Since export timestamps are monotonically increasing, each frame is decoded
+    // at most once across the entire export — O(n) total.
+    while (!nextFrame.done && nextFrame.value.timestamp <= target) {
+      currentCanvas = nextFrame.value.canvas;
+      nextFrame = await frameIterator.next();
     }
 
-    video.playbackRate = 1;
-
-    try {
-      video.currentTime = clampedTarget;
-    } catch {
-      // Ignore seek failures and use latest decodable frame.
-    }
+    frameSource.setCanvas(currentCanvas);
   };
 
   return {
-    frameSource: new HtmlVideoCoverFrameSource(video),
+    frameSource,
     syncToSeconds,
     dispose: () => {
-      video.pause();
-      video.removeAttribute('src');
-      video.load();
+      frameSource.setCanvas(null);
+      void frameIterator.return(undefined);
+      webcamInput.dispose();
     },
   };
 }
@@ -941,7 +915,7 @@ export async function runEngineCanvasExport({
         forceTranscode: true,
         processedWidth: outputDimensions.width,
         processedHeight: outputDimensions.height,
-        process: (sample: VideoSample) => {
+        process: async (sample: VideoSample) => {
           if (cancelRequested) {
             return null;
           }
@@ -970,7 +944,7 @@ export async function runEngineCanvasExport({
           }
 
           if (preparedWebcamSource) {
-            preparedWebcamSource.syncToSeconds(sourceTimeMs / 1000);
+            await preparedWebcamSource.syncToSeconds(sourceTimeMs / 1000);
           }
 
           engine.renderFrameAt(
