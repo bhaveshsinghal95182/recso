@@ -149,6 +149,15 @@ export interface ZoomKeyframe {
   easeOut?: number;
 }
 
+export type CompositionLayerId = 'background' | 'video' | 'cursor' | 'webcam';
+
+export type CompositionLayerSpace = 'base' | 'zoomed';
+
+export interface CompositionLayerState {
+  id: CompositionLayerId;
+  space?: CompositionLayerSpace;
+}
+
 export interface CompositionConfig {
   background: BackgroundConfig;
   video: VideoConfig;
@@ -158,6 +167,7 @@ export interface CompositionConfig {
   zooms: ZoomKeyframe[];
   zoomRegions?: CompositionZoomRegion[];
   cuts?: CompositionCutRegion[];
+  layerStates?: CompositionLayerState[];
 }
 
 export type Canvas2DContext = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;

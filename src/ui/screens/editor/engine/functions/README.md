@@ -43,3 +43,7 @@ This folder contains composition engine utilities extracted from the original mo
 ## Backward Compatibility
 
 Public exports are re-exported through [src/ui/screens/editor/engine/functions.ts](src/ui/screens/editor/engine/functions.ts).
+
+## Guides
+
+- [Adding a New Render Layer](./ADDING_LAYER.md)

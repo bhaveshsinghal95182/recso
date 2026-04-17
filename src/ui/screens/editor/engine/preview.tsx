@@ -188,15 +188,6 @@ export function EnginePreview() {
             height: `${previewDisplaySize.height}px`,
           }}
         >
-          <button
-            onClick={handleToggleWebcam}
-            disabled={!webcamToggleAvailable}
-            className="absolute top-3 right-3 z-30 bg-black/60 backdrop-blur px-3 py-1.5 rounded-md text-white text-xs font-medium border border-white/20 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-black/70 transition-colors"
-            title={webcamToggleAvailable ? 'Toggle webcam overlay' : 'No webcam recording found'}
-          >
-            {webcamEnabled ? 'Webcam: On' : 'Webcam: Off'}
-          </button>
-
           <div className="absolute inset-0" style={backgroundContainerStyle}>
             {backgroundImageSrc ? (
               <img
