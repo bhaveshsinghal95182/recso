@@ -139,12 +139,28 @@ export function attachPreviewSession(options: AttachPreviewSessionOptions): () =
   }
 
   const cancelledRef: MutableRefObject<boolean> = { current: false };
+  const initializedRef: MutableRefObject<boolean> = { current: false };
+  const initializingRef: MutableRefObject<boolean> = { current: false };
 
   const initializePreview = async (): Promise<void> => {
+    if (cancelledRef.current) {
+      return;
+    }
+
+    if (initializedRef.current) {
+      return;
+    }
+
+    if (initializingRef.current) {
+      return;
+    }
+
     try {
-      if (cancelledRef.current || video.readyState < 1) {
+      if (video.readyState < 1) {
         return;
       }
+
+      initializingRef.current = true;
 
       previewCanvas.width = canvasSize.width;
       previewCanvas.height = canvasSize.height;
@@ -166,23 +182,32 @@ export function attachPreviewSession(options: AttachPreviewSessionOptions): () =
       }
 
       const compositionMs = usePlaybackStore.getState().currentTime;
-      syncVideoTime(video, compositionMs, 0);
+      syncVideoTime(video, compositionMs, 0.04);
       if (webcamVideo && webcamSrc) {
-        syncVideoTime(webcamVideo, compositionMs, 0);
+        syncVideoTime(webcamVideo, compositionMs, 0.04);
       }
 
       engineRef.current.seek(compositionMs / 1000);
+      initializedRef.current = true;
       renderCurrentFrame();
+
       rafRef.current = requestAnimationFrame((now) => renderLoopFrame(now, options, cancelledRef));
     } catch (error) {
       if (!options.previewErrorLoggedRef.current) {
         options.previewErrorLoggedRef.current = true;
         console.error('[EnginePreview] initializePreview failed:', error);
       }
+    } finally {
+      initializingRef.current = false;
     }
   };
 
   const handleCanPlay = () => {
+    if (initializedRef.current) {
+      renderCurrentFrame();
+      return;
+    }
+
     void initializePreview();
   };
 

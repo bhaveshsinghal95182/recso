@@ -38,6 +38,7 @@ export class HtmlVideoFrameSource implements FrameVideoSource {
     if (this.video.readyState < 2 || this.video.videoWidth <= 0 || this.video.videoHeight <= 0) {
       return;
     }
+
     ctx.drawImage(this.video, x, y, width, height);
   }
 }

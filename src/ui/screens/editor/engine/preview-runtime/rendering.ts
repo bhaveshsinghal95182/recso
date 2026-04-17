@@ -24,6 +24,7 @@ export function renderEngineFrameSafely({
     const context2d = previewContext.get2DContext();
     context2d.clearRect(0, 0, previewContext.width, previewContext.height);
     engine.renderCurrentFrame(previewContext);
+
     previewErrorLoggedRef.current = false;
     return true;
   } catch (error) {
