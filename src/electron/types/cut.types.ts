@@ -15,4 +15,9 @@ export interface CutRegion {
   startMs: number;
   /** End time of the cut in milliseconds */
   endMs: number;
+  /** Optional lane-level inclusion state for screen/webcam timeline views. */
+  targets?: {
+    screen: boolean;
+    webcam: boolean;
+  };
 }

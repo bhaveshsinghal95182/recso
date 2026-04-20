@@ -1,29 +1,62 @@
 import { create } from 'zustand';
 
 import { debounce } from '../lib/utils';
-import type { CutRegion, ZoomRegion } from '../types';
+import type { CutRegion, ZoomRegion, ZoomRegionsBySource, ZoomSource } from '../types';
+
+const DEFAULT_ZOOM_SOURCE: ZoomSource = 'screen';
+
+function sortZoomRegions(zoomRegions: ZoomRegion[]): ZoomRegion[] {
+  return [...zoomRegions].sort((a, b) => a.startMs - b.startMs);
+}
+
+function normalizeZoomRegionsBySource(
+  zoomRegionsBySource?: Partial<ZoomRegionsBySource>,
+): ZoomRegionsBySource {
+  return {
+    screen: sortZoomRegions(zoomRegionsBySource?.screen ?? []),
+    webcam: sortZoomRegions(zoomRegionsBySource?.webcam ?? []),
+  };
+}
+
+function normalizeCutRegion(cut: CutRegion): CutRegion {
+  return {
+    ...cut,
+    targets: {
+      screen: cut.targets?.screen ?? true,
+      webcam: cut.targets?.webcam ?? true,
+    },
+  };
+}
+
+function normalizeCuts(cuts: CutRegion[]): CutRegion[] {
+  return [...cuts].map(normalizeCutRegion).sort((a, b) => a.startMs - b.startMs);
+}
 
 interface TimelineState {
   cuts: CutRegion[];
+  zoomSource: ZoomSource;
   zoomRegions: ZoomRegion[];
+  zoomRegionsBySource: ZoomRegionsBySource;
   selectedCutId: string | null;
   selectedZoomId: string | null;
   isEditingFocalPoint: boolean;
 
   // Actions
   setCuts: (cuts: CutRegion[]) => void;
-  setZoomRegions: (zooms: ZoomRegion[]) => void;
+  setZoomRegions: (zooms: ZoomRegion[], source?: ZoomSource) => void;
+  setZoomRegionsBySource: (zoomRegionsBySource: Partial<ZoomRegionsBySource>) => void;
+  setZoomSource: (source: ZoomSource) => Promise<void>;
 
   addCut: (startMs: number, endMs: number) => Promise<void>;
   removeCut: (cutId: string) => Promise<void>;
   updateCut: (cut: CutRegion) => Promise<void>;
   setSelectedCut: (cutId: string | null) => void;
 
-  addZoom: (startMs: number, endMs: number) => Promise<void>;
-  removeZoom: (zoomId: string) => Promise<void>;
-  updateZoom: (zoom: ZoomRegion) => Promise<void>;
-  updateZoomRegions: (zooms: ZoomRegion[]) => Promise<void>;
-  replaceZoomRegions: (zooms: ZoomRegion[]) => Promise<void>;
+  addZoom: (startMs: number, endMs: number, source?: ZoomSource) => Promise<void>;
+  removeZoom: (zoomId: string, source?: ZoomSource) => Promise<void>;
+  updateZoom: (zoom: ZoomRegion, source?: ZoomSource) => Promise<void>;
+  updateZoomRegions: (zooms: ZoomRegion[], source?: ZoomSource) => Promise<void>;
+  replaceZoomRegions: (zooms: ZoomRegion[], source?: ZoomSource) => Promise<void>;
   setSelectedZoom: (zoomId: string | null) => void;
   setIsEditingFocalPoint: (isEditing: boolean) => void;
 
@@ -32,31 +65,96 @@ interface TimelineState {
 }
 
 // Debounced IPC calls
-const debouncedUpdateZoom = debounce(async (zoom: ZoomRegion) => {
+const debouncedUpdateZoom = debounce(async (source: ZoomSource, zoom: ZoomRegion) => {
   try {
-    await window.electron.editor.updateZoomRegion(zoom);
+    await window.electron.editor.updateZoomRegionBySource(source, zoom);
   } catch (err) {
     console.error('[TimelineStore] updateZoom error:', err);
   }
 }, 300);
 
-export const useTimelineStore = create<TimelineState>((set) => ({
+export const useTimelineStore = create<TimelineState>((set, get) => ({
   cuts: [],
+  zoomSource: DEFAULT_ZOOM_SOURCE,
   zoomRegions: [],
+  zoomRegionsBySource: {
+    screen: [],
+    webcam: [],
+  },
   selectedCutId: null,
   selectedZoomId: null,
   isEditingFocalPoint: false,
 
-  setCuts: (cuts) => set({ cuts: cuts.sort((a, b) => a.startMs - b.startMs) }),
-  setZoomRegions: (zoomRegions) =>
-    set({ zoomRegions: zoomRegions.sort((a, b) => a.startMs - b.startMs) }),
+  setCuts: (cuts) => set({ cuts: normalizeCuts(cuts) }),
+  setZoomRegions: (zoomRegions, source) => {
+    const resolvedSource = source ?? get().zoomSource;
+    const sortedZoomRegions = sortZoomRegions(zoomRegions);
+    set((state) => {
+      const nextBySource: ZoomRegionsBySource = {
+        ...state.zoomRegionsBySource,
+        [resolvedSource]: sortedZoomRegions,
+      };
+
+      return {
+        zoomRegionsBySource: nextBySource,
+        zoomRegions: resolvedSource === state.zoomSource ? sortedZoomRegions : state.zoomRegions,
+      };
+    });
+  },
+
+  setZoomRegionsBySource: (zoomRegionsBySource) => {
+    set((state) => {
+      const merged = normalizeZoomRegionsBySource({
+        screen: zoomRegionsBySource.screen ?? state.zoomRegionsBySource.screen,
+        webcam: zoomRegionsBySource.webcam ?? state.zoomRegionsBySource.webcam,
+      });
+
+      return {
+        zoomRegionsBySource: merged,
+        zoomRegions: merged[state.zoomSource],
+      };
+    });
+  },
+
+  setZoomSource: async (source) => {
+    try {
+      const zoomRegions = await window.electron.editor.getZoomRegionsBySource(source);
+      const sortedZoomRegions = sortZoomRegions(zoomRegions);
+
+      set((state) => {
+        const nextBySource: ZoomRegionsBySource = {
+          ...state.zoomRegionsBySource,
+          [source]: sortedZoomRegions,
+        };
+
+        return {
+          zoomSource: source,
+          zoomRegionsBySource: nextBySource,
+          zoomRegions: sortedZoomRegions,
+          selectedZoomId: sortedZoomRegions.some((zoom) => zoom.id === state.selectedZoomId)
+            ? state.selectedZoomId
+            : null,
+        };
+      });
+    } catch (err) {
+      console.error('[TimelineStore] setZoomSource error:', err);
+    }
+  },
 
   addCut: async (startMs, endMs) => {
-    const newCut: CutRegion = { id: crypto.randomUUID(), startMs, endMs };
+    const newCut: CutRegion = {
+      id: crypto.randomUUID(),
+      startMs,
+      endMs,
+      targets: {
+        screen: true,
+        webcam: true,
+      },
+    };
     try {
       await window.electron.editor.addCut(newCut);
       set((state) => ({
-        cuts: [...state.cuts, newCut].sort((a, b) => a.startMs - b.startMs),
+        cuts: normalizeCuts([...state.cuts, newCut]),
       }));
     } catch (err) {
       console.error('[TimelineStore] addCut error:', err);
@@ -77,11 +175,10 @@ export const useTimelineStore = create<TimelineState>((set) => ({
 
   updateCut: async (cut) => {
     try {
-      await window.electron.editor.updateCut(cut);
+      const normalizedCut = normalizeCutRegion(cut);
+      await window.electron.editor.updateCut(normalizedCut);
       set((state) => ({
-        cuts: state.cuts
-          .map((c) => (c.id === cut.id ? cut : c))
-          .sort((a, b) => a.startMs - b.startMs),
+        cuts: normalizeCuts(state.cuts.map((c) => (c.id === normalizedCut.id ? normalizedCut : c))),
       }));
     } catch (err) {
       console.error('[TimelineStore] updateCut error:', err);
@@ -90,7 +187,8 @@ export const useTimelineStore = create<TimelineState>((set) => ({
 
   setSelectedCut: (cutId) => set({ selectedCutId: cutId }),
 
-  addZoom: async (startMs, endMs) => {
+  addZoom: async (startMs, endMs, source) => {
+    const resolvedSource = source ?? get().zoomSource;
     const newZoom: ZoomRegion = {
       id: crypto.randomUUID(),
       startMs,
@@ -101,20 +199,40 @@ export const useTimelineStore = create<TimelineState>((set) => ({
       easeDurationMs: 300,
     };
     try {
-      await window.electron.editor.addZoomRegion(newZoom);
+      await window.electron.editor.addZoomRegionBySource(resolvedSource, newZoom);
       set((state) => ({
-        zoomRegions: [...state.zoomRegions, newZoom].sort((a, b) => a.startMs - b.startMs),
+        zoomRegionsBySource: {
+          ...state.zoomRegionsBySource,
+          [resolvedSource]: sortZoomRegions([
+            ...state.zoomRegionsBySource[resolvedSource],
+            newZoom,
+          ]),
+        },
+        zoomRegions:
+          resolvedSource === state.zoomSource
+            ? sortZoomRegions([...state.zoomRegions, newZoom])
+            : state.zoomRegions,
       }));
     } catch (err) {
       console.error('[TimelineStore] addZoom error:', err);
     }
   },
 
-  removeZoom: async (zoomId) => {
+  removeZoom: async (zoomId, source) => {
+    const resolvedSource = source ?? get().zoomSource;
     try {
-      await window.electron.editor.removeZoomRegion(zoomId);
+      await window.electron.editor.removeZoomRegionBySource(resolvedSource, zoomId);
       set((state) => ({
-        zoomRegions: state.zoomRegions.filter((z) => z.id !== zoomId),
+        zoomRegionsBySource: {
+          ...state.zoomRegionsBySource,
+          [resolvedSource]: state.zoomRegionsBySource[resolvedSource].filter(
+            (z) => z.id !== zoomId,
+          ),
+        },
+        zoomRegions:
+          resolvedSource === state.zoomSource
+            ? state.zoomRegions.filter((z) => z.id !== zoomId)
+            : state.zoomRegions,
         selectedZoomId: state.selectedZoomId === zoomId ? null : state.selectedZoomId,
       }));
     } catch (err) {
@@ -122,40 +240,78 @@ export const useTimelineStore = create<TimelineState>((set) => ({
     }
   },
 
-  updateZoom: async (zoom) => {
+  updateZoom: async (zoom, source) => {
+    const resolvedSource = source ?? get().zoomSource;
     // Optimistic update
     set((state) => ({
-      zoomRegions: state.zoomRegions
-        .map((z) => (z.id === zoom.id ? zoom : z))
-        .sort((a, b) => a.startMs - b.startMs),
+      zoomRegionsBySource: {
+        ...state.zoomRegionsBySource,
+        [resolvedSource]: sortZoomRegions(
+          state.zoomRegionsBySource[resolvedSource].map((z) => (z.id === zoom.id ? zoom : z)),
+        ),
+      },
+      zoomRegions:
+        resolvedSource === state.zoomSource
+          ? sortZoomRegions(state.zoomRegions.map((z) => (z.id === zoom.id ? zoom : z)))
+          : state.zoomRegions,
     }));
 
-    debouncedUpdateZoom(zoom);
+    debouncedUpdateZoom(resolvedSource, zoom);
   },
 
-  updateZoomRegions: async (zooms) => {
+  updateZoomRegions: async (zooms, source) => {
+    const resolvedSource = source ?? get().zoomSource;
     try {
-      await window.electron.editor.updateZoomRegions(zooms);
+      await window.electron.editor.updateZoomRegionsBySource(resolvedSource, zooms);
       set((state) => ({
-        zoomRegions: state.zoomRegions
-          .map((z) => zooms.find((u) => u.id === z.id) || z)
-          .sort((a, b) => a.startMs - b.startMs),
+        zoomRegionsBySource: {
+          ...state.zoomRegionsBySource,
+          [resolvedSource]: sortZoomRegions(
+            state.zoomRegionsBySource[resolvedSource].map(
+              (existingZoom) =>
+                zooms.find((updatedZoom) => updatedZoom.id === existingZoom.id) || existingZoom,
+            ),
+          ),
+        },
+        zoomRegions:
+          resolvedSource === state.zoomSource
+            ? sortZoomRegions(
+                state.zoomRegions.map(
+                  (existingZoom) =>
+                    zooms.find((updatedZoom) => updatedZoom.id === existingZoom.id) || existingZoom,
+                ),
+              )
+            : state.zoomRegions,
       }));
     } catch (err) {
       console.error('[TimelineStore] updateZoomRegions error:', err);
     }
   },
 
-  replaceZoomRegions: async (zooms) => {
+  replaceZoomRegions: async (zooms, source) => {
+    const resolvedSource = source ?? get().zoomSource;
     try {
       // Logic from context: remove existing, add new.
       // BE implementation might vary but sticking to Context logic for now.
-      const currentZooms = await window.electron.editor.getZoomRegions();
-      for (const z of currentZooms) await window.electron.editor.removeZoomRegion(z.id);
-      for (const z of zooms) await window.electron.editor.addZoomRegion(z);
+      const currentZooms = await window.electron.editor.getZoomRegionsBySource(resolvedSource);
+      for (const z of currentZooms) {
+        await window.electron.editor.removeZoomRegionBySource(resolvedSource, z.id);
+      }
+      for (const z of zooms) {
+        await window.electron.editor.addZoomRegionBySource(resolvedSource, z);
+      }
 
-      const sorted = [...zooms].sort((a, b) => a.startMs - b.startMs);
-      set({ zoomRegions: sorted });
+      const sorted = sortZoomRegions(zooms);
+      set((state) => ({
+        zoomRegionsBySource: {
+          ...state.zoomRegionsBySource,
+          [resolvedSource]: sorted,
+        },
+        zoomRegions: resolvedSource === state.zoomSource ? sorted : state.zoomRegions,
+        selectedZoomId: sorted.some((zoom) => zoom.id === state.selectedZoomId)
+          ? state.selectedZoomId
+          : null,
+      }));
     } catch (err) {
       console.error('[TimelineStore] replaceZoomRegions error:', err);
     }
@@ -167,7 +323,12 @@ export const useTimelineStore = create<TimelineState>((set) => ({
   reset: () =>
     set({
       cuts: [],
+      zoomSource: DEFAULT_ZOOM_SOURCE,
       zoomRegions: [],
+      zoomRegionsBySource: {
+        screen: [],
+        webcam: [],
+      },
       selectedCutId: null,
       selectedZoomId: null,
       isEditingFocalPoint: false,

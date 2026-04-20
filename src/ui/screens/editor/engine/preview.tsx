@@ -22,9 +22,10 @@ import { useEnginePreviewConfigMapper } from './preview-config-mapper.ts';
 import type { CompositionConfig } from './types';
 
 export function EnginePreview() {
-  const { project, mouseEvents, updateWebcamOverlay } = useProjectStore();
+  const { project, mouseEvents } = useProjectStore();
   const { zoomRegions, cuts, isEditingFocalPoint, selectedZoomId, updateZoom } = useTimelineStore();
   const { isPlaying, currentTime, play, pause, setDuration } = usePlaybackStore();
+  const screenCuts = useMemo(() => cuts.filter((cut) => cut.targets?.screen ?? true), [cuts]);
 
   const previewViewportRef = useRef<HTMLDivElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -48,16 +49,12 @@ export function EnginePreview() {
     backgroundContainerStyle,
     selectedPattern,
     hasPattern,
-  } = useEnginePreviewConfigMapper(project, zoomRegions, cuts, mouseEvents);
+  } = useEnginePreviewConfigMapper(project, zoomRegions, screenCuts, mouseEvents);
 
   const selectedZoom = useMemo(
     () => zoomRegions.find((region) => region.id === selectedZoomId) ?? null,
     [zoomRegions, selectedZoomId],
   );
-
-  const webcamSourcePath = project?.webcamOverlay?.sourcePath;
-  const webcamToggleAvailable = Boolean(webcamSourcePath);
-  const webcamEnabled = Boolean(project?.webcamOverlay?.enabled && webcamToggleAvailable);
 
   const previewDisplaySize = useMemo(
     () => resolvePreviewDisplaySize(availableSize, canvasSize),
@@ -160,16 +157,6 @@ export function EnginePreview() {
 
     play();
   }, [isPlaying, pause, play]);
-
-  const handleToggleWebcam = useCallback(() => {
-    if (!project || !webcamToggleAvailable) {
-      return;
-    }
-
-    void updateWebcamOverlay({
-      enabled: !webcamEnabled,
-    });
-  }, [project, webcamEnabled, webcamToggleAvailable, updateWebcamOverlay]);
 
   if (!project) {
     return null;

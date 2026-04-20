@@ -263,18 +263,50 @@ electron.contextBridge.exposeInMainWorld('electron', {
     getCuts: () => electron.ipcRenderer.invoke('editor:get-cuts'),
 
     /** Add a new cut region */
-    addCut: (cut: { id: string; startMs: number; endMs: number }) =>
-      electron.ipcRenderer.invoke('editor:add-cut', cut),
+    addCut: (cut: {
+      id: string;
+      startMs: number;
+      endMs: number;
+      targets?: { screen: boolean; webcam: boolean };
+    }) => electron.ipcRenderer.invoke('editor:add-cut', cut),
 
     /** Remove a cut region by ID */
     removeCut: (cutId: string) => electron.ipcRenderer.invoke('editor:remove-cut', cutId),
 
     /** Update a cut region */
-    updateCut: (cut: { id: string; startMs: number; endMs: number }) =>
-      electron.ipcRenderer.invoke('editor:update-cut', cut),
+    updateCut: (cut: {
+      id: string;
+      startMs: number;
+      endMs: number;
+      targets?: { screen: boolean; webcam: boolean };
+    }) => electron.ipcRenderer.invoke('editor:update-cut', cut),
+
+    /** Get timeline layers with visibility/order metadata */
+    getTimelineLayers: () => electron.ipcRenderer.invoke('editor:get-timeline-layers'),
+
+    /** Update timeline layer visibility */
+    updateTimelineLayerVisibility: (
+      layerId: 'main' | 'webcam' | 'zoom-screen' | 'zoom-webcam' | 'cursor',
+      visible: boolean,
+    ) => electron.ipcRenderer.invoke('editor:update-timeline-layer-visibility', layerId, visible),
+
+    /** Update timeline layer hide mode */
+    updateTimelineLayerHideMode: (
+      layerId: 'main' | 'webcam' | 'zoom-screen' | 'zoom-webcam' | 'cursor',
+      hideMode: 'editor-only' | 'render-and-export',
+    ) => electron.ipcRenderer.invoke('editor:update-timeline-layer-hide-mode', layerId, hideMode),
+
+    /** Reorder timeline layers by layer ID */
+    reorderTimelineLayers: (
+      layerIds: ('main' | 'webcam' | 'zoom-screen' | 'zoom-webcam' | 'cursor')[],
+    ) => electron.ipcRenderer.invoke('editor:reorder-timeline-layers', layerIds),
 
     /** Get all zoom regions */
     getZoomRegions: () => electron.ipcRenderer.invoke('editor:get-zoom-regions'),
+
+    /** Get all zoom regions for a specific source timeline */
+    getZoomRegionsBySource: (source: 'screen' | 'webcam') =>
+      electron.ipcRenderer.invoke('editor:get-zoom-regions-by-source', source),
 
     /** Add a new zoom region */
     addZoomRegion: (zoom: {
@@ -288,9 +320,28 @@ electron.contextBridge.exposeInMainWorld('electron', {
       focalKeyframes?: { timestampMs: number; focalX: number; focalY: number }[];
     }) => electron.ipcRenderer.invoke('editor:add-zoom-region', zoom),
 
+    /** Add a new zoom region for a specific source timeline */
+    addZoomRegionBySource: (
+      source: 'screen' | 'webcam',
+      zoom: {
+        id: string;
+        startMs: number;
+        endMs: number;
+        zoomLevel: number;
+        focalX: number;
+        focalY: number;
+        easeDurationMs: number;
+        focalKeyframes?: { timestampMs: number; focalX: number; focalY: number }[];
+      },
+    ) => electron.ipcRenderer.invoke('editor:add-zoom-region-by-source', source, zoom),
+
     /** Remove a zoom region by ID */
     removeZoomRegion: (zoomId: string) =>
       electron.ipcRenderer.invoke('editor:remove-zoom-region', zoomId),
+
+    /** Remove a zoom region by ID for a specific source timeline */
+    removeZoomRegionBySource: (source: 'screen' | 'webcam', zoomId: string) =>
+      electron.ipcRenderer.invoke('editor:remove-zoom-region-by-source', source, zoomId),
 
     /** Update a zoom region */
     updateZoomRegion: (zoom: {
@@ -303,6 +354,21 @@ electron.contextBridge.exposeInMainWorld('electron', {
       easeDurationMs: number;
       focalKeyframes?: { timestampMs: number; focalX: number; focalY: number }[];
     }) => electron.ipcRenderer.invoke('editor:update-zoom-region', zoom),
+
+    /** Update a zoom region for a specific source timeline */
+    updateZoomRegionBySource: (
+      source: 'screen' | 'webcam',
+      zoom: {
+        id: string;
+        startMs: number;
+        endMs: number;
+        zoomLevel: number;
+        focalX: number;
+        focalY: number;
+        easeDurationMs: number;
+        focalKeyframes?: { timestampMs: number; focalX: number; focalY: number }[];
+      },
+    ) => electron.ipcRenderer.invoke('editor:update-zoom-region-by-source', source, zoom),
 
     /** Update multiple zoom regions at once (bulk) */
     updateZoomRegions: (
@@ -317,6 +383,21 @@ electron.contextBridge.exposeInMainWorld('electron', {
         focalKeyframes?: { timestampMs: number; focalX: number; focalY: number }[];
       }[],
     ) => electron.ipcRenderer.invoke('editor:update-zoom-regions', zooms),
+
+    /** Update multiple zoom regions for a specific source timeline (bulk) */
+    updateZoomRegionsBySource: (
+      source: 'screen' | 'webcam',
+      zooms: {
+        id: string;
+        startMs: number;
+        endMs: number;
+        zoomLevel: number;
+        focalX: number;
+        focalY: number;
+        easeDurationMs: number;
+        focalKeyframes?: { timestampMs: number; focalX: number; focalY: number }[];
+      }[],
+    ) => electron.ipcRenderer.invoke('editor:update-zoom-regions-by-source', source, zooms),
 
     /** Get mouse events for the active project's recording */
     getMouseEvents: (): Promise<

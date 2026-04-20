@@ -13,12 +13,16 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { usePlaybackStore } from '@/store/playback-store';
 
-export type RegionVariant = 'cut' | 'zoom';
+export type RegionVariant = 'cut' | 'zoom' | 'cursor';
 
 export interface BaseRegion {
   id: string;
   startMs: number;
   endMs: number;
+}
+
+export interface RegionDeleteIntent {
+  deleteAllLinked?: boolean;
 }
 
 interface TimelineRegionProps<T extends BaseRegion> {
@@ -37,7 +41,15 @@ interface TimelineRegionProps<T extends BaseRegion> {
   /** Called when the region is moved or resized */
   onUpdate: (region: T) => void;
   /** Called when the region is deleted */
-  onDelete: () => void;
+  onDelete: (intent?: RegionDeleteIntent) => void;
+  /** Whether this region can be moved/resized/deleted */
+  editable?: boolean;
+  /** Optional cut identifier used for marquee multi-select queries */
+  dataCutId?: string;
+  /** Optional region identifier used for marquee multi-select queries */
+  dataRegionId?: string;
+  /** Optional region type used for marquee multi-select queries */
+  dataRegionType?: RegionVariant;
 }
 
 // Variant-specific styling configuration
@@ -57,10 +69,16 @@ const variantStyles: Record<
     deleteTitle: 'Remove cut',
   },
   zoom: {
-    default: 'bg-cyan-500/40 hover:bg-cyan-500/50',
-    selected: 'bg-cyan-500/60 ring-2 ring-cyan-400',
-    deleteButton: 'bg-cyan-600 hover:bg-cyan-700',
+    default: 'bg-blue-500/40 hover:bg-blue-500/50',
+    selected: 'bg-blue-500/60 ring-2 ring-blue-400',
+    deleteButton: 'bg-blue-600 hover:bg-blue-700',
     deleteTitle: 'Remove zoom',
+  },
+  cursor: {
+    default: 'bg-emerald-500/35 hover:bg-emerald-500/45',
+    selected: 'bg-emerald-500/55 ring-2 ring-emerald-400',
+    deleteButton: 'bg-emerald-600 hover:bg-emerald-700',
+    deleteTitle: 'Remove cursor region',
   },
 };
 
@@ -73,6 +91,10 @@ export function TimelineRegion<T extends BaseRegion>({
   onSelect,
   onUpdate,
   onDelete,
+  editable = true,
+  dataCutId,
+  dataRegionId,
+  dataRegionType,
 }: TimelineRegionProps<T>) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [localRegion, setLocalRegion] = useState<T>(region);
@@ -116,6 +138,10 @@ export function TimelineRegion<T extends BaseRegion>({
   // Handle drag to move
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
+      if (!editable) {
+        return;
+      }
+
       e.stopPropagation();
       onSelect();
 
@@ -173,12 +199,16 @@ export function TimelineRegion<T extends BaseRegion>({
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
     },
-    [localRegion, duration, onSelect, onUpdate, debouncedUpdate],
+    [localRegion, duration, onSelect, onUpdate, debouncedUpdate, editable],
   );
 
   // Handle resize from edges
   const handleResizeStart = useCallback(
     (e: React.MouseEvent, edge: 'left' | 'right') => {
+      if (!editable) {
+        return;
+      }
+
       e.stopPropagation();
       onSelect();
 
@@ -238,25 +268,33 @@ export function TimelineRegion<T extends BaseRegion>({
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
     },
-    [localRegion, duration, onSelect, onUpdate, debouncedUpdate],
+    [localRegion, duration, onSelect, onUpdate, debouncedUpdate, editable],
   );
 
   // Handle keyboard delete
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (!editable) {
+        return;
+      }
+
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
-        onDelete();
+        onDelete({
+          deleteAllLinked: e.ctrlKey || e.metaKey,
+        });
       }
     },
-    [onDelete],
+    [editable, onDelete],
   );
 
   // Handle delete button click
   const handleDeleteClick = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
-      onDelete();
+      onDelete({
+        deleteAllLinked: e.ctrlKey || e.metaKey,
+      });
     },
     [onDelete],
   );
@@ -266,50 +304,64 @@ export function TimelineRegion<T extends BaseRegion>({
       ref={containerRef}
       className={`absolute top-1 bottom-1 rounded cursor-move transition-colors group ${
         isSelected ? styles.selected : styles.default
-      } ${isDragging || isResizing ? 'cursor-grabbing' : ''}`}
+      } ${
+        editable ? (isDragging || isResizing ? 'cursor-grabbing' : 'cursor-move') : 'cursor-pointer'
+      }`}
       style={{
         left: `${left}%`,
         width: `${Math.max(width, 0.5)}%`,
-        zIndex: variant === 'cut' ? 10 : 5,
+        zIndex: variant === 'cut' ? 12 : variant === 'zoom' ? 9 : 6,
       }}
-      onMouseDown={handleMouseDown}
-      onClick={(e) => e.stopPropagation()}
+      data-cut-id={dataCutId}
+      data-region-id={dataRegionId}
+      data-region-type={dataRegionType}
+      onMouseDown={editable ? handleMouseDown : undefined}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (!editable) {
+          onSelect();
+        }
+      }}
       onKeyDown={handleKeyDown}
-      tabIndex={isSelected ? 0 : -1}
+      tabIndex={isSelected && editable ? 0 : -1}
     >
-      {/* Left resize handle - visible bar */}
-      <div
-        className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize flex items-center justify-center hover:bg-white/20"
-        onMouseDown={(e) => handleResizeStart(e, 'left')}
-      >
-        <div className="w-0.5 h-4 bg-white/60 rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />
-      </div>
+      {editable && (
+        <>
+          {/* Left resize handle - visible bar */}
+          <div
+            className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize flex items-center justify-center hover:bg-white/20"
+            onMouseDown={(e) => handleResizeStart(e, 'left')}
+          >
+            <div className="w-0.5 h-4 bg-white/60 rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />
+          </div>
 
-      {/* Right resize handle - visible bar */}
-      <div
-        className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize flex items-center justify-center hover:bg-white/20"
-        onMouseDown={(e) => handleResizeStart(e, 'right')}
-      >
-        <div className="w-0.5 h-4 bg-white/60 rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />
-      </div>
+          {/* Right resize handle - visible bar */}
+          <div
+            className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize flex items-center justify-center hover:bg-white/20"
+            onMouseDown={(e) => handleResizeStart(e, 'right')}
+          >
+            <div className="w-0.5 h-4 bg-white/60 rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />
+          </div>
 
-      {/* Delete button */}
-      <button
-        type="button"
-        className={`absolute -top-2 -right-2 w-4 h-4 ${styles.deleteButton} rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-20`}
-        onClick={handleDeleteClick}
-        title={styles.deleteTitle}
-      >
-        <svg
-          className="w-2.5 h-2.5 text-white"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="3"
-        >
-          <path d="M18 6L6 18M6 6l12 12" />
-        </svg>
-      </button>
+          {/* Delete button */}
+          <button
+            type="button"
+            className={`absolute -top-2 -right-2 w-4 h-4 ${styles.deleteButton} rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-20`}
+            onClick={handleDeleteClick}
+            title={styles.deleteTitle}
+          >
+            <svg
+              className="w-2.5 h-2.5 text-white"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="3"
+            >
+              <path d="M18 6L6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </>
+      )}
 
       {/* Region label */}
       {label && width > 5 && (

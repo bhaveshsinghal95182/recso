@@ -75,7 +75,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
       // Sync with TimelineStore
       useTimelineStore.getState().setCuts(proj.cuts || []);
-      useTimelineStore.getState().setZoomRegions(proj.zoomRegions || []);
+      useTimelineStore.getState().setZoomRegionsBySource({
+        screen: proj.zoomRegionsBySource?.screen || proj.zoomRegions || [],
+        webcam: proj.zoomRegionsBySource?.webcam || [],
+      });
 
       // Sync with PlaybackStore
       usePlaybackStore.getState().setDuration(proj.timeline.duration || 0);

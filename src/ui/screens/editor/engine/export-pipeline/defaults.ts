@@ -15,7 +15,7 @@ export const DEFAULT_WEBCAM_STYLE = {
   aspectRatio: 9 / 16,
   heightRatio: 0.28,
   marginPx: 24,
-  borderRadius: 3,
+  borderRadius: 24,
   borderWidth: 0,
   borderColor: 'rgba(255, 255, 255, 0.42)',
   opacity: 1,

@@ -164,11 +164,13 @@ export function buildExportCompositionConfig({
       easeDurationMs: region.easeDurationMs,
       focalKeyframes: region.focalKeyframes,
     })),
-    cuts: project.cuts.map((cut) => ({
-      id: cut.id,
-      startMs: cut.startMs,
-      endMs: cut.endMs,
-    })),
+    cuts: project.cuts
+      .filter((cut) => cut.targets?.screen ?? true)
+      .map((cut) => ({
+        id: cut.id,
+        startMs: cut.startMs,
+        endMs: cut.endMs,
+      })),
     cursor: {
       enabled: true,
       size: Number.isFinite(rawCursor?.size) ? Math.max(0.2, rawCursor.size) : 1,

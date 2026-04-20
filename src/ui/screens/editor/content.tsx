@@ -86,8 +86,9 @@ export function EditorContent() {
         e.preventDefault();
         const { currentTime } = usePlaybackStore.getState();
         const { cuts, zoomRegions, removeCut, removeZoom } = useTimelineStore.getState();
-        if (cuts.some((cut) => currentTime >= cut.startMs && currentTime <= cut.endMs)) {
-          const cutToRemove = cuts.find(
+        const screenCuts = cuts.filter((cut) => cut.targets?.screen ?? true);
+        if (screenCuts.some((cut) => currentTime >= cut.startMs && currentTime <= cut.endMs)) {
+          const cutToRemove = screenCuts.find(
             (cut) => currentTime >= cut.startMs && currentTime <= cut.endMs,
           );
           if (cutToRemove) {

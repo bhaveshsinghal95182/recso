@@ -20,9 +20,14 @@ import type {
   FrameState,
   Project,
   Timeline,
+  TimelineLayer,
+  TimelineLayerId,
+  TimelineVisibilityMode,
   TransformedCursorPosition,
   WebcamOverlayConfig,
   ZoomConfig,
+  ZoomRegionsBySource,
+  ZoomSource,
 } from '../types/project.types.js';
 import { DEFAULT_CURSOR_CONFIG, DEFAULT_ZOOM_CONFIG } from '../types/project.types.js';
 import type { ZoomRegion } from '../types/zoom.types.js';
@@ -39,6 +44,148 @@ let activeProject: Project | null = null;
 
 // Cache for click events (key: recordingId)
 const clickEventsCache = new Map<string, MouseEvent[]>();
+
+const DEFAULT_TIMELINE_LAYERS: TimelineLayer[] = [
+  {
+    id: 'main',
+    label: 'Main Timeline',
+    visible: true,
+    order: 0,
+    hideMode: 'editor-only',
+  },
+  {
+    id: 'webcam',
+    label: 'Webcam Timeline',
+    visible: true,
+    order: 1,
+    hideMode: 'editor-only',
+  },
+  {
+    id: 'zoom-screen',
+    label: 'Screen Zoom Timeline',
+    visible: true,
+    order: 2,
+    hideMode: 'editor-only',
+  },
+  {
+    id: 'zoom-webcam',
+    label: 'Webcam Zoom Timeline',
+    visible: true,
+    order: 3,
+    hideMode: 'editor-only',
+  },
+  {
+    id: 'cursor',
+    label: 'Cursor Timeline',
+    visible: true,
+    order: 4,
+    hideMode: 'editor-only',
+  },
+];
+
+function sortZoomRegions(regions: ZoomRegion[]): ZoomRegion[] {
+  return [...regions].sort((a, b) => a.startMs - b.startMs);
+}
+
+function createDefaultTimelineLayers(): TimelineLayer[] {
+  return DEFAULT_TIMELINE_LAYERS.map((layer) => ({ ...layer }));
+}
+
+function normalizeTimelineLayers(layers?: TimelineLayer[]): TimelineLayer[] {
+  const byId = new Map<TimelineLayerId, TimelineLayer>();
+  if (Array.isArray(layers)) {
+    for (const layer of layers) {
+      byId.set(layer.id, layer);
+    }
+  }
+
+  const normalized: TimelineLayer[] = DEFAULT_TIMELINE_LAYERS.map((fallback): TimelineLayer => {
+    const existing = byId.get(fallback.id);
+    return {
+      ...fallback,
+      label:
+        existing && typeof existing.label === 'string' && existing.label.trim().length > 0
+          ? existing.label
+          : fallback.label,
+      visible: existing?.visible ?? fallback.visible,
+      order: typeof existing?.order === 'number' ? existing.order : fallback.order,
+      hideMode: existing?.hideMode === 'render-and-export' ? 'render-and-export' : 'editor-only',
+    };
+  });
+
+  normalized.sort((a, b) => a.order - b.order);
+  normalized.forEach((layer, index) => {
+    layer.order = index;
+  });
+
+  return normalized;
+}
+
+function normalizeZoomRegionsBySource(project: Project): ZoomRegionsBySource {
+  const legacyScreenZooms = Array.isArray(project.zoomRegions) ? project.zoomRegions : [];
+  const currentBySource = project.zoomRegionsBySource;
+
+  const screenRegions = Array.isArray(currentBySource?.screen)
+    ? currentBySource.screen
+    : legacyScreenZooms;
+  const webcamRegions = Array.isArray(currentBySource?.webcam) ? currentBySource.webcam : [];
+
+  return {
+    screen: sortZoomRegions(screenRegions),
+    webcam: sortZoomRegions(webcamRegions),
+  };
+}
+
+function normalizeCutRegion(cut: CutRegion): CutRegion {
+  return {
+    ...cut,
+    targets: {
+      screen: cut.targets?.screen ?? true,
+      webcam: cut.targets?.webcam ?? true,
+    },
+  };
+}
+
+function normalizeCuts(cuts: CutRegion[] | undefined): CutRegion[] {
+  if (!Array.isArray(cuts)) {
+    return [];
+  }
+
+  return [...cuts].map(normalizeCutRegion).sort((a, b) => a.startMs - b.startMs);
+}
+
+function normalizeProjectData(project: Project): Project {
+  project.cuts = normalizeCuts(project.cuts);
+
+  const zoomRegionsBySource = normalizeZoomRegionsBySource(project);
+  project.zoomRegionsBySource = zoomRegionsBySource;
+  project.zoomRegions = zoomRegionsBySource.screen;
+  project.timelineLayers = normalizeTimelineLayers(project.timelineLayers);
+
+  return project;
+}
+
+function ensureZoomRegionsBySource(project: Project): ZoomRegionsBySource {
+  const normalized = normalizeZoomRegionsBySource(project);
+  project.zoomRegionsBySource = normalized;
+  project.zoomRegions = normalized.screen;
+  return normalized;
+}
+
+function ensureTimelineLayers(project: Project): TimelineLayer[] {
+  const normalized = normalizeTimelineLayers(project.timelineLayers);
+  project.timelineLayers = normalized;
+  return normalized;
+}
+
+function persistProjectMutation(): void {
+  if (!activeProject) {
+    return;
+  }
+
+  activeProject.modifiedAt = Date.now();
+  projectStorage.saveProjectMetadata(activeProject);
+}
 
 function inferWebcamSidecarPath(rawVideoPath: string): string | null {
   if (!rawVideoPath) {
@@ -110,7 +257,7 @@ export async function createProject(recordingId: string): Promise<Project | null
   // Try to load existing spritesheet metadata
   const spritesheetMeta = projectStorage.loadSpritesheetMeta(projectFolderPath);
 
-  const project: Project = {
+  const project: Project = normalizeProjectData({
     id: randomUUID(),
     name: recording.fileName || 'Untitled Project',
     recordingId,
@@ -126,9 +273,14 @@ export async function createProject(recordingId: string): Promise<Project | null
     webcamOverlay: createDefaultWebcamOverlay(recording.finalPath),
     cuts: [],
     zoomRegions: [],
+    zoomRegionsBySource: {
+      screen: [],
+      webcam: [],
+    },
+    timelineLayers: createDefaultTimelineLayers(),
     createdAt: Date.now(),
     modifiedAt: Date.now(),
-  };
+  });
 
   // Save project metadata to .recso folder
   projectStorage.saveProjectMetadata(project);
@@ -168,7 +320,7 @@ export function loadProject(recordingDir: string): Project | null {
       return null;
     }
 
-    const project: Project = {
+    let project: Project = {
       ...loadedProject,
       cursorConfig: {
         ...DEFAULT_CURSOR_CONFIG,
@@ -179,6 +331,8 @@ export function loadProject(recordingDir: string): Project | null {
         ...loadedProject.zoomConfig,
       },
     };
+
+    project = normalizeProjectData(project);
 
     if (!project.webcamOverlay) {
       project.webcamOverlay = createDefaultWebcamOverlay(project.rawVideoPath);
@@ -227,6 +381,7 @@ export function saveProject(): boolean {
     return false;
   }
 
+  normalizeProjectData(activeProject);
   activeProject.modifiedAt = Date.now();
   return projectStorage.saveProjectMetadata(activeProject);
 }
@@ -275,8 +430,7 @@ export function updateWebcamOverlay(
   }
 
   activeProject.webcamOverlay = nextWebcam;
-  activeProject.modifiedAt = Date.now();
-  projectStorage.saveProjectMetadata(activeProject);
+  persistProjectMutation();
 
   return activeProject.webcamOverlay;
 }
@@ -288,11 +442,10 @@ export function updateProjectDuration(durationMs: number): boolean {
   if (!activeProject) return false;
 
   activeProject.timeline.duration = durationMs;
-  activeProject.modifiedAt = Date.now();
   console.log('[EditorService] Updated project duration:', durationMs);
 
   // Auto-save metadata with new duration
-  projectStorage.saveProjectMetadata(activeProject);
+  persistProjectMutation();
   return true;
 }
 
@@ -303,7 +456,6 @@ export function updateBackgroundColor(color: string): boolean {
   if (!activeProject) return false;
 
   activeProject.backgroundColor = color;
-  activeProject.modifiedAt = Date.now();
 
   try {
     CompositorService.setBackgroundColor(color);
@@ -312,7 +464,7 @@ export function updateBackgroundColor(color: string): boolean {
   }
 
   // Auto-save metadata
-  projectStorage.saveProjectMetadata(activeProject);
+  persistProjectMutation();
   return true;
 }
 
@@ -323,10 +475,9 @@ export function updateBackgroundPattern(pattern: BackgroundPatternConfig | null)
   if (!activeProject) return false;
 
   activeProject.backgroundPattern = pattern;
-  activeProject.modifiedAt = Date.now();
 
   // Auto-save metadata
-  projectStorage.saveProjectMetadata(activeProject);
+  persistProjectMutation();
   return true;
 }
 
@@ -337,7 +488,6 @@ export function updateBackgroundPath(imagePath: string | null): boolean {
   if (!activeProject) return false;
 
   activeProject.backgroundPath = imagePath ?? undefined;
-  activeProject.modifiedAt = Date.now();
 
   try {
     CompositorService.setBackground(imagePath);
@@ -346,8 +496,81 @@ export function updateBackgroundPath(imagePath: string | null): boolean {
   }
 
   // Auto-save metadata
-  projectStorage.saveProjectMetadata(activeProject);
+  persistProjectMutation();
   return true;
+}
+
+export function getTimelineLayers(): TimelineLayer[] {
+  if (!activeProject) {
+    return createDefaultTimelineLayers();
+  }
+
+  return ensureTimelineLayers(activeProject).map((layer) => ({ ...layer }));
+}
+
+export function updateTimelineLayerVisibility(
+  layerId: TimelineLayerId,
+  visible: boolean,
+): TimelineLayer[] | null {
+  if (!activeProject) {
+    return null;
+  }
+
+  const layers = ensureTimelineLayers(activeProject);
+  const layer = layers.find((candidate) => candidate.id === layerId);
+  if (!layer) {
+    return null;
+  }
+
+  layer.visible = visible;
+  persistProjectMutation();
+
+  return layers.map((item) => ({ ...item }));
+}
+
+export function updateTimelineLayerHideMode(
+  layerId: TimelineLayerId,
+  hideMode: TimelineVisibilityMode,
+): TimelineLayer[] | null {
+  if (!activeProject) {
+    return null;
+  }
+
+  const layers = ensureTimelineLayers(activeProject);
+  const layer = layers.find((candidate) => candidate.id === layerId);
+  if (!layer) {
+    return null;
+  }
+
+  layer.hideMode = hideMode;
+  persistProjectMutation();
+
+  return layers.map((item) => ({ ...item }));
+}
+
+export function reorderTimelineLayers(layerIds: TimelineLayerId[]): TimelineLayer[] | null {
+  if (!activeProject) {
+    return null;
+  }
+
+  const layers = ensureTimelineLayers(activeProject);
+  const uniqueRequested = Array.from(new Set(layerIds));
+  const remainingIds = layers
+    .map((layer) => layer.id)
+    .filter((id) => !uniqueRequested.includes(id));
+  const orderedIds = [...uniqueRequested, ...remainingIds];
+
+  for (let index = 0; index < orderedIds.length; index += 1) {
+    const layer = layers.find((candidate) => candidate.id === orderedIds[index]);
+    if (layer) {
+      layer.order = index;
+    }
+  }
+
+  layers.sort((a, b) => a.order - b.order);
+  persistProjectMutation();
+
+  return layers.map((item) => ({ ...item }));
 }
 
 /**
@@ -370,11 +593,9 @@ export function addCut(cut: CutRegion): boolean {
   }
 
   // Check for overlaps and merge if needed
-  activeProject.cuts.push(cut);
-  activeProject.cuts.sort((a, b) => a.startMs - b.startMs);
-  activeProject.modifiedAt = Date.now();
-
-  projectStorage.saveProjectMetadata(activeProject);
+  activeProject.cuts.push(normalizeCutRegion(cut));
+  activeProject.cuts = normalizeCuts(activeProject.cuts);
+  persistProjectMutation();
   return true;
 }
 
@@ -388,9 +609,7 @@ export function removeCut(cutId: string): boolean {
   if (index === -1) return false;
 
   activeProject.cuts.splice(index, 1);
-  activeProject.modifiedAt = Date.now();
-
-  projectStorage.saveProjectMetadata(activeProject);
+  persistProjectMutation();
   return true;
 }
 
@@ -403,11 +622,9 @@ export function updateCut(cut: CutRegion): boolean {
   const index = activeProject.cuts.findIndex((c) => c.id === cut.id);
   if (index === -1) return false;
 
-  activeProject.cuts[index] = cut;
-  activeProject.cuts.sort((a, b) => a.startMs - b.startMs);
-  activeProject.modifiedAt = Date.now();
-
-  projectStorage.saveProjectMetadata(activeProject);
+  activeProject.cuts[index] = normalizeCutRegion(cut);
+  activeProject.cuts = normalizeCuts(activeProject.cuts);
+  persistProjectMutation();
   return true;
 }
 
@@ -415,26 +632,37 @@ export function updateCut(cut: CutRegion): boolean {
  * Get all zoom regions
  */
 export function getZoomRegions(): ZoomRegion[] {
+  return getZoomRegionsBySource('screen');
+}
+
+/**
+ * Get all zoom regions for a specific source timeline
+ */
+export function getZoomRegionsBySource(source: ZoomSource): ZoomRegion[] {
   if (!activeProject) return [];
-  return activeProject.zoomRegions || [];
+  const zoomsBySource = ensureZoomRegionsBySource(activeProject);
+  return sortZoomRegions(zoomsBySource[source]);
 }
 
 /**
  * Add a new zoom region
  */
 export function addZoomRegion(zoom: ZoomRegion): boolean {
+  return addZoomRegionBySource('screen', zoom);
+}
+
+/**
+ * Add a new zoom region for a specific source timeline
+ */
+export function addZoomRegionBySource(source: ZoomSource, zoom: ZoomRegion): boolean {
   if (!activeProject) return false;
 
-  // Initialize zoomRegions array if not present
-  if (!activeProject.zoomRegions) {
-    activeProject.zoomRegions = [];
-  }
+  const zoomsBySource = ensureZoomRegionsBySource(activeProject);
+  zoomsBySource[source] = sortZoomRegions([...zoomsBySource[source], zoom]);
+  activeProject.zoomRegionsBySource = zoomsBySource;
+  activeProject.zoomRegions = zoomsBySource.screen;
 
-  activeProject.zoomRegions.push(zoom);
-  activeProject.zoomRegions.sort((a, b) => a.startMs - b.startMs);
-  activeProject.modifiedAt = Date.now();
-
-  projectStorage.saveProjectMetadata(activeProject);
+  persistProjectMutation();
   return true;
 }
 
@@ -442,15 +670,25 @@ export function addZoomRegion(zoom: ZoomRegion): boolean {
  * Remove a zoom region by ID
  */
 export function removeZoomRegion(zoomId: string): boolean {
-  if (!activeProject || !activeProject.zoomRegions) return false;
+  return removeZoomRegionBySource('screen', zoomId);
+}
 
-  const index = activeProject.zoomRegions.findIndex((z) => z.id === zoomId);
+/**
+ * Remove a zoom region by ID for a specific source timeline
+ */
+export function removeZoomRegionBySource(source: ZoomSource, zoomId: string): boolean {
+  if (!activeProject) return false;
+
+  const zoomsBySource = ensureZoomRegionsBySource(activeProject);
+  const index = zoomsBySource[source].findIndex((zoomRegion) => zoomRegion.id === zoomId);
   if (index === -1) return false;
 
-  activeProject.zoomRegions.splice(index, 1);
-  activeProject.modifiedAt = Date.now();
+  zoomsBySource[source].splice(index, 1);
+  zoomsBySource[source] = sortZoomRegions(zoomsBySource[source]);
+  activeProject.zoomRegionsBySource = zoomsBySource;
+  activeProject.zoomRegions = zoomsBySource.screen;
 
-  projectStorage.saveProjectMetadata(activeProject);
+  persistProjectMutation();
   return true;
 }
 
@@ -458,16 +696,25 @@ export function removeZoomRegion(zoomId: string): boolean {
  * Update a zoom region
  */
 export function updateZoomRegion(zoom: ZoomRegion): boolean {
-  if (!activeProject || !activeProject.zoomRegions) return false;
+  return updateZoomRegionBySource('screen', zoom);
+}
 
-  const index = activeProject.zoomRegions.findIndex((z) => z.id === zoom.id);
+/**
+ * Update a zoom region for a specific source timeline
+ */
+export function updateZoomRegionBySource(source: ZoomSource, zoom: ZoomRegion): boolean {
+  if (!activeProject) return false;
+
+  const zoomsBySource = ensureZoomRegionsBySource(activeProject);
+  const index = zoomsBySource[source].findIndex((zoomRegion) => zoomRegion.id === zoom.id);
   if (index === -1) return false;
 
-  activeProject.zoomRegions[index] = zoom;
-  activeProject.zoomRegions.sort((a, b) => a.startMs - b.startMs);
-  activeProject.modifiedAt = Date.now();
+  zoomsBySource[source][index] = zoom;
+  zoomsBySource[source] = sortZoomRegions(zoomsBySource[source]);
+  activeProject.zoomRegionsBySource = zoomsBySource;
+  activeProject.zoomRegions = zoomsBySource.screen;
 
-  projectStorage.saveProjectMetadata(activeProject);
+  persistProjectMutation();
   return true;
 }
 
@@ -475,19 +722,29 @@ export function updateZoomRegion(zoom: ZoomRegion): boolean {
  * Update multiple zoom regions at once (bulk update)
  */
 export function updateZoomRegions(zooms: ZoomRegion[]): boolean {
-  if (!activeProject || !activeProject.zoomRegions) return false;
+  return updateZoomRegionsBySource('screen', zooms);
+}
+
+/**
+ * Update multiple zoom regions at once for a specific source timeline.
+ */
+export function updateZoomRegionsBySource(source: ZoomSource, zooms: ZoomRegion[]): boolean {
+  if (!activeProject) return false;
+
+  const zoomsBySource = ensureZoomRegionsBySource(activeProject);
 
   for (const zoom of zooms) {
-    const index = activeProject.zoomRegions.findIndex((z) => z.id === zoom.id);
+    const index = zoomsBySource[source].findIndex((zoomRegion) => zoomRegion.id === zoom.id);
     if (index !== -1) {
-      activeProject.zoomRegions[index] = zoom;
+      zoomsBySource[source][index] = zoom;
     }
   }
 
-  activeProject.zoomRegions.sort((a, b) => a.startMs - b.startMs);
-  activeProject.modifiedAt = Date.now();
+  zoomsBySource[source] = sortZoomRegions(zoomsBySource[source]);
+  activeProject.zoomRegionsBySource = zoomsBySource;
+  activeProject.zoomRegions = zoomsBySource.screen;
 
-  projectStorage.saveProjectMetadata(activeProject);
+  persistProjectMutation();
   return true;
 }
 

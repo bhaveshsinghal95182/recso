@@ -14,7 +14,14 @@ import * as editorService from '../services/editor.service.js';
 import { mouseTrackerService } from '../services/mouse-tracker.service.js';
 import * as projectStorage from '../services/project-storage.service.js';
 import type { CutRegion } from '../types/cut.types.js';
-import type { CursorConfig, WebcamOverlayConfig, ZoomConfig } from '../types/project.types.js';
+import type {
+  CursorConfig,
+  TimelineLayerId,
+  TimelineVisibilityMode,
+  WebcamOverlayConfig,
+  ZoomConfig,
+  ZoomSource,
+} from '../types/project.types.js';
 import type { ZoomRegion } from '../types/zoom.types.js';
 
 /**
@@ -154,9 +161,40 @@ export function registerEditorHandlers(): void {
     return editorService.updateCut(cut);
   });
 
+  // Get timeline layer visibility/order configuration
+  ipcMain.handle('editor:get-timeline-layers', async () => {
+    return editorService.getTimelineLayers();
+  });
+
+  // Update timeline layer visibility
+  ipcMain.handle(
+    'editor:update-timeline-layer-visibility',
+    async (_event, layerId: TimelineLayerId, visible: boolean) => {
+      return editorService.updateTimelineLayerVisibility(layerId, visible);
+    },
+  );
+
+  // Update timeline layer hide mode
+  ipcMain.handle(
+    'editor:update-timeline-layer-hide-mode',
+    async (_event, layerId: TimelineLayerId, hideMode: TimelineVisibilityMode) => {
+      return editorService.updateTimelineLayerHideMode(layerId, hideMode);
+    },
+  );
+
+  // Reorder timeline layers by id
+  ipcMain.handle('editor:reorder-timeline-layers', async (_event, layerIds: TimelineLayerId[]) => {
+    return editorService.reorderTimelineLayers(layerIds);
+  });
+
   // Get all zoom regions
   ipcMain.handle('editor:get-zoom-regions', async () => {
     return editorService.getZoomRegions();
+  });
+
+  // Get zoom regions for a specific source timeline
+  ipcMain.handle('editor:get-zoom-regions-by-source', async (_event, source: ZoomSource) => {
+    return editorService.getZoomRegionsBySource(source);
   });
 
   // Add a new zoom region
@@ -164,20 +202,52 @@ export function registerEditorHandlers(): void {
     return editorService.addZoomRegion(zoom);
   });
 
+  // Add a new zoom region for a specific source timeline
+  ipcMain.handle(
+    'editor:add-zoom-region-by-source',
+    async (_event, source: ZoomSource, zoom: ZoomRegion) => {
+      return editorService.addZoomRegionBySource(source, zoom);
+    },
+  );
+
   // Remove a zoom region
   ipcMain.handle('editor:remove-zoom-region', async (_event, zoomId: string) => {
     return editorService.removeZoomRegion(zoomId);
   });
+
+  // Remove a zoom region for a specific source timeline
+  ipcMain.handle(
+    'editor:remove-zoom-region-by-source',
+    async (_event, source: ZoomSource, zoomId: string) => {
+      return editorService.removeZoomRegionBySource(source, zoomId);
+    },
+  );
 
   // Update a zoom region
   ipcMain.handle('editor:update-zoom-region', async (_event, zoom: ZoomRegion) => {
     return editorService.updateZoomRegion(zoom);
   });
 
+  // Update a zoom region for a specific source timeline
+  ipcMain.handle(
+    'editor:update-zoom-region-by-source',
+    async (_event, source: ZoomSource, zoom: ZoomRegion) => {
+      return editorService.updateZoomRegionBySource(source, zoom);
+    },
+  );
+
   // Update multiple zoom regions at once (bulk update)
   ipcMain.handle('editor:update-zoom-regions', async (_event, zooms: ZoomRegion[]) => {
     return editorService.updateZoomRegions(zooms);
   });
+
+  // Update multiple zoom regions for a specific source timeline
+  ipcMain.handle(
+    'editor:update-zoom-regions-by-source',
+    async (_event, source: ZoomSource, zooms: ZoomRegion[]) => {
+      return editorService.updateZoomRegionsBySource(source, zooms);
+    },
+  );
 
   // Get mouse events for the active project's recording
   ipcMain.handle('editor:get-mouse-events', async () => {

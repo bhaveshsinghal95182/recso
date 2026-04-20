@@ -12,9 +12,14 @@ import type {
   SpritesheetMeta,
   StartRecordingResult,
   StopRecordingResult,
+  TimelineLayer,
+  TimelineLayerId,
+  TimelineVisibilityMode,
   TransformedCursorPosition,
   WebcamOverlayConfig,
   ZoomConfig,
+  ZoomRegion,
+  ZoomSource,
 } from './types';
 
 // State event specific to IPC (contains uppercase State status)
@@ -238,20 +243,53 @@ interface ElectronAPI {
     /** Update a cut region */
     updateCut: (cut: CutRegion) => Promise<boolean>;
 
+    /** Get timeline layers with visibility/order metadata */
+    getTimelineLayers: () => Promise<TimelineLayer[]>;
+
+    /** Update timeline layer visibility */
+    updateTimelineLayerVisibility: (
+      layerId: TimelineLayerId,
+      visible: boolean,
+    ) => Promise<TimelineLayer[] | null>;
+
+    /** Update timeline layer hide mode */
+    updateTimelineLayerHideMode: (
+      layerId: TimelineLayerId,
+      hideMode: TimelineVisibilityMode,
+    ) => Promise<TimelineLayer[] | null>;
+
+    /** Reorder timeline layers by ID */
+    reorderTimelineLayers: (layerIds: TimelineLayerId[]) => Promise<TimelineLayer[] | null>;
+
     /** Get all zoom regions */
     getZoomRegions: () => Promise<ZoomRegion[]>;
+
+    /** Get all zoom regions for a specific source timeline */
+    getZoomRegionsBySource: (source: ZoomSource) => Promise<ZoomRegion[]>;
 
     /** Add a new zoom region */
     addZoomRegion: (zoom: ZoomRegion) => Promise<boolean>;
 
+    /** Add a new zoom region for a specific source timeline */
+    addZoomRegionBySource: (source: ZoomSource, zoom: ZoomRegion) => Promise<boolean>;
+
     /** Remove a zoom region by ID */
     removeZoomRegion: (zoomId: string) => Promise<boolean>;
+
+    /** Remove a zoom region by ID for a specific source timeline */
+    removeZoomRegionBySource: (source: ZoomSource, zoomId: string) => Promise<boolean>;
 
     /** Update a zoom region */
     updateZoomRegion: (zoom: ZoomRegion) => Promise<boolean>;
 
+    /** Update a zoom region for a specific source timeline */
+    updateZoomRegionBySource: (source: ZoomSource, zoom: ZoomRegion) => Promise<boolean>;
+
     /** Update multiple zoom regions at once (bulk) */
     updateZoomRegions: (zooms: ZoomRegion[]) => Promise<boolean>;
+
+    /** Update multiple zoom regions for a specific source timeline (bulk) */
+    updateZoomRegionsBySource: (source: ZoomSource, zooms: ZoomRegion[]) => Promise<boolean>;
 
     /** Get mouse events for the active project's recording */
     getMouseEvents: () => Promise<RecordedMouseEvent[]>;

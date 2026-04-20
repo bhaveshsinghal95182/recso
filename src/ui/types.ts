@@ -118,6 +118,22 @@ export interface OrphanedRecording {
 // --- Editor Types ---
 
 export type CursorStyle = 'default' | 'pointer' | 'crosshair' | 'custom';
+export type ZoomSource = 'screen' | 'webcam';
+export type TimelineLayerId = 'main' | 'webcam' | 'zoom-screen' | 'zoom-webcam' | 'cursor';
+export type TimelineVisibilityMode = 'editor-only' | 'render-and-export';
+
+export interface TimelineLayer {
+  id: TimelineLayerId;
+  label: string;
+  visible: boolean;
+  order: number;
+  hideMode: TimelineVisibilityMode;
+}
+
+export interface ZoomRegionsBySource {
+  screen: ZoomRegion[];
+  webcam: ZoomRegion[];
+}
 
 export interface CursorConfig {
   size: number;
@@ -175,6 +191,11 @@ export interface CutRegion {
   startMs: number;
   /** End time of the cut in milliseconds */
   endMs: number;
+  /** Optional lane-level inclusion state for screen/webcam timeline views. */
+  targets?: {
+    screen: boolean;
+    webcam: boolean;
+  };
 }
 
 /** A timestamped focal-point change within a zoom region */
@@ -256,7 +277,10 @@ export interface Project {
   backgroundPattern?: BackgroundPatternConfig | null;
   webcamOverlay?: WebcamOverlayConfig | null;
   cuts: CutRegion[];
+  /** Legacy screen zoom regions. Prefer zoomRegionsBySource.screen for new code. */
   zoomRegions: ZoomRegion[];
+  zoomRegionsBySource?: ZoomRegionsBySource;
+  timelineLayers?: TimelineLayer[];
   createdAt: number;
   modifiedAt: number;
 }

@@ -13,6 +13,22 @@ import type { SpritesheetMeta } from './spritesheet.types.js';
 import type { ZoomRegion } from './zoom.types.js';
 
 export type CursorStyle = 'default' | 'pointer' | 'crosshair' | 'custom';
+export type ZoomSource = 'screen' | 'webcam';
+export type TimelineLayerId = 'main' | 'webcam' | 'zoom-screen' | 'zoom-webcam' | 'cursor';
+export type TimelineVisibilityMode = 'editor-only' | 'render-and-export';
+
+export interface TimelineLayer {
+  id: TimelineLayerId;
+  label: string;
+  visible: boolean;
+  order: number;
+  hideMode: TimelineVisibilityMode;
+}
+
+export interface ZoomRegionsBySource {
+  screen: ZoomRegion[];
+  webcam: ZoomRegion[];
+}
 
 /**
  * Configuration for cursor/click rendering
@@ -143,8 +159,15 @@ export interface Project {
   webcamOverlay?: WebcamOverlayConfig | null;
   /** Cut regions to exclude from export */
   cuts: CutRegion[];
-  /** Zoom regions for zoom effects during export */
+  /**
+   * Legacy screen zoom regions for backward compatibility.
+   * New code should prefer zoomRegionsBySource.screen.
+   */
   zoomRegions: ZoomRegion[];
+  /** Source-scoped zoom regions used by multi-timeline editing. */
+  zoomRegionsBySource?: ZoomRegionsBySource;
+  /** Timeline visibility and ordering controls. */
+  timelineLayers?: TimelineLayer[];
   /** Project creation timestamp */
   createdAt: number;
   /** Last modified timestamp */
