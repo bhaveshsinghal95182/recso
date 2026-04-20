@@ -12,8 +12,8 @@ export const DEFAULT_VIDEO_STYLE = {
 
 export const DEFAULT_WEBCAM_STYLE = {
   anchor: 'bottom-right' as const,
-  aspectRatio: 9 / 16,
-  heightRatio: 0.28,
+  aspectRatio: 3 / 4,
+  heightRatio: 0.34,
   marginPx: 24,
   borderRadius: 24,
   borderWidth: 0,

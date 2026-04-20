@@ -1,8 +1,8 @@
 import type { Canvas2DContext } from '../types';
 
 export const DEFAULT_BACKGROUND_COLOR = '#000000';
-export const DEFAULT_WEBCAM_ASPECT_RATIO = 9 / 16;
-export const DEFAULT_WEBCAM_HEIGHT_RATIO = 0.28;
+export const DEFAULT_WEBCAM_ASPECT_RATIO = 3 / 4;
+export const DEFAULT_WEBCAM_HEIGHT_RATIO = 0.34;
 export const DEFAULT_WEBCAM_MARGIN_PX = 24;
 
 export function lerp(a: number, b: number, t: number): number {

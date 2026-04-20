@@ -25,8 +25,8 @@ import type {
 } from '../types/compositor.types.js';
 import { DEFAULT_COMPOSITOR_CONFIG } from '../types/compositor.types.js';
 
-const DEFAULT_WEBCAM_ASPECT_RATIO = 9 / 16;
-const DEFAULT_WEBCAM_HEIGHT_RATIO = 0.28;
+const DEFAULT_WEBCAM_ASPECT_RATIO = 3 / 4;
+const DEFAULT_WEBCAM_HEIGHT_RATIO = 0.34;
 const DEFAULT_WEBCAM_MARGIN_PX = 24;
 const MIN_WEBCAM_HEIGHT_RATIO = 0.08;
 const MAX_WEBCAM_HEIGHT_RATIO = 0.75;
@@ -212,8 +212,8 @@ export function calculateLayout(videoBounds: Rectangle | Size, canvasSize?: Size
  *
  * Defaults:
  * - bottom-right anchor
- * - 9:16 vertical aspect ratio
- * - 28% of canvas height
+ * - 3:4 portrait aspect ratio
+ * - 34% of canvas height
  * - 24px margin
  */
 export function calculateWebcamLayout(
