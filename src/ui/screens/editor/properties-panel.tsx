@@ -8,6 +8,7 @@ import { useUIStore } from '@/store/ui-store';
 import { CursorPanel } from './panels/cursor-panel';
 import { GeneralPanel } from './panels/general-panel';
 import { PatternImportPanel } from './panels/pattern-import-panel';
+import { WebcamPanel } from './panels/webcam-panel';
 import { ZoomPanel } from './panels/zoom-panel';
 import { ExportModal } from './export-modal';
 
@@ -25,6 +26,7 @@ export function PropertiesPanel() {
   // Tab title mapping
   const tabTitles: Record<typeof activePropertiesTab, string> = {
     general: 'General',
+    webcam: 'Webcam',
     cursor: 'Cursor',
     pattern: 'Pattern',
     zoom: 'Zoom',
@@ -40,6 +42,9 @@ export function PropertiesPanel() {
 
         {/* General Tab */}
         {activePropertiesTab === 'general' && <GeneralPanel />}
+
+        {/* Webcam Tab */}
+        {activePropertiesTab === 'webcam' && <WebcamPanel />}
 
         {/* Cursor Tab */}
         {activePropertiesTab === 'cursor' && <CursorPanel />}

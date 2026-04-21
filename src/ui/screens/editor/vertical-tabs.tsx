@@ -1,4 +1,4 @@
-import { MousePointer2, Settings, Sparkles, ZoomIn } from 'lucide-react';
+import { Camera, MousePointer2, Settings, Sparkles, ZoomIn } from 'lucide-react';
 import { useMemo } from 'react';
 
 import { useUIStore } from '@/store/ui-store';
@@ -39,6 +39,7 @@ export function VerticalTabs() {
   }[] = useMemo(
     () => [
       { id: 'general', label: 'General', Icon: Settings },
+      { id: 'webcam', label: 'Webcam', Icon: Camera },
       { id: 'cursor', label: 'Cursor', Icon: MousePointer2 },
       { id: 'pattern', label: 'Pattern', Icon: Sparkles },
       { id: 'zoom', label: 'Zoom', Icon: ZoomIn },
