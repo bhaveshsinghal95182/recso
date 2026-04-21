@@ -37,6 +37,7 @@ export interface VideoConfig {
 }
 
 export type WebcamOverlayAnchor = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
+export type WebcamOverlayShape = 'circle' | 'rectangle-landscape' | 'rectangle-portrait' | 'square';
 
 export interface WebcamShadowLayer {
   offsetX: number;
@@ -49,6 +50,7 @@ export interface WebcamOverlayConfig {
   enabled: boolean;
   sourcePath?: string;
   anchor: WebcamOverlayAnchor;
+  shape?: WebcamOverlayShape;
   aspectRatio: number;
   heightRatio: number;
   marginPx: number;

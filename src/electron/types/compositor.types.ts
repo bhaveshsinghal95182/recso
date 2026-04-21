@@ -46,9 +46,9 @@ export type WebcamAnchor = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-l
 export interface WebcamLayoutRequest {
   /** Optional anchor point on canvas. Default: bottom-right */
   anchor?: WebcamAnchor;
-  /** Webcam width/height ratio. Vertical 9:16 is 0.5625. Default: 9 / 16 */
+  /** Webcam width/height ratio. Portrait 3:4 is 0.75. Default: 3 / 4 */
   aspectRatio?: number;
-  /** Webcam height as ratio of canvas height. Default: 0.28 */
+  /** Webcam height as ratio of canvas height. Default: 0.34 */
   heightRatio?: number;
   /** Margin from canvas edges in pixels. Default: 24 */
   marginPx?: number;

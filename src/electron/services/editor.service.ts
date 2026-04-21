@@ -209,6 +209,11 @@ function createDefaultWebcamOverlay(rawVideoPath: string): Project['webcamOverla
   return {
     enabled: false,
     sourcePath: webcamPath,
+    shape: 'rectangle-portrait',
+    size: 'medium',
+    aspectRatio: 3 / 4,
+    heightRatio: 0.34,
+    borderRadiusPx: 24,
   };
 }
 

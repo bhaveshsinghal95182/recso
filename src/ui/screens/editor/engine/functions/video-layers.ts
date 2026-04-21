@@ -8,6 +8,32 @@ import type {
 import { clamp, roundRectPath } from './common';
 import { computeWebcamLayout } from './layout';
 
+function beginWebcamShapePath(
+  ctx: Canvas2DContext,
+  layout: VideoLayout,
+  webcamConfig: WebcamOverlayConfig,
+  expansion = 0,
+): void {
+  if (webcamConfig.shape === 'circle') {
+    const radius = Math.max(0, Math.min(layout.width, layout.height) / 2 + expansion);
+    const centerX = layout.x + layout.width / 2;
+    const centerY = layout.y + layout.height / 2;
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+    ctx.closePath();
+    return;
+  }
+
+  roundRectPath(
+    ctx,
+    layout.x - expansion,
+    layout.y - expansion,
+    layout.width + expansion * 2,
+    layout.height + expansion * 2,
+    webcamConfig.borderRadius + expansion,
+  );
+}
+
 export function drawVideoLayer(
   ctx: Canvas2DContext,
   layout: VideoLayout,
@@ -62,7 +88,7 @@ function drawWebcamShadowLayers(
     ctx.shadowBlur = blur;
     ctx.shadowOffsetX = shadow.offsetX;
     ctx.shadowOffsetY = shadow.offsetY;
-    roundRectPath(ctx, layout.x, layout.y, layout.width, layout.height, webcamConfig.borderRadius);
+    beginWebcamShapePath(ctx, layout, webcamConfig);
     // The webcam layer is drawn immediately after this, so the fill is covered.
     // Keep fill opaque so low-alpha shadows remain visible.
     ctx.fillStyle = 'rgba(0, 0, 0, 1)';
@@ -90,19 +116,12 @@ export function drawWebcamLayer(
 
   if (webcamConfig.border.width > 0) {
     const borderWidth = webcamConfig.border.width;
-    roundRectPath(
-      ctx,
-      layout.x - borderWidth,
-      layout.y - borderWidth,
-      layout.width + borderWidth * 2,
-      layout.height + borderWidth * 2,
-      webcamConfig.borderRadius + borderWidth,
-    );
+    beginWebcamShapePath(ctx, layout, webcamConfig, borderWidth);
     ctx.fillStyle = webcamConfig.border.color;
     ctx.fill();
   }
 
-  roundRectPath(ctx, layout.x, layout.y, layout.width, layout.height, webcamConfig.borderRadius);
+  beginWebcamShapePath(ctx, layout, webcamConfig);
   ctx.clip();
   source.draw(ctx, layout.x, layout.y, layout.width, layout.height);
   ctx.restore();

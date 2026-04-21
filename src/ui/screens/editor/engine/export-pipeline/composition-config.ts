@@ -34,6 +34,42 @@ function resolveWebcamShadows(raw: Project['webcamOverlay']) {
   return mapped.length > 0 ? mapped : DEFAULT_WEBCAM_STYLE.shadows;
 }
 
+type WebcamShapePreset = 'circle' | 'rectangle-landscape' | 'rectangle-portrait' | 'square';
+
+function isWebcamShapePreset(value: unknown): value is WebcamShapePreset {
+  return (
+    value === 'circle' ||
+    value === 'rectangle-landscape' ||
+    value === 'rectangle-portrait' ||
+    value === 'square'
+  );
+}
+
+function resolveWebcamShape(raw: Project['webcamOverlay']): WebcamShapePreset {
+  if (isWebcamShapePreset(raw?.shape)) {
+    return raw.shape;
+  }
+
+  const aspectRatio =
+    Number.isFinite(raw?.aspectRatio) && (raw?.aspectRatio as number) > 0
+      ? (raw?.aspectRatio as number)
+      : DEFAULT_WEBCAM_STYLE.aspectRatio;
+
+  if (Math.abs(aspectRatio - 1) <= 0.05) {
+    if (Number.isFinite(raw?.borderRadiusPx) && (raw?.borderRadiusPx as number) >= 999) {
+      return 'circle';
+    }
+
+    return 'square';
+  }
+
+  if (aspectRatio > 1.05) {
+    return 'rectangle-landscape';
+  }
+
+  return DEFAULT_WEBCAM_STYLE.shape;
+}
+
 function mapLegacyZoomConfigToZoomKeyframes(
   zoomConfig: Project['zoomConfig'] | undefined,
   durationMs: number,
@@ -93,6 +129,13 @@ export function buildExportCompositionConfig({
   const rawCursor = project.cursorConfig;
   const rawWebcam = project.webcamOverlay;
   const webcamEnabled = Boolean(rawWebcam?.enabled && webcamSourcePath);
+  const webcamShape = resolveWebcamShape(rawWebcam);
+  const webcamAspectRatio =
+    webcamShape === 'circle' || webcamShape === 'square'
+      ? 1
+      : Number.isFinite(rawWebcam?.aspectRatio) && (rawWebcam?.aspectRatio as number) > 0
+        ? (rawWebcam?.aspectRatio as number)
+        : DEFAULT_WEBCAM_STYLE.aspectRatio;
   const webcamBorderRadius = Number.isFinite(rawWebcam?.borderRadiusPx)
     ? Math.max(0, rawWebcam?.borderRadiusPx ?? DEFAULT_WEBCAM_STYLE.borderRadius)
     : DEFAULT_WEBCAM_STYLE.borderRadius;
@@ -128,10 +171,8 @@ export function buildExportCompositionConfig({
           enabled: true,
           sourcePath: webcamSourcePath,
           anchor: rawWebcam?.anchor ?? DEFAULT_WEBCAM_STYLE.anchor,
-          aspectRatio:
-            Number.isFinite(rawWebcam?.aspectRatio) && (rawWebcam?.aspectRatio as number) > 0
-              ? (rawWebcam?.aspectRatio as number)
-              : DEFAULT_WEBCAM_STYLE.aspectRatio,
+          shape: webcamShape,
+          aspectRatio: webcamAspectRatio,
           heightRatio: clamp(
             Number.isFinite(rawWebcam?.heightRatio)
               ? (rawWebcam?.heightRatio as number)
