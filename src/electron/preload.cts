@@ -318,6 +318,7 @@ electron.contextBridge.exposeInMainWorld('electron', {
       focalY: number;
       easeDurationMs: number;
       focalKeyframes?: { timestampMs: number; focalX: number; focalY: number }[];
+      webcamHeightRatio?: number;
     }) => electron.ipcRenderer.invoke('editor:add-zoom-region', zoom),
 
     /** Add a new zoom region for a specific source timeline */
@@ -332,6 +333,7 @@ electron.contextBridge.exposeInMainWorld('electron', {
         focalY: number;
         easeDurationMs: number;
         focalKeyframes?: { timestampMs: number; focalX: number; focalY: number }[];
+        webcamHeightRatio?: number;
       },
     ) => electron.ipcRenderer.invoke('editor:add-zoom-region-by-source', source, zoom),
 
@@ -353,6 +355,7 @@ electron.contextBridge.exposeInMainWorld('electron', {
       focalY: number;
       easeDurationMs: number;
       focalKeyframes?: { timestampMs: number; focalX: number; focalY: number }[];
+      webcamHeightRatio?: number;
     }) => electron.ipcRenderer.invoke('editor:update-zoom-region', zoom),
 
     /** Update a zoom region for a specific source timeline */
@@ -367,6 +370,7 @@ electron.contextBridge.exposeInMainWorld('electron', {
         focalY: number;
         easeDurationMs: number;
         focalKeyframes?: { timestampMs: number; focalX: number; focalY: number }[];
+        webcamHeightRatio?: number;
       },
     ) => electron.ipcRenderer.invoke('editor:update-zoom-region-by-source', source, zoom),
 
@@ -381,6 +385,7 @@ electron.contextBridge.exposeInMainWorld('electron', {
         focalY: number;
         easeDurationMs: number;
         focalKeyframes?: { timestampMs: number; focalX: number; focalY: number }[];
+        webcamHeightRatio?: number;
       }[],
     ) => electron.ipcRenderer.invoke('editor:update-zoom-regions', zooms),
 
@@ -396,6 +401,7 @@ electron.contextBridge.exposeInMainWorld('electron', {
         focalY: number;
         easeDurationMs: number;
         focalKeyframes?: { timestampMs: number; focalX: number; focalY: number }[];
+        webcamHeightRatio?: number;
       }[],
     ) => electron.ipcRenderer.invoke('editor:update-zoom-regions-by-source', source, zooms),
 

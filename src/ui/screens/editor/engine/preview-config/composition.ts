@@ -108,6 +108,7 @@ export interface BuildPreviewCompositionConfigOptions {
   mouseEvents: RecordedMouseEvent[];
   webcamLayout: CompositionLayout | null;
   webcamSourcePath: string | undefined;
+  webcamZoomRegions?: ZoomRegion[];
 }
 
 export function buildPreviewCompositionConfig({
@@ -119,6 +120,7 @@ export function buildPreviewCompositionConfig({
   mouseEvents,
   webcamLayout,
   webcamSourcePath,
+  webcamZoomRegions,
 }: BuildPreviewCompositionConfigOptions): CompositionConfig {
   const sourceWidth = project?.videoDimensions?.width ?? 0;
   const sourceHeight = project?.videoDimensions?.height ?? 0;
@@ -199,6 +201,20 @@ export function buildPreviewCompositionConfig({
       focalY: region.focalY,
       easeDurationMs: region.easeDurationMs,
       focalKeyframes: region.focalKeyframes,
+      webcamHeightRatio: region.webcamHeightRatio,
+      webcamFullScreen: region.webcamFullScreen,
+    })),
+    webcamZoomRegions: webcamZoomRegions?.map((region) => ({
+      id: region.id,
+      startMs: region.startMs,
+      endMs: region.endMs,
+      zoomLevel: region.zoomLevel,
+      focalX: region.focalX,
+      focalY: region.focalY,
+      easeDurationMs: region.easeDurationMs,
+      focalKeyframes: region.focalKeyframes,
+      webcamHeightRatio: region.webcamHeightRatio,
+      webcamFullScreen: region.webcamFullScreen,
     })),
     cuts: cuts.map((cut) => ({
       id: cut.id,

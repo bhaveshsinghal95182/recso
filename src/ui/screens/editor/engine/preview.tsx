@@ -23,9 +23,18 @@ import type { CompositionConfig } from './types';
 
 export function EnginePreview() {
   const { project, mouseEvents } = useProjectStore();
-  const { zoomRegions, cuts, isEditingFocalPoint, selectedZoomId, updateZoom } = useTimelineStore();
+  const {
+    zoomRegions,
+    zoomRegionsBySource,
+    cuts,
+    isEditingFocalPoint,
+    selectedZoomId,
+    updateZoom,
+  } = useTimelineStore();
   const { isPlaying, currentTime, play, pause, setDuration } = usePlaybackStore();
   const screenCuts = useMemo(() => cuts.filter((cut) => cut.targets?.screen ?? true), [cuts]);
+  const screenZoomRegions = zoomRegionsBySource.screen;
+  const webcamZoomRegions = zoomRegionsBySource.webcam;
 
   const previewViewportRef = useRef<HTMLDivElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -49,7 +58,13 @@ export function EnginePreview() {
     backgroundContainerStyle,
     selectedPattern,
     hasPattern,
-  } = useEnginePreviewConfigMapper(project, zoomRegions, screenCuts, mouseEvents);
+  } = useEnginePreviewConfigMapper(
+    project,
+    screenZoomRegions,
+    screenCuts,
+    mouseEvents,
+    webcamZoomRegions,
+  );
 
   const selectedZoom = useMemo(
     () => zoomRegions.find((region) => region.id === selectedZoomId) ?? null,

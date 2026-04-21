@@ -11,7 +11,11 @@ import { drawBackground } from './background';
 import { drawCursorLayer } from './cursor';
 import { computeVideoLayout } from './layout';
 import { drawVideoLayer, drawWebcamLayer } from './video-layers';
-import { computeZoomStateFromConfig } from './zoom';
+import {
+  computeActiveWebcamFullScreenProgress,
+  computeActiveWebcamHeightRatio,
+  computeZoomStateFromConfig,
+} from './zoom';
 
 interface ResolvedLayerState {
   id: CompositionLayerId;
@@ -27,6 +31,10 @@ interface LayerRenderContext {
   source: FrameVideoSource;
   webcamSource?: FrameVideoSource | null;
   videoLayout: VideoLayout;
+  /** Active webcam height ratio override from a zoom region, if any. */
+  activeWebcamHeightRatio?: number;
+  /** Active webcam full-canvas transition progress from a zoom region, if any. */
+  activeWebcamFullScreenProgress?: number;
 }
 
 type LayerRenderer = (context: LayerRenderContext) => void;
@@ -62,9 +70,25 @@ const LAYER_DEFINITIONS: Record<CompositionLayerId, LayerDefinition> = {
   },
   webcam: {
     defaultSpace: 'base',
-    render: ({ ctx, frameWidth, frameHeight, config, webcamSource }) => {
+    render: ({
+      ctx,
+      frameWidth,
+      frameHeight,
+      config,
+      webcamSource,
+      activeWebcamHeightRatio,
+      activeWebcamFullScreenProgress,
+    }) => {
       if (config.webcam?.enabled && webcamSource) {
-        drawWebcamLayer(ctx, frameWidth, frameHeight, config.webcam, webcamSource);
+        drawWebcamLayer(
+          ctx,
+          frameWidth,
+          frameHeight,
+          config.webcam,
+          webcamSource,
+          activeWebcamHeightRatio,
+          activeWebcamFullScreenProgress,
+        );
       }
     },
   },
@@ -146,6 +170,21 @@ export function renderCompositionFrame({
   const zoomState = computeZoomStateFromConfig(t, config, frameWidth, frameHeight);
   const videoLayout = computeVideoLayout(frameWidth, frameHeight, config);
   const layerStates = resolveLayerStates(config.layerStates);
+
+  // Resolve per-region webcam height override from webcam-source regions.
+  const activeWebcamHeightRatio =
+    config.webcam && config.webcamZoomRegions && config.webcamZoomRegions.length > 0
+      ? computeActiveWebcamHeightRatio(
+          t * 1000,
+          config.webcamZoomRegions,
+          config.webcam.heightRatio,
+        )
+      : undefined;
+  const activeWebcamFullScreenProgress =
+    config.webcamZoomRegions && config.webcamZoomRegions.length > 0
+      ? computeActiveWebcamFullScreenProgress(t * 1000, config.webcamZoomRegions)
+      : 0;
+
   const layerRenderContext: LayerRenderContext = {
     ctx,
     frameWidth,
@@ -155,6 +194,8 @@ export function renderCompositionFrame({
     source,
     webcamSource,
     videoLayout,
+    activeWebcamHeightRatio,
+    activeWebcamFullScreenProgress,
   };
 
   let activeSpace: CompositionLayerSpace = 'base';

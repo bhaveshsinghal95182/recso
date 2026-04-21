@@ -17,6 +17,8 @@ import { prepareWebcamSource } from './webcam-source';
 export async function runEngineCanvasExport({
   project,
   config,
+  screenZoomRegions,
+  webcamZoomRegions,
   mouseEvents = [],
   onProgress,
   onCancelReady,
@@ -106,6 +108,8 @@ export async function runEngineCanvasExport({
       webcamSourcePath,
       sourceDurationMs,
       preserveUnderlyingBackground: backgroundLayer !== null,
+      screenZoomRegions,
+      webcamZoomRegions,
       mouseEvents,
     });
 

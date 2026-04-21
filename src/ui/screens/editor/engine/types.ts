@@ -87,6 +87,10 @@ export interface CompositionZoomRegion {
   focalY: number;
   easeDurationMs: number;
   focalKeyframes?: CompositionFocalKeyframe[];
+  /** Optional webcam canvas height override (0-1) for webcam zoom regions. */
+  webcamHeightRatio?: number;
+  /** Optional full-canvas webcam mode for webcam zoom regions. */
+  webcamFullScreen?: boolean;
 }
 
 export interface CompositionCutRegion {
@@ -168,6 +172,8 @@ export interface CompositionConfig {
   cursor?: CompositionCursorConfig;
   zooms: ZoomKeyframe[];
   zoomRegions?: CompositionZoomRegion[];
+  /** Webcam-source zoom regions used exclusively for webcam height overrides. */
+  webcamZoomRegions?: CompositionZoomRegion[];
   cuts?: CompositionCutRegion[];
   layerStates?: CompositionLayerState[];
 }

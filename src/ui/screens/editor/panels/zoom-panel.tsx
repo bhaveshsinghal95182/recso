@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import {
   DEFAULT_ZOOM_LEVEL,
   GROUP_THRESHOLD_MS,
@@ -27,6 +28,29 @@ function clampUnit(value: number): number {
     return 0;
   }
   return Math.max(0, Math.min(1, value));
+}
+
+function clampWebcamHeightRatio(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0.34;
+  }
+
+  return Math.max(0.08, Math.min(0.75, value));
+}
+
+function resolveEffectiveWebcamHeightRatio(
+  zoom: ZoomRegion | undefined,
+  baseHeightRatio: number,
+): number {
+  if (!zoom) {
+    return clampWebcamHeightRatio(baseHeightRatio);
+  }
+
+  if (typeof zoom.webcamHeightRatio === 'number' && Number.isFinite(zoom.webcamHeightRatio)) {
+    return clampWebcamHeightRatio(zoom.webcamHeightRatio);
+  }
+
+  return clampWebcamHeightRatio(baseHeightRatio * Math.max(0.1, zoom.zoomLevel));
 }
 
 function resolveNormalizedEventCoordinates(
@@ -50,6 +74,7 @@ function resolveNormalizedEventCoordinates(
 export function ZoomPanel() {
   const { project } = useProjectStore();
   const {
+    zoomSource,
     zoomRegions,
     selectedZoomId,
     updateZoom,
@@ -60,22 +85,40 @@ export function ZoomPanel() {
   } = useTimelineStore();
 
   const selectedZoom = zoomRegions.find((z) => z.id === selectedZoomId);
+  const baseWebcamHeightRatio = clampWebcamHeightRatio(project?.webcamOverlay?.heightRatio ?? 0.34);
   const focusIconRef = useRef<AnimatedIconHandle>(null);
   const copyIconRef = useRef<AnimatedIconHandle>(null);
 
   // Local state for debounced slider
   const [localZoomLevel, setLocalZoomLevel] = useState(selectedZoom?.zoomLevel ?? 1.5);
+  const [localWebcamHeightRatio, setLocalWebcamHeightRatio] = useState(() =>
+    resolveEffectiveWebcamHeightRatio(selectedZoom, baseWebcamHeightRatio),
+  );
+  const [isWebcamFullScreen, setIsWebcamFullScreen] = useState(
+    selectedZoom?.webcamFullScreen === true,
+  );
   const [isGenerating, setIsGenerating] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const webcamDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Sync local state when selected zoom changes
   useEffect(() => {
     if (selectedZoom) {
       setLocalZoomLevel(selectedZoom.zoomLevel);
+      setLocalWebcamHeightRatio(
+        resolveEffectiveWebcamHeightRatio(selectedZoom, baseWebcamHeightRatio),
+      );
+      setIsWebcamFullScreen(selectedZoom.webcamFullScreen === true);
     }
-  }, [selectedZoom?.id, selectedZoom?.zoomLevel]);
+  }, [
+    selectedZoom?.id,
+    selectedZoom?.zoomLevel,
+    selectedZoom?.webcamHeightRatio,
+    selectedZoom?.webcamFullScreen,
+    baseWebcamHeightRatio,
+  ]);
 
   // Debounced update handler
   const handleZoomLevelChange = useCallback(
@@ -100,11 +143,49 @@ export function ZoomPanel() {
     [selectedZoom, updateZoom],
   );
 
+  // Debounced webcam height ratio handler
+  const handleWebcamHeightRatioChange = useCallback(
+    (value: string) => {
+      if (isWebcamFullScreen) {
+        return;
+      }
+
+      const ratio = parseFloat(value);
+      if (isNaN(ratio) || ratio < 0.08 || ratio > 0.75) return;
+
+      setLocalWebcamHeightRatio(ratio);
+
+      if (webcamDebounceRef.current) {
+        clearTimeout(webcamDebounceRef.current);
+      }
+
+      webcamDebounceRef.current = setTimeout(() => {
+        if (selectedZoom) {
+          updateZoom({ ...selectedZoom, webcamHeightRatio: ratio });
+        }
+      }, 150);
+    },
+    [isWebcamFullScreen, selectedZoom, updateZoom],
+  );
+
+  const handleWebcamFullScreenChange = useCallback(
+    (checked: boolean) => {
+      setIsWebcamFullScreen(checked);
+      if (selectedZoom) {
+        updateZoom({ ...selectedZoom, webcamFullScreen: checked });
+      }
+    },
+    [selectedZoom, updateZoom],
+  );
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (debounceRef.current) {
         clearTimeout(debounceRef.current);
+      }
+      if (webcamDebounceRef.current) {
+        clearTimeout(webcamDebounceRef.current);
       }
     };
   }, []);
@@ -112,17 +193,37 @@ export function ZoomPanel() {
   const handleApplyToAll = useCallback(() => {
     if (!selectedZoom || zoomRegions.length <= 1) return;
 
+    const shouldApplyWebcamSettings = zoomSource === 'webcam';
+    const webcamHeightRatioToApply = selectedZoom.webcamHeightRatio ?? localWebcamHeightRatio;
+    const webcamFullScreenToApply = selectedZoom.webcamFullScreen ?? isWebcamFullScreen;
+
     // Build array of updated zoom regions
     const updatedZooms = zoomRegions
       .filter((z) => z.id !== selectedZoom.id)
-      .map((z) => ({ ...z, zoomLevel: selectedZoom.zoomLevel }));
+      .map((z) => ({
+        ...z,
+        zoomLevel: selectedZoom.zoomLevel,
+        ...(shouldApplyWebcamSettings
+          ? {
+              webcamHeightRatio: webcamHeightRatioToApply,
+              webcamFullScreen: webcamFullScreenToApply,
+            }
+          : {}),
+      }));
 
     // Use bulk update for efficiency
     updateZoomRegions(updatedZooms);
 
     setIsCopied(true);
     setTimeout(() => setIsCopied(false), 2000);
-  }, [selectedZoom, zoomRegions, updateZoomRegions]);
+  }, [
+    selectedZoom,
+    zoomRegions,
+    updateZoomRegions,
+    zoomSource,
+    localWebcamHeightRatio,
+    isWebcamFullScreen,
+  ]);
 
   /**
    * Apply smart panning to one or many zoom regions.
@@ -189,7 +290,7 @@ export function ZoomPanel() {
    * Groups rapid clicks (within GROUP_THRESHOLD_MS) into single zoom regions.
    */
   const generateZoomsFromClicks = useCallback(async () => {
-    if (!project) return;
+    if (!project || zoomSource !== 'screen') return;
 
     setIsGenerating(true);
 
@@ -264,13 +365,13 @@ export function ZoomPanel() {
       }
 
       // Replace all zoom regions with the generated ones (preserves focal points)
-      await replaceZoomRegions(newZooms);
+      await replaceZoomRegions(newZooms, 'screen');
     } catch {
       // Failed to generate zooms
     } finally {
       setIsGenerating(false);
     }
-  }, [project, replaceZoomRegions]);
+  }, [project, replaceZoomRegions, zoomSource]);
 
   const smartPanButton = (
     <Card className="p-4 shadow-sm border-2 border-brand/20 bg-linear-to-br from-brand-dark/10 to-transparent gap-2">
@@ -302,14 +403,22 @@ export function ZoomPanel() {
         {/* Smart Pan button - global mode */}
         {zoomRegions.length > 0 && smartPanButton}
 
-        {/* Generate Auto-Zooms button - always visible */}
-        <div className="pt-4 h-full ">
-          <AutoZoomButton
-            generateZoomsFromClicks={generateZoomsFromClicks}
-            isGenerating={isGenerating}
-            project={project}
-          />
-        </div>
+        {zoomSource === 'screen' && (
+          <div className="pt-4 h-full ">
+            <AutoZoomButton
+              generateZoomsFromClicks={generateZoomsFromClicks}
+              isGenerating={isGenerating}
+              project={project}
+            />
+          </div>
+        )}
+
+        {zoomSource === 'webcam' && (
+          <p className="pt-2 text-xs text-muted-foreground">
+            Auto Zoom creates regions for screen recording only. Switch the zoom source to screen to
+            generate auto zooms.
+          </p>
+        )}
       </div>
     );
   }
@@ -341,6 +450,57 @@ export function ZoomPanel() {
           />
         </div>
       </div>
+
+      {zoomSource === 'webcam' && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between rounded-md border border-border p-3">
+            <div className="space-y-1">
+              <Label htmlFor="webcam-full-screen" className="text-sm">
+                Full Canvas Webcam
+              </Label>
+              <p className="text-[11px] text-muted-foreground leading-snug">
+                Use webcam as the full frame for this timeline region.
+              </p>
+            </div>
+            <Switch
+              id="webcam-full-screen"
+              checked={isWebcamFullScreen}
+              onCheckedChange={handleWebcamFullScreenChange}
+            />
+          </div>
+
+          <Label htmlFor="webcam-height-ratio">Webcam Canvas Height</Label>
+          <div className="flex items-center gap-2">
+            <input
+              type="range"
+              id="webcam-height-ratio-slider"
+              min="0.08"
+              max="0.75"
+              step="0.01"
+              value={localWebcamHeightRatio}
+              onChange={(e) => handleWebcamHeightRatioChange(e.target.value)}
+              disabled={isWebcamFullScreen}
+              className="flex-1"
+            />
+            <Input
+              id="webcam-height-ratio"
+              type="number"
+              min="0.08"
+              max="0.75"
+              step="0.01"
+              value={localWebcamHeightRatio}
+              onChange={(e) => handleWebcamHeightRatioChange(e.target.value)}
+              disabled={isWebcamFullScreen}
+              className="w-20 font-mono text-xs h-8"
+            />
+          </div>
+          <p className="text-[11px] text-muted-foreground leading-snug">
+            {isWebcamFullScreen
+              ? 'Full-canvas mode is active for this region.'
+              : 'Controls the webcam overlay size within this region (0.08 - 0.75).'}
+          </p>
+        </div>
+      )}
 
       {zoomRegions.length > 1 && (
         <div className="pt-2">
@@ -403,14 +563,22 @@ export function ZoomPanel() {
       {/* Smart Pan button - local mode (selected region) */}
       {smartPanButton}
 
-      {/* Generate Auto-Zooms button */}
-      <div className="pt-4 border-t border-border">
-        <AutoZoomButton
-          generateZoomsFromClicks={generateZoomsFromClicks}
-          isGenerating={isGenerating}
-          project={project}
-        />
-      </div>
+      {zoomSource === 'screen' && (
+        <div className="pt-4 border-t border-border">
+          <AutoZoomButton
+            generateZoomsFromClicks={generateZoomsFromClicks}
+            isGenerating={isGenerating}
+            project={project}
+          />
+        </div>
+      )}
+
+      {zoomSource === 'webcam' && (
+        <p className="pt-4 text-xs text-muted-foreground border-t border-border">
+          Auto Zoom creates regions for screen recording only. Switch the zoom source to screen to
+          generate auto zooms.
+        </p>
+      )}
     </div>
   );
 }

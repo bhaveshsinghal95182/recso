@@ -103,25 +103,77 @@ export function drawWebcamLayer(
   frameHeight: number,
   webcamConfig: WebcamOverlayConfig,
   source: FrameVideoSource,
+  activeWebcamHeightRatio?: number,
+  activeWebcamFullScreenProgress = 0,
 ): void {
-  const layout = computeWebcamLayout(frameWidth, frameHeight, webcamConfig);
+  // When a zoom region overrides the webcam height ratio, create a modified
+  // config copy that forces layout recalculation with the new ratio.
+  const baseConfig =
+    activeWebcamHeightRatio !== undefined
+      ? { ...webcamConfig, heightRatio: activeWebcamHeightRatio, layout: undefined }
+      : webcamConfig;
+  const progress = clamp(activeWebcamFullScreenProgress, 0, 1);
 
-  drawWebcamShadowLayers(ctx, layout, webcamConfig);
+  const { effectiveConfig, layout } = (() => {
+    if (progress <= 0) {
+      const resolvedLayout = computeWebcamLayout(frameWidth, frameHeight, baseConfig);
+      return { effectiveConfig: baseConfig, layout: resolvedLayout };
+    }
+
+    const baseLayout = computeWebcamLayout(frameWidth, frameHeight, baseConfig);
+    const fullLayout: VideoLayout = {
+      x: 0,
+      y: 0,
+      width: frameWidth,
+      height: frameHeight,
+      scale: 1,
+    };
+    const mix = (from: number, to: number) => from + (to - from) * progress;
+    const blendedLayout: VideoLayout = {
+      x: mix(baseLayout.x, fullLayout.x),
+      y: mix(baseLayout.y, fullLayout.y),
+      width: mix(baseLayout.width, fullLayout.width),
+      height: mix(baseLayout.height, fullLayout.height),
+      scale: mix(baseLayout.scale, fullLayout.scale),
+    };
+    const baseOpacity = clamp(Number.isFinite(baseConfig.opacity) ? baseConfig.opacity : 1, 0, 1);
+
+    return {
+      effectiveConfig: {
+        ...baseConfig,
+        shape: 'rectangle-landscape' as const,
+        borderRadius: Math.max(0, baseConfig.borderRadius * (1 - progress)),
+        opacity: mix(baseOpacity, 1),
+        border: {
+          ...baseConfig.border,
+          width: Math.max(0, baseConfig.border.width * (1 - progress)),
+        },
+        shadows: progress >= 0.85 ? [] : baseConfig.shadows,
+      },
+      layout: blendedLayout,
+    };
+  })();
+
+  drawWebcamShadowLayers(ctx, layout, effectiveConfig);
 
   ctx.save();
-  const opacity = clamp(Number.isFinite(webcamConfig.opacity) ? webcamConfig.opacity : 1, 0, 1);
+  const opacity = clamp(
+    Number.isFinite(effectiveConfig.opacity) ? effectiveConfig.opacity : 1,
+    0,
+    1,
+  );
   if (opacity < 1) {
     ctx.globalAlpha = opacity;
   }
 
-  if (webcamConfig.border.width > 0) {
-    const borderWidth = webcamConfig.border.width;
-    beginWebcamShapePath(ctx, layout, webcamConfig, borderWidth);
-    ctx.fillStyle = webcamConfig.border.color;
+  if (effectiveConfig.border.width > 0) {
+    const borderWidth = effectiveConfig.border.width;
+    beginWebcamShapePath(ctx, layout, effectiveConfig, borderWidth);
+    ctx.fillStyle = effectiveConfig.border.color;
     ctx.fill();
   }
 
-  beginWebcamShapePath(ctx, layout, webcamConfig);
+  beginWebcamShapePath(ctx, layout, effectiveConfig);
   ctx.clip();
   source.draw(ctx, layout.x, layout.y, layout.width, layout.height);
   ctx.restore();

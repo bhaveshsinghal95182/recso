@@ -106,6 +106,8 @@ export interface BuildExportCompositionConfigOptions {
   webcamSourcePath: string | undefined;
   sourceDurationMs: number;
   preserveUnderlyingBackground: boolean;
+  screenZoomRegions?: Project['zoomRegions'];
+  webcamZoomRegions?: Project['zoomRegions'];
   mouseEvents: RecordedMouseEvent[];
 }
 
@@ -116,9 +118,14 @@ export function buildExportCompositionConfig({
   webcamSourcePath,
   sourceDurationMs,
   preserveUnderlyingBackground,
+  screenZoomRegions,
+  webcamZoomRegions,
   mouseEvents,
 }: BuildExportCompositionConfigOptions): CompositionConfig {
-  const hasZoomRegions = project.zoomRegions.length > 0;
+  const resolvedScreenZoomRegions =
+    screenZoomRegions ?? project.zoomRegionsBySource?.screen ?? project.zoomRegions;
+  const resolvedWebcamZoomRegions = webcamZoomRegions ?? project.zoomRegionsBySource?.webcam ?? [];
+  const hasZoomRegions = resolvedScreenZoomRegions.length > 0;
   const legacyZoomFallback = mapLegacyZoomConfigToZoomKeyframes(
     project.zoomConfig,
     sourceDurationMs,
@@ -195,7 +202,7 @@ export function buildExportCompositionConfig({
       : undefined,
     layout,
     zooms: legacyZoomFallback,
-    zoomRegions: project.zoomRegions.map((region) => ({
+    zoomRegions: resolvedScreenZoomRegions.map((region) => ({
       id: region.id,
       startMs: region.startMs,
       endMs: region.endMs,
@@ -204,6 +211,20 @@ export function buildExportCompositionConfig({
       focalY: region.focalY,
       easeDurationMs: region.easeDurationMs,
       focalKeyframes: region.focalKeyframes,
+      webcamHeightRatio: region.webcamHeightRatio,
+      webcamFullScreen: region.webcamFullScreen,
+    })),
+    webcamZoomRegions: resolvedWebcamZoomRegions.map((region) => ({
+      id: region.id,
+      startMs: region.startMs,
+      endMs: region.endMs,
+      zoomLevel: region.zoomLevel,
+      focalX: region.focalX,
+      focalY: region.focalY,
+      easeDurationMs: region.easeDurationMs,
+      focalKeyframes: region.focalKeyframes,
+      webcamHeightRatio: region.webcamHeightRatio,
+      webcamFullScreen: region.webcamFullScreen,
     })),
     cuts: project.cuts
       .filter((cut) => cut.targets?.screen ?? true)

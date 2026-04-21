@@ -193,8 +193,8 @@ function IconPillOption({
         showLabel ? 'gap-2 px-3' : 'justify-center px-2.5'
       } ${
         active
-          ? 'border-primary bg-primary text-primary-foreground shadow-sm'
-          : 'border-foreground/35 bg-background text-foreground/65 hover:border-primary/65 hover:bg-primary/10'
+          ? 'bg-primary text-primary-foreground shadow-sm'
+          : 'bg-background/90 text-foreground/65 hover:border-primary/65 hover:bg-primary/10'
       } ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
     >
       <Icon className={iconClassName ?? 'h-3.5 w-3.5'} />

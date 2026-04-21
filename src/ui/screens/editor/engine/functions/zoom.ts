@@ -1,5 +1,5 @@
 import type { CompositionConfig, CompositionZoomRegion, ZoomKeyframe, ZoomState } from '../types';
-import { clampNormalised, lerp, smoothstep } from './common';
+import { clamp, clampNormalised, lerp, smoothstep } from './common';
 
 function resolveRegionFocalPoint(
   region: CompositionZoomRegion,
@@ -133,4 +133,91 @@ export function computeZoomStateFromConfig(
   }
 
   return computeZoomState(t, config.zooms, frameWidth, frameHeight);
+}
+
+/**
+ * Resolve the active webcam heightRatio at a given timestamp by inspecting
+ * webcam-source zoom regions.
+ *
+ * Priority per active region:
+ * 1) explicit `webcamHeightRatio` override (if present)
+ * 2) derived ratio from `baseHeightRatio * zoomLevel`
+ *
+ * Returns `undefined` when no region applies.
+ */
+export function computeActiveWebcamHeightRatio(
+  timestampMs: number,
+  zoomRegions: CompositionZoomRegion[],
+  baseHeightRatio: number,
+): number | undefined {
+  for (const region of zoomRegions) {
+    if (timestampMs >= region.startMs && timestampMs <= region.endMs) {
+      const explicitTarget = Number.isFinite(region.webcamHeightRatio)
+        ? (region.webcamHeightRatio as number)
+        : undefined;
+      const zoomLevel = Number.isFinite(region.zoomLevel) ? region.zoomLevel : 1;
+      const derivedTarget = baseHeightRatio * Math.max(0.1, zoomLevel);
+      const targetHeightRatio = clamp(explicitTarget ?? derivedTarget, 0.08, 0.75);
+      const easeDurationMs = Math.max(0, region.easeDurationMs);
+      let eased = 1;
+
+      if (easeDurationMs > 0 && timestampMs < region.startMs + easeDurationMs) {
+        eased = smoothstep((timestampMs - region.startMs) / easeDurationMs);
+      } else if (easeDurationMs > 0 && timestampMs > region.endMs - easeDurationMs) {
+        eased = smoothstep((region.endMs - timestampMs) / easeDurationMs);
+      }
+
+      return lerp(baseHeightRatio, targetHeightRatio, eased);
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Resolve the active webcam full-canvas transition progress at a timestamp.
+ *
+ * Returns a value in [0, 1] where:
+ * - 0 = normal webcam overlay layout
+ * - 1 = webcam fully expanded to canvas
+ */
+export function computeActiveWebcamFullScreenProgress(
+  timestampMs: number,
+  zoomRegions: CompositionZoomRegion[],
+): number {
+  for (const region of zoomRegions) {
+    if (
+      timestampMs >= region.startMs &&
+      timestampMs <= region.endMs &&
+      region.webcamFullScreen === true
+    ) {
+      const easeDurationMs = Math.max(0, region.easeDurationMs);
+      if (easeDurationMs <= 0) {
+        return 1;
+      }
+
+      let eased = 1;
+      if (timestampMs < region.startMs + easeDurationMs) {
+        eased = smoothstep((timestampMs - region.startMs) / easeDurationMs);
+      } else if (timestampMs > region.endMs - easeDurationMs) {
+        eased = smoothstep((region.endMs - timestampMs) / easeDurationMs);
+      }
+
+      return clamp(eased, 0, 1);
+    }
+  }
+
+  return 0;
+}
+
+/**
+ * Resolve whether webcam full-canvas mode is active at a given timestamp.
+ *
+ * Returns true when an active webcam-source region has `webcamFullScreen` enabled.
+ */
+export function computeActiveWebcamFullScreen(
+  timestampMs: number,
+  zoomRegions: CompositionZoomRegion[],
+): boolean {
+  return computeActiveWebcamFullScreenProgress(timestampMs, zoomRegions) > 0;
 }

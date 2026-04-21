@@ -224,6 +224,10 @@ export interface ZoomRegion {
   focalY: number;
   /** Duration of ease in/out animation in milliseconds */
   easeDurationMs: number;
+  /** Optional webcam canvas height override (0-1) for webcam zoom timelines. */
+  webcamHeightRatio?: number;
+  /** Optional full-canvas webcam mode for webcam zoom timelines. */
+  webcamFullScreen?: boolean;
   /**
    * Optional focal-point keyframes produced by smart pan.
    * When present the renderer interpolates between them instead of

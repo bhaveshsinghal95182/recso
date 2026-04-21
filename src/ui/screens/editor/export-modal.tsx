@@ -26,6 +26,7 @@ import {
 import { useExportStore } from '@/store/export-store';
 import { usePlaybackStore } from '@/store/playback-store';
 import { useProjectStore } from '@/store/project-store';
+import { useTimelineStore } from '@/store/timeline-store';
 import type {
   ExportConfig,
   ExportFormat,
@@ -69,6 +70,7 @@ const FPS_OPTIONS: { value: ExportFPS; label: string }[] = [
 
 export function ExportModal({ open, onOpenChange }: ExportModalProps) {
   const { project, mouseEvents } = useProjectStore();
+  const { zoomRegionsBySource } = useTimelineStore();
   const {
     state: exportState,
     progress,
@@ -158,6 +160,8 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
       const rendered = await runEngineCanvasExport({
         project,
         config,
+        screenZoomRegions: zoomRegionsBySource.screen,
+        webcamZoomRegions: zoomRegionsBySource.webcam,
         mouseEvents,
         onProgress: (nextProgress) => {
           setProgress(nextProgress);
@@ -209,6 +213,7 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
     fps,
     fileName,
     outputFolder,
+    zoomRegionsBySource,
     setExportState,
     setProgress,
     setResult,

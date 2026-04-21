@@ -28,6 +28,7 @@ export function useEnginePreviewConfigMapper(
   zoomRegions: ZoomRegion[],
   cuts: CutRegion[],
   mouseEvents: RecordedMouseEvent[],
+  webcamZoomRegions?: ZoomRegion[],
 ): PreviewMappedConfig {
   const durationMs = project?.timeline?.duration || 0;
   const [canvasSize, setCanvasSize] = useState<CanvasSize>(DEFAULT_CANVAS_SIZE);
@@ -142,6 +143,7 @@ export function useEnginePreviewConfigMapper(
         mouseEvents,
         webcamLayout,
         webcamSourcePath,
+        webcamZoomRegions,
       }),
     [
       cuts,
@@ -152,6 +154,7 @@ export function useEnginePreviewConfigMapper(
       webcamLayout,
       webcamSourcePath,
       zoomRegions,
+      webcamZoomRegions,
     ],
   );
 

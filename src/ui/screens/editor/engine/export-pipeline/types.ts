@@ -1,4 +1,10 @@
-import type { ExportConfig, ExportProgress, Project, RecordedMouseEvent } from '@/types';
+import type {
+  ExportConfig,
+  ExportProgress,
+  Project,
+  RecordedMouseEvent,
+  ZoomRegion,
+} from '@/types';
 
 import type { CanvasCoverFrameSource } from '../adapters';
 
@@ -11,6 +17,8 @@ export interface EngineCanvasExportResult {
 export interface EngineCanvasExportOptions {
   project: Project;
   config: ExportConfig;
+  screenZoomRegions?: ZoomRegion[];
+  webcamZoomRegions?: ZoomRegion[];
   mouseEvents?: RecordedMouseEvent[];
   onProgress?: (progress: ExportProgress) => void;
   onCancelReady?: (cancel: () => void) => void;
