@@ -35,6 +35,7 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
   const [videoBitrate, setVideoBitrate] = useState(5000000);
   const [format, setFormat] = useState<string>(formats[0].value);
   const [isStarting, setIsStarting] = useState(false);
+  const [isLoading, setIsLoading] = useState(sources.length === 0);
 
   // Add-on Devices State
   const [recordMic, setRecordMic] = useState(false);
@@ -65,6 +66,12 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
     };
     loadDefaults();
   }, []);
+
+  useEffect(() => {
+    if (sources.length > 0) {
+      setIsLoading(false);
+    }
+  }, [sources]);
 
   // Handle source selection -> transition to ready view
   const handleSourceSelect = (id: string) => {
@@ -157,7 +164,8 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
                   sources={sources}
                   selectedSourceId={selectedSourceId}
                   onSelect={handleSourceSelect}
-                  isLoading={sources.length === 0}
+                  isLoading={isLoading}
+                  setIsLoading={setIsLoading}
                   onRefresh={refreshSources}
                 />
               </div>

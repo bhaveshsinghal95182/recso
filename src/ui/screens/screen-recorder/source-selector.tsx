@@ -11,7 +11,8 @@ interface SourceSelectorProps {
   sources: DesktopSource[];
   selectedSourceId: string | null;
   onSelect: (id: string) => void;
-  isLoading?: boolean;
+  isLoading: boolean;
+  setIsLoading: (loading: boolean) => void;
   onRefresh?: () => void;
 }
 
@@ -20,6 +21,7 @@ export function SourceSelector({
   selectedSourceId,
   onSelect,
   isLoading,
+  setIsLoading,
   onRefresh,
 }: SourceSelectorProps) {
   const [activeTab, setActiveTab] = useState<'all' | 'screen' | 'window'>('all');
@@ -72,7 +74,11 @@ export function SourceSelector({
             <Button
               variant="ghost"
               size="icon"
-              onClick={onRefresh}
+              onClick={async () => {
+                setIsLoading(true);
+                await onRefresh?.();
+                setIsLoading(false);
+              }}
               className="relative hover:bg-primary/20 hover:text-primary transition-colors"
               disabled={isLoading}
             >
