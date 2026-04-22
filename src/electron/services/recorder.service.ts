@@ -126,7 +126,33 @@ let activeRecording: ActiveRecording | null = null;
 let velocityBindingsCache: VelocityBindings | null = null;
 let sourceMetaById = new Map<string, SourceMeta>();
 
+const START_RECORDING_GENERIC_ERROR = 'Unable to start recording. Refresh sources and try again.';
+const START_RECORDING_WINDOW_UNAVAILABLE_ERROR =
+  'Selected window is no longer available. Refresh sources and try again.';
+const START_RECORDING_ENGINE_UNAVAILABLE_ERROR =
+  'Recording engine is unavailable right now. Please restart Recso and try again.';
+
 const require = createRequire(import.meta.url);
+
+function getSafeStartRecordingError(error: unknown, sourceId: string): string {
+  const message = (error instanceof Error ? error.message : String(error ?? '')).toLowerCase();
+  const isWindowSource =
+    sourceId.startsWith('velocity-window:') || sourceId.startsWith('fallback-window:');
+
+  if (isWindowSource) {
+    return START_RECORDING_WINDOW_UNAVAILABLE_ERROR;
+  }
+
+  if (
+    message.includes('velocity bindings not found') ||
+    message.includes('cannot find native binding') ||
+    message.includes('failed to load native binding')
+  ) {
+    return START_RECORDING_ENGINE_UNAVAILABLE_ERROR;
+  }
+
+  return START_RECORDING_GENERIC_ERROR;
+}
 
 function getVelocityBindings(): VelocityBindings {
   if (velocityBindingsCache) {
@@ -919,10 +945,12 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
     closeAuxStreams(auxStreams);
     cleanupAuxTempFiles(auxStreams);
 
+    const safeError = getSafeStartRecordingError(error, config.sourceId);
+
     console.error('[RecorderService] Failed to start hybrid recording:', error);
     return {
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error: safeError,
     };
   }
 }
