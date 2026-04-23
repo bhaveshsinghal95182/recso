@@ -45,7 +45,7 @@ export function SourceSelector({
       </div>
 
       <div className="flex items-center justify-between p-4 z-10 border-b border-border/40 bg-background/20 backdrop-blur-md">
-        <div className="flex items-center gap-1 bg-muted/30 p-1 rounded-lg border border-border/20">
+        <div className="flex items-center gap-1 bg-muted p-1 rounded-lg border border-border/20 shadow-dig-m">
           <TabButton
             active={activeTab === 'all'}
             onClick={() => setActiveTab('all')}
@@ -197,7 +197,7 @@ function SourceCard({
     >
       <div
         className={cn(
-          'relative overflow-hidden rounded-xl border-2 transition-all duration-300',
+          'relative overflow-hidden rounded-xl border-2 transition-all duration-300 shadow-l',
           isSelected
             ? 'border-primary shadow-[0_0_20px_-5px_hsl(var(--primary))]'
             : 'border-transparent hover:border-white/20 hover:bg-white/5',
@@ -233,22 +233,22 @@ function SourceCard({
 
         <div
           className={cn(
-            'p-3 border-t backdrop-blur-md transition-colors',
-            isSelected
-              ? 'bg-primary/10 border-primary/20'
-              : 'bg-background/40 border-white/5 group-hover:bg-background/60',
+            'p-3 border-t transition-colors bg-accent/40',
+            // isSelected
+            //   ? 'bg-primary/10 border-primary/20'
+            //   : 'bg-background/40 border-white/5 group-hover:bg-background/60',
           )}
         >
           <div className="flex items-center gap-2">
             <div
               className={cn(
-                'p-1.5 rounded-md',
+                'p-1.5 rounded-md shadow-m',
                 isSelected ? 'bg-primary/20 text-primary' : 'bg-muted/50 text-muted-foreground',
               )}
             >
               {source.isScreen ? <Monitor size={14} /> : <AppWindow size={14} />}
             </div>
-            <span className="text-xs font-medium truncate flex-1 opacity-90" title={source.name}>
+            <span className="text-s font-medium truncate flex-1 opacity-90" title={source.name}>
               {source.name}
             </span>
           </div>

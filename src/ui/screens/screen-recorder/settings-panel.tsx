@@ -1,4 +1,4 @@
-import { ChevronDown, FolderOpen, Mic, Settings, Video, Volume2 } from 'lucide-react';
+import { Mic, Video, Volume2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -15,7 +15,6 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 
-import { FormatSelector } from './format-selector';
 import { QualitySelector } from './quality-selector';
 
 interface SettingsPanelProps {
@@ -45,7 +44,6 @@ export function SettingsPanel({
   outputDir,
   fileName,
   videoBitrate,
-  format,
   recordMic,
   recordCamera,
   recordSystemAudio,
@@ -56,7 +54,6 @@ export function SettingsPanel({
   onOutputDirChange,
   onFileNameChange,
   onVideoBitrateChange,
-  onFormatChange,
   onRecordMicChange,
   onRecordCameraChange,
   onRecordSystemAudioChange,
@@ -64,7 +61,6 @@ export function SettingsPanel({
   onMicDeviceChange,
 }: SettingsPanelProps) {
   const [isValid, setIsValid] = useState(true);
-  const [showAdvanced, setShowAdvanced] = useState(false);
   // const [supportId, setSupportId] = useState<string>('');
   // const [copied, setCopied] = useState(false);
 
@@ -98,34 +94,40 @@ export function SettingsPanel({
 
   return (
     <Card className="border-0 shadow-none bg-transparent p-0">
-      <CardContent className="space-y-4 p-0">
+      <CardContent className="space-y-5 p-0">
         <div className="space-y-2">
-          <Label htmlFor="fileName">File Name</Label>
+          <Label htmlFor="fileName" className="text-foreground/60">
+            File Name
+          </Label>
           <Input
             id="fileName"
             value={fileName}
             onChange={(e) => onFileNameChange(e.target.value)}
             placeholder="recording_name"
+            className="shadow-s!"
           />
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="outputDir">Output Folder</Label>
+          <Label htmlFor="outputDir" className="text-foreground/60">
+            Output Folder
+          </Label>
           <div className="flex gap-2">
-            <Input
+            {/* <Input
               id="outputDir"
               value={outputDir}
               readOnly
               className={cn(!isValid && 'border-red-500 bg-red-50')}
               title={outputDir}
-            />
+            /> */}
             <Button
               variant="outline"
-              size="icon"
+              size="default"
               onClick={handleBrowse}
               title="Select Output Folder"
+              className="w-full justify-between shadow-m! border-none"
             >
-              <FolderOpen className="h-4 w-4" />
+              {outputDir}
             </Button>
           </div>
           {!isValid && (
@@ -134,124 +136,91 @@ export function SettingsPanel({
         </div>
 
         {/* Add-on Devices */}
-        <div className="grid grid-cols-3 gap-4 pb-2 border-b border-border/50">
-          {/* Microphone Card */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Mic size={16} className={cn('text-muted-foreground', recordMic && 'text-brand')} />
-                <Label htmlFor="record-mic" className="cursor-pointer">
-                  Microphone
-                </Label>
-              </div>
-              <Switch id="record-mic" checked={recordMic} onCheckedChange={onRecordMicChange} />
+        {/* Microphone Card */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Mic size={16} className={cn('text-muted-foreground', recordMic && 'text-brand')} />
+              <Label htmlFor="record-mic" className="cursor-pointer">
+                Microphone
+              </Label>
             </div>
-            {recordMic && microphones.length > 0 && (
-              <Select
-                value={micDeviceId || microphones[0]?.deviceId}
-                onValueChange={(val) => val && onMicDeviceChange(val)}
-              >
-                <SelectTrigger className="h-8 text-xs">
-                  <SelectValue placeholder="Select Microphone" />
-                </SelectTrigger>
-                <SelectContent>
-                  {microphones.map((mic) => (
-                    <SelectItem key={mic.deviceId} value={mic.deviceId}>
-                      {mic.label || 'Default Microphone'}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
+            <Switch id="record-mic" checked={recordMic} onCheckedChange={onRecordMicChange} />
           </div>
-
-          {/* Camera Card */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Video
-                  size={16}
-                  className={cn('text-muted-foreground', recordCamera && 'text-brand')}
-                />
-                <Label htmlFor="record-cam" className="cursor-pointer">
-                  Webcam
-                </Label>
-              </div>
-              <Switch
-                id="record-cam"
-                checked={recordCamera}
-                onCheckedChange={onRecordCameraChange}
-              />
-            </div>
-            {recordCamera && cameras.length > 0 && (
-              <Select
-                value={cameraDeviceId || cameras[0]?.deviceId}
-                onValueChange={(val) => val && onCameraDeviceChange(val)}
-              >
-                <SelectTrigger className="h-8 text-xs">
-                  <SelectValue placeholder="Select Camera" />
-                </SelectTrigger>
-                <SelectContent>
-                  {cameras.map((cam) => (
-                    <SelectItem key={cam.deviceId} value={cam.deviceId}>
-                      {cam.label || 'Default Camera'}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          </div>
-
-          {/* System Audio Card */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Volume2
-                  size={16}
-                  className={cn('text-muted-foreground', recordSystemAudio && 'text-brand')}
-                />
-                <Label htmlFor="record-system-audio" className="cursor-pointer">
-                  System Audio
-                </Label>
-              </div>
-              <Switch
-                id="record-system-audio"
-                checked={recordSystemAudio}
-                onCheckedChange={onRecordSystemAudioChange}
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Advanced Settings Toggle */}
-        <button
-          type="button"
-          onClick={() => setShowAdvanced(!showAdvanced)}
-          className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors w-full pt-2"
-        >
-          <Settings size={14} />
-          <span>Advanced Settings</span>
-          <ChevronDown
-            size={14}
-            className={cn('ml-auto transition-transform', showAdvanced && 'rotate-180')}
-          />
-        </button>
-
-        {/* Advanced Settings Content */}
-        <div
-          className={cn(
-            'overflow-hidden transition-all duration-200',
-            showAdvanced ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0',
+          {recordMic && microphones.length > 0 && (
+            <Select
+              value={micDeviceId || microphones[0]?.deviceId}
+              onValueChange={(val) => val && onMicDeviceChange(val)}
+            >
+              <SelectTrigger className="h-8 text-xs shadow-s">
+                <SelectValue placeholder="Select Microphone" />
+              </SelectTrigger>
+              <SelectContent className="w-full">
+                {microphones.map((mic) => (
+                  <SelectItem key={mic.deviceId} value={mic.deviceId}>
+                    {mic.label || 'Default Microphone'}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           )}
-        >
-          <div className="space-y-4 pt-2 border-t border-border/50">
-            {/* Quality/Bitrate Selector */}
-            <div className="space-y-4">
-              <QualitySelector value={videoBitrate} onChange={onVideoBitrateChange} />
-              <FormatSelector value={format} onChange={onFormatChange} />
+        </div>
+
+        {/* Camera Card */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Video
+                size={16}
+                className={cn('text-muted-foreground', recordCamera && 'text-brand')}
+              />
+              <Label htmlFor="record-cam" className="cursor-pointer">
+                Webcam
+              </Label>
             </div>
+            <Switch id="record-cam" checked={recordCamera} onCheckedChange={onRecordCameraChange} />
+          </div>
+          {recordCamera && cameras.length > 0 && (
+            <Select
+              value={cameraDeviceId || cameras[0]?.deviceId}
+              onValueChange={(val) => val && onCameraDeviceChange(val)}
+            >
+              <SelectTrigger className="h-8 w-50 text-xs shadow-s">
+                <SelectValue placeholder="Select Camera" />
+              </SelectTrigger>
+              <SelectContent className="w-full">
+                {cameras.map((cam) => (
+                  <SelectItem key={cam.deviceId} value={cam.deviceId}>
+                    {cam.label || 'Default Camera'}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </div>
+
+        {/* System Audio Card */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Volume2
+                size={16}
+                className={cn('text-muted-foreground', recordSystemAudio && 'text-brand')}
+              />
+              <Label htmlFor="record-system-audio" className="cursor-pointer">
+                System Audio
+              </Label>
+            </div>
+            <Switch
+              id="record-system-audio"
+              checked={recordSystemAudio}
+              onCheckedChange={onRecordSystemAudioChange}
+            />
           </div>
         </div>
+
+        <QualitySelector value={videoBitrate} onChange={onVideoBitrateChange} />
+        {/* <FormatSelector value={format} onChange={onFormatChange} /> */}
 
         {/* Support ID */}
         {/* {supportId && (

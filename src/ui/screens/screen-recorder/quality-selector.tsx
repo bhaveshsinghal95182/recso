@@ -15,7 +15,7 @@ export function QualitySelector({ value, onChange }: QualitySelectorProps) {
 
   return (
     <Field.Root className="flex flex-col gap-1 w-full">
-      <Field.Label className="cursor-default text-sm leading-5 font-medium text-foreground">
+      <Field.Label className="cursor-default text-sm leading-5 font-medium text-foreground/80">
         Video Quality
       </Field.Label>
       <Select.Root
@@ -23,7 +23,7 @@ export function QualitySelector({ value, onChange }: QualitySelectorProps) {
         onValueChange={(val) => val && onChange(val.value)}
         itemToStringValue={(item) => String(item.value)}
       >
-        <Select.Trigger className="flex min-h-10 w-full items-start justify-between gap-3 rounded-md border border-input pr-3 pl-3.5 py-2 text-base bg-transparent dark:bg-input/30 text-foreground select-none hover:bg-muted/50 data-[popup-open]:bg-muted shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]">
+        <Select.Trigger className="flex min-h-10 w-full items-start justify-between gap-3 rounded-md border border-input pr-3 pl-3.5 py-2 text-base bg-transparent dark:bg-input/30 text-foreground select-none hover:bg-muted/50 data-[popup-open]:bg-muted transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] shadow-s">
           <Select.Value>
             {(item) => {
               const parts = item.label.split(' (');

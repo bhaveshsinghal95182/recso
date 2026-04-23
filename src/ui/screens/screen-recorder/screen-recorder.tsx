@@ -223,7 +223,7 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
 
               {/* Right: Controls & Settings */}
               <div className="w-full md:w-80 flex flex-col gap-6 shrink-0">
-                <Card className="p-4 bg-card/80 backdrop-blur-sm">
+                <div className="p-4 bg-card/80 backdrop-blur-sm shadow-s rounded-lg">
                   <SettingsPanel
                     outputDir={outputDir}
                     fileName={fileName}
@@ -246,7 +246,7 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
                     onCameraDeviceChange={setCameraDeviceId}
                     onMicDeviceChange={setMicDeviceId}
                   />
-                </Card>
+                </div>
 
                 <div className="mt-4">
                   <RecordingControls
