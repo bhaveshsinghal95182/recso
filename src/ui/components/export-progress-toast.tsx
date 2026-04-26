@@ -76,7 +76,7 @@ export function ExportProgressToast() {
     }
 
     // Show success toast when complete
-    if (state === 'complete' && result?.success) {
+    if (state === 'complete' && result?.success && !isModalOpen) {
       toast.dismiss('export-progress');
       toast.success('Export Complete!', {
         description: `File saved successfully`,
@@ -93,7 +93,7 @@ export function ExportProgressToast() {
     }
 
     // Show error toast when failed
-    if (state === 'error' && result && !result.success) {
+    if (state === 'error' && result && !result.success && !isModalOpen) {
       toast.dismiss('export-progress');
       toast.error('Export Failed', {
         description: result.error || 'Unknown error occurred',

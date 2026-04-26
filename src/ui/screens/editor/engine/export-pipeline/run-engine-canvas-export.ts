@@ -123,12 +123,15 @@ export async function runEngineCanvasExport({
       preparedWebcamSource,
       cancelRequestedRef,
       onProgress: (fraction, totalFrames, startedAtMs) => {
-        onProgress?.(createProgressSnapshot(fraction, totalFrames, startedAtMs));
+        onProgress?.(createProgressSnapshot(fraction, totalFrames, startedAtMs, 'composition'));
       },
       onCancelHookReady: (cancel) => {
         cancelConversion = cancel;
       },
     });
+
+    // Report composition complete, export starting
+    onProgress?.(createProgressSnapshot(1, totalFrames, startedAtMs, 'composition'));
 
     const outputBuffer =
       project.webcamOverlay?.enabled && webcamSourceUrl
@@ -138,10 +141,13 @@ export async function runEngineCanvasExport({
             compositionConfig.cuts,
             compositionDurationMs / 1000,
             () => cancelRequestedRef.current,
+            (fraction) => {
+              onProgress?.(createProgressSnapshot(fraction, totalFrames, startedAtMs, 'export'));
+            },
           )
         : encodedBuffer;
 
-    onProgress?.(createProgressSnapshot(1, totalFrames, startedAtMs));
+    onProgress?.(createProgressSnapshot(1, totalFrames, startedAtMs, 'export'));
 
     return {
       buffer: outputBuffer,

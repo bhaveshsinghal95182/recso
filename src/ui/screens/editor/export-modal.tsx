@@ -10,7 +10,8 @@
  */
 
 import { Dialog } from '@base-ui/react/dialog';
-import { Download, FolderOpen, Loader2, X } from 'lucide-react';
+import confetti from 'canvas-confetti';
+import { Check, Download, FolderOpen, Loader2, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -108,9 +109,17 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
     setModalOpen(open);
   }, [open, setModalOpen]);
 
-  // Reset state and pause playback when modal opens
+  // Track previous open state to detect open transitions
+  const prevOpenRef = useRef(false);
+
+  // Reset state and pause playback when modal first opens (closed→open transition).
+  // We intentionally do NOT react to exportState changes here — doing so would
+  // reset the 'complete'/'error' states before the user sees them.
   useEffect(() => {
-    if (open) {
+    const wasOpen = prevOpenRef.current;
+    prevOpenRef.current = open;
+
+    if (open && !wasOpen) {
       // Only reset if not currently exporting
       if (exportState !== 'exporting') {
         reset();
@@ -186,6 +195,13 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
         fileSize: writeResult.fileSize ?? rendered.fileSize,
       });
       setExportState('complete');
+
+      // Trigger confetti
+      confetti({
+        particleCount: 100,
+        spread: 70,
+        origin: { y: 0.6 },
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Export failed';
 
@@ -338,23 +354,6 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
                 )}
               </div>
 
-              {/* Format */}
-              <div className="space-y-2">
-                <Label>Format</Label>
-                <Select value={format} onValueChange={(val) => setFormat(val as ExportFormat)}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {FORMAT_OPTIONS.map((opt) => (
-                      <SelectItem key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
               {/* Quality */}
               <div className="space-y-2">
                 <Label>Quality</Label>
@@ -424,40 +423,18 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
           {/* Exporting Step */}
           {step === 'exporting' && progress && (
             <div className="space-y-4">
-              {/* Composition Progress */}
+              {/* Overall Progress */}
               <div className="space-y-2">
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Composition</span>
-                  <span className="font-medium">
-                    {progress.stage === 'composition'
-                      ? `${Math.round(progress.stagePercent)}%`
-                      : '100%'}
+                  <span className="text-muted-foreground">
+                    {progress.stage === 'composition' ? 'Compositing...' : 'Finalizing...'}
                   </span>
+                  <span className="font-medium">{progress.percent}%</span>
                 </div>
                 <div className="h-2 bg-muted rounded-full overflow-hidden">
                   <div
                     className="h-full bg-primary transition-all duration-300 ease-out"
-                    style={{
-                      width: `${progress.stage === 'composition' ? progress.stagePercent : 100}%`,
-                    }}
-                  />
-                </div>
-              </div>
-
-              {/* Export Progress */}
-              <div className="space-y-2">
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Exporting</span>
-                  <span className="font-medium">
-                    {progress.stage === 'export' ? `${Math.round(progress.stagePercent)}%` : '0%'}
-                  </span>
-                </div>
-                <div className="h-2 bg-muted rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-primary transition-all duration-300 ease-out"
-                    style={{
-                      width: `${progress.stage === 'export' ? progress.stagePercent : 0}%`,
-                    }}
+                    style={{ width: `${progress.percent}%` }}
                   />
                 </div>
               </div>
@@ -483,27 +460,28 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
 
           {/* Complete Step */}
           {step === 'complete' && result && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-center py-4">
-                <div className="size-16 bg-green-500/10 rounded-full flex items-center justify-center">
-                  <Download className="size-8 text-green-500" />
+            <div className="space-y-6">
+              <div className="flex flex-col items-center justify-center py-6">
+                <div className="size-20 bg-green-500/10 rounded-full flex items-center justify-center mb-4 relative">
+                  <div className="absolute inset-0 rounded-full bg-green-500/20 animate-ping" />
+                  <Check className="size-10 text-green-500 relative z-10" />
                 </div>
-              </div>
-
-              <div className="text-center space-y-1">
-                <p className="font-medium">Export Successful!</p>
-                <p className="text-sm text-muted-foreground">
-                  File size: {formatFileSize(result.fileSize)}
+                <h3 className="text-xl font-semibold text-foreground">Done!</h3>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Export successful • {formatFileSize(result.fileSize)}
                 </p>
               </div>
 
-              <div className="flex gap-3">
-                <Button variant="outline" onClick={handleOpenFolder} className="flex-1">
-                  <FolderOpen className="size-4" />
-                  Show in Folder
+              <div className="flex flex-col gap-3">
+                <Button
+                  onClick={handleOpenFolder}
+                  className="w-full bg-primary hover:bg-primary/90 text-primary-foreground"
+                >
+                  <FolderOpen className="mr-2 size-4" />
+                  Open Export Folder
                 </Button>
-                <Button onClick={() => onOpenChange(false)} className="flex-1">
-                  Done
+                <Button variant="outline" onClick={() => onOpenChange(false)} className="w-full">
+                  Close
                 </Button>
               </div>
             </div>

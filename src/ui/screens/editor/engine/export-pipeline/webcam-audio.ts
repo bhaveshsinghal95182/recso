@@ -45,6 +45,7 @@ export async function appendWebcamAudioTrack(
   cuts: CompositionConfig['cuts'],
   compositionDurationSeconds: number,
   isCancelRequested: () => boolean,
+  onProgress?: (fraction: number) => void,
 ): Promise<ArrayBuffer> {
   const {
     ALL_FORMATS,
@@ -75,6 +76,8 @@ export async function appendWebcamAudioTrack(
   }
 
   const webcamBlob = await webcamResponse.blob();
+  onProgress?.(0.1);
+
   const renderedInput = new Input({
     source: new BlobSource(new Blob([renderedBuffer])),
     formats: ALL_FORMATS,
@@ -147,6 +150,7 @@ export async function appendWebcamAudioTrack(
       readTimedAudioBuffers(renderedAudioTrack),
       readTimedAudioBuffers(webcamAudioTrack),
     ]);
+    onProgress?.(0.3);
 
     const mappedWebcamAudioBuffers: TimedAudioBuffer[] = webcamAudioBuffers
       .map((wrapped) => {
@@ -229,6 +233,7 @@ export async function appendWebcamAudioTrack(
 
     const mixedAudioBuffer = await mixContext.startRendering();
     normaliseAudioBufferInPlace(mixedAudioBuffer);
+    onProgress?.(0.5);
 
     remuxOutput = new Output({
       format: new Mp4OutputFormat({ fastStart: 'in-memory' }),
@@ -253,6 +258,7 @@ export async function appendWebcamAudioTrack(
 
     let renderedVideoPacket = await renderedVideoSink.getFirstPacket();
     let wroteRenderedVideo = false;
+    let packetIndex = 0;
     while (renderedVideoPacket) {
       if (isCancelRequested()) {
         throw new Error('Export cancelled');
@@ -266,6 +272,12 @@ export async function appendWebcamAudioTrack(
       );
 
       wroteRenderedVideo = true;
+      packetIndex += 1;
+      // Report remux progress in the 50%–85% range (packet count isn't known upfront,
+      // so we use a diminishing-returns curve that asymptotically approaches 0.85).
+      if (packetIndex % 20 === 0) {
+        onProgress?.(0.5 + 0.35 * (1 - 1 / (1 + packetIndex / 200)));
+      }
       renderedVideoPacket = await renderedVideoSink.getNextPacket(renderedVideoPacket);
     }
 
@@ -279,6 +291,7 @@ export async function appendWebcamAudioTrack(
     }
 
     await mixedAudioSource.add(mixedAudioBuffer);
+    onProgress?.(0.9);
 
     await remuxOutput.finalize();
     return remuxTarget.buffer ?? renderedBuffer;

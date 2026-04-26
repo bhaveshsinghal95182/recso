@@ -38,6 +38,12 @@ export function registerExporterHandlers(): void {
     return true;
   });
 
+  // Open specific file with the default system app
+  ipcMain.handle('exporter:open-file', async (_event, filePath: string) => {
+    const errorMessage = await shell.openPath(filePath);
+    return errorMessage.length === 0;
+  });
+
   // Resolve an output path using exporter naming rules
   ipcMain.handle('exporter:resolve-output-path', async (_event, config: ExportConfig) => {
     return exporterService.resolveOutputPath(config);
