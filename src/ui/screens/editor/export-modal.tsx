@@ -463,7 +463,6 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
             <div className="space-y-6">
               <div className="flex flex-col items-center justify-center py-6">
                 <div className="size-20 bg-green-500/10 rounded-full flex items-center justify-center mb-4 relative">
-                  <div className="absolute inset-0 rounded-full bg-green-500/20 animate-ping" />
                   <Check className="size-10 text-green-500 relative z-10" />
                 </div>
                 <h3 className="text-xl font-semibold text-foreground">Done!</h3>

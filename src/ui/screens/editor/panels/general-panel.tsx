@@ -53,6 +53,7 @@ export function GeneralPanel() {
     } else {
       updateBackgroundColor('transparent');
       updateBackgroundPattern(null); // Clear the pattern when background is disabled
+      updateBackgroundPath(null); // Clear the custom image when background is disabled
     }
   };
 
