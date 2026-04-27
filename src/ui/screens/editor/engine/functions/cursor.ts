@@ -10,6 +10,7 @@ const DEFAULT_CURSOR_SIZE_PX = 22;
 const MOTION_BLUR_TRAIL_MS = 90;
 const MAX_MOTION_BLUR_EVENT_GAP_MS = 260;
 const MOTION_BLUR_SPEED_SCALE = 220;
+const KNOWN_IBEAM_CURSOR_HANDLES = new Set<number>([0x10005, 0x7f01]);
 const cursorImageCache = new Map<string, HTMLImageElement | null>();
 const cursorImageLoading = new Set<string>();
 
@@ -19,11 +20,44 @@ interface CursorSample {
   cursorDataUrl?: string;
   cursorHotspotX?: number;
   cursorHotspotY?: number;
+  cursorHandleHex?: string;
   motionBlurFromX?: number;
   motionBlurFromY?: number;
   motionBlurIntensity?: number;
   clickProgress?: number;
   button?: 'left' | 'right' | 'middle';
+}
+
+function parseCursorHandleHex(cursorHandleHex: string | undefined): number | null {
+  if (!cursorHandleHex) {
+    return null;
+  }
+
+  const raw = cursorHandleHex.trim();
+  if (raw.length === 0) {
+    return null;
+  }
+
+  if (/^0x[0-9a-f]+$/i.test(raw)) {
+    const value = Number.parseInt(raw.slice(2), 16);
+    return Number.isFinite(value) ? value : null;
+  }
+
+  if (/^[0-9]+$/.test(raw)) {
+    const value = Number.parseInt(raw, 10);
+    return Number.isFinite(value) ? value : null;
+  }
+
+  return null;
+}
+
+function isIBeamCursorHandle(cursorHandleHex: string | undefined): boolean {
+  const value = parseCursorHandleHex(cursorHandleHex);
+  if (value === null) {
+    return false;
+  }
+
+  return KNOWN_IBEAM_CURSOR_HANDLES.has(value);
 }
 
 function toFileUrl(rawPath: string | undefined): string | null {
@@ -214,6 +248,10 @@ function resolveCursorSample(
       sourceEvent && Number.isFinite(sourceEvent.cursorHotspotY)
         ? sourceEvent.cursorHotspotY
         : undefined,
+    cursorHandleHex:
+      sourceEvent && typeof sourceEvent.cursorHandleHex === 'string'
+        ? sourceEvent.cursorHandleHex
+        : undefined,
     motionBlurFromX,
     motionBlurFromY,
     motionBlurIntensity,
@@ -279,6 +317,32 @@ function drawCrosshairCursor(ctx: Canvas2DContext, x: number, y: number, size: n
   ctx.restore();
 }
 
+function drawIBeamCursor(ctx: Canvas2DContext, x: number, y: number, size: number): void {
+  const stemHeight = size * 1.9;
+  const stemWidth = Math.max(2, size * 0.16);
+  const capWidth = Math.max(stemWidth * 2.6, size * 0.64);
+  const capHeight = Math.max(1, size * 0.1);
+  const topY = y - stemHeight * 0.5;
+  const bottomY = topY + stemHeight - capHeight;
+  const stemX = x - stemWidth / 2;
+  const capX = x - capWidth / 2;
+
+  ctx.save();
+
+  // Draw a light halo first so the text cursor remains readable on dark backgrounds.
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.96)';
+  ctx.fillRect(capX - 1, topY - 1, capWidth + 2, capHeight + 2);
+  ctx.fillRect(stemX - 1, topY - 1, stemWidth + 2, stemHeight + 2);
+  ctx.fillRect(capX - 1, bottomY - 1, capWidth + 2, capHeight + 2);
+
+  ctx.fillStyle = 'rgba(14, 14, 16, 0.98)';
+  ctx.fillRect(capX, topY, capWidth, capHeight);
+  ctx.fillRect(stemX, topY, stemWidth, stemHeight);
+  ctx.fillRect(capX, bottomY, capWidth, capHeight);
+
+  ctx.restore();
+}
+
 function drawClickAnimation(
   ctx: Canvas2DContext,
   x: number,
@@ -318,6 +382,7 @@ function drawCursorGlyph(
   eventCursorDataUrl?: string,
   eventCursorHotspotX?: number,
   eventCursorHotspotY?: number,
+  eventCursorHandleHex?: string,
 ): void {
   const drawCursorImage = (
     imageSource: string | undefined,
@@ -347,6 +412,11 @@ function drawCursorGlyph(
     ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight);
     return true;
   };
+
+  if (isIBeamCursorHandle(eventCursorHandleHex)) {
+    drawIBeamCursor(ctx, x, y, cursorSize);
+    return;
+  }
 
   if (drawCursorImage(eventCursorDataUrl, eventCursorHotspotX, eventCursorHotspotY)) {
     return;
@@ -383,6 +453,7 @@ function drawMotionBlurTrail(
   eventCursorDataUrl?: string,
   eventCursorHotspotX?: number,
   eventCursorHotspotY?: number,
+  eventCursorHandleHex?: string,
 ): void {
   if (intensity <= 0) {
     return;
@@ -417,6 +488,7 @@ function drawMotionBlurTrail(
       eventCursorDataUrl,
       eventCursorHotspotX,
       eventCursorHotspotY,
+      eventCursorHandleHex,
     );
     ctx.restore();
   }
@@ -475,6 +547,7 @@ export function drawCursorLayer(
       sample.cursorDataUrl,
       sample.cursorHotspotX,
       sample.cursorHotspotY,
+      sample.cursorHandleHex,
     );
   }
 
@@ -499,5 +572,6 @@ export function drawCursorLayer(
     sample.cursorDataUrl,
     sample.cursorHotspotX,
     sample.cursorHotspotY,
+    sample.cursorHandleHex,
   );
 }
