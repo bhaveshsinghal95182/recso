@@ -40,6 +40,8 @@ app.on('ready', () => {
     frame: false,
   });
 
+  mainWindow.maximize();
+
   if (isDevelopment()) {
     mainWindow.loadURL('http://localhost:5123');
   } else {
