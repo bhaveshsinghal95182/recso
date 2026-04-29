@@ -70,6 +70,28 @@ function resolveWebcamShape(raw: Project['webcamOverlay']): WebcamShapePreset {
   return DEFAULT_WEBCAM_STYLE.shape;
 }
 
+function normalizeCursorRegionOverrides(project: Project) {
+  if (!project.cursorRegionOverrides) {
+    return [];
+  }
+
+  return project.cursorRegionOverrides
+    .filter(
+      (cursorOverride) =>
+        typeof cursorOverride.imagePath === 'string' &&
+        cursorOverride.imagePath.length > 0 &&
+        Number.isFinite(cursorOverride.startMs) &&
+        Number.isFinite(cursorOverride.endMs) &&
+        cursorOverride.endMs > cursorOverride.startMs,
+    )
+    .map((cursorOverride) => ({
+      startMs: cursorOverride.startMs,
+      endMs: cursorOverride.endMs,
+      imagePath: cursorOverride.imagePath,
+    }))
+    .sort((a, b) => a.startMs - b.startMs);
+}
+
 function mapLegacyZoomConfigToZoomKeyframes(
   zoomConfig: Project['zoomConfig'] | undefined,
   durationMs: number,
@@ -238,6 +260,7 @@ export function buildExportCompositionConfig({
       size: Number.isFinite(rawCursor?.size) ? Math.max(0.2, rawCursor.size) : 1,
       style: rawCursor?.style ?? 'default',
       customImagePath: rawCursor?.customImagePath,
+      cursorRegionOverrides: normalizeCursorRegionOverrides(project),
       showClickAnimations: rawCursor?.showClickAnimations ?? true,
       clickAnimationScale: Number.isFinite(rawCursor?.clickAnimationScale)
         ? Math.max(0.5, rawCursor.clickAnimationScale)

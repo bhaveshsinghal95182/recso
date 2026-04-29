@@ -52,6 +52,17 @@ export interface CursorConfig {
   motionBlurStrength: number;
 }
 
+export interface CursorRegionOverride {
+  /** Derived cursor timeline region identifier (e.g. cursor-region-0). */
+  regionId: string;
+  /** Region start time in milliseconds. */
+  startMs: number;
+  /** Region end time in milliseconds. */
+  endMs: number;
+  /** Custom image source for this region (data URL or file path). */
+  imagePath: string;
+}
+
 /**
  * Zoom configuration for the editor preview
  */
@@ -149,6 +160,8 @@ export interface Project {
   timeline: Timeline;
   /** Cursor rendering configuration */
   cursorConfig: CursorConfig;
+  /** Optional region-scoped cursor image overrides for timeline cursor regions. */
+  cursorRegionOverrides?: CursorRegionOverride[];
   /** Zoom configuration */
   zoomConfig: ZoomConfig;
   /** Spritesheet metadata for timeline thumbnails (null if not generated) */

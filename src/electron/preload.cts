@@ -235,6 +235,25 @@ electron.contextBridge.exposeInMainWorld('electron', {
     updateCursorConfig: (config: Record<string, unknown>) =>
       electron.ipcRenderer.invoke('editor:update-cursor-config', config),
 
+    updateCursorRegionOverride: (cursorOverride: {
+      regionId: string;
+      startMs: number;
+      endMs: number;
+      imagePath: string;
+    }) => electron.ipcRenderer.invoke('editor:update-cursor-region-override', cursorOverride),
+
+    replaceCursorRegionOverrides: (
+      cursorOverrides: {
+        regionId: string;
+        startMs: number;
+        endMs: number;
+        imagePath: string;
+      }[],
+    ) => electron.ipcRenderer.invoke('editor:replace-cursor-region-overrides', cursorOverrides),
+
+    removeCursorRegionOverride: (regionId: string) =>
+      electron.ipcRenderer.invoke('editor:remove-cursor-region-override', regionId),
+
     showCursorPicker: (): Promise<string | null> =>
       electron.ipcRenderer.invoke('editor:show-cursor-picker'),
 
@@ -455,6 +474,10 @@ electron.contextBridge.exposeInMainWorld('electron', {
     /** Show file in folder */
     showInFolder: (filePath: string): Promise<boolean> =>
       electron.ipcRenderer.invoke('exporter:show-in-folder', filePath),
+
+    /** Open file with the default system application */
+    openFile: (filePath: string): Promise<boolean> =>
+      electron.ipcRenderer.invoke('exporter:open-file', filePath),
 
     /** Resolve output path using exporter naming rules */
     resolveOutputPath: (config: Record<string, unknown>): Promise<string | null> =>

@@ -17,6 +17,7 @@ import type { BackgroundPatternConfig } from '../types/background.types.js';
 import type { CutRegion } from '../types/cut.types.js';
 import type {
   CursorConfig,
+  CursorRegionOverride,
   FrameState,
   Project,
   Timeline,
@@ -154,8 +155,67 @@ function normalizeCuts(cuts: CutRegion[] | undefined): CutRegion[] {
   return [...cuts].map(normalizeCutRegion).sort((a, b) => a.startMs - b.startMs);
 }
 
+function normalizeCursorRegionOverride(
+  cursorOverride: CursorRegionOverride,
+): CursorRegionOverride | null {
+  const regionId =
+    typeof cursorOverride.regionId === 'string' ? cursorOverride.regionId.trim() : '';
+  const imagePath =
+    typeof cursorOverride.imagePath === 'string' ? cursorOverride.imagePath.trim() : '';
+  const startMs = cursorOverride.startMs;
+  const endMs = cursorOverride.endMs;
+
+  if (
+    !regionId ||
+    !imagePath ||
+    !Number.isFinite(startMs) ||
+    !Number.isFinite(endMs) ||
+    endMs <= startMs
+  ) {
+    return null;
+  }
+
+  return {
+    regionId,
+    imagePath,
+    startMs: Math.max(0, startMs),
+    endMs: Math.max(0, endMs),
+  };
+}
+
+function normalizeCursorRegionOverrides(
+  cursorOverrides: CursorRegionOverride[] | undefined,
+): CursorRegionOverride[] {
+  if (!Array.isArray(cursorOverrides)) {
+    return [];
+  }
+
+  const byRegionId = new Map<string, CursorRegionOverride>();
+  for (const cursorOverride of cursorOverrides) {
+    const normalized = normalizeCursorRegionOverride(cursorOverride);
+    if (!normalized) {
+      continue;
+    }
+
+    byRegionId.set(normalized.regionId, normalized);
+  }
+
+  return [...byRegionId.values()].sort((a, b) => {
+    if (a.startMs !== b.startMs) {
+      return a.startMs - b.startMs;
+    }
+
+    if (a.endMs !== b.endMs) {
+      return a.endMs - b.endMs;
+    }
+
+    return a.regionId.localeCompare(b.regionId);
+  });
+}
+
 function normalizeProjectData(project: Project): Project {
   project.cuts = normalizeCuts(project.cuts);
+  project.cursorRegionOverrides = normalizeCursorRegionOverrides(project.cursorRegionOverrides);
 
   const zoomRegionsBySource = normalizeZoomRegionsBySource(project);
   project.zoomRegionsBySource = zoomRegionsBySource;
@@ -271,6 +331,7 @@ export async function createProject(recordingId: string): Promise<Project | null
     videoDimensions: { width: metadata.width, height: metadata.height },
     timeline: { ...createDefaultTimeline(), duration: metadata.duration * 1000 },
     cursorConfig: { ...DEFAULT_CURSOR_CONFIG },
+    cursorRegionOverrides: [],
     zoomConfig: { ...DEFAULT_ZOOM_CONFIG },
     spritesheetMeta,
     backgroundColor: '#000000',
@@ -399,6 +460,70 @@ export function updateCursorConfig(config: Partial<CursorConfig>): void {
 
   activeProject.cursorConfig = { ...activeProject.cursorConfig, ...config };
   activeProject.modifiedAt = Date.now();
+}
+
+/**
+ * Upsert an image override for a derived cursor timeline region.
+ */
+export function updateCursorRegionOverride(
+  cursorOverride: CursorRegionOverride,
+): CursorRegionOverride[] {
+  if (!activeProject) {
+    return [];
+  }
+
+  const normalized = normalizeCursorRegionOverride(cursorOverride);
+  if (!normalized) {
+    return normalizeCursorRegionOverrides(activeProject.cursorRegionOverrides).map((item) => ({
+      ...item,
+    }));
+  }
+
+  const existingOverrides = normalizeCursorRegionOverrides(activeProject.cursorRegionOverrides);
+  const nextOverrides = normalizeCursorRegionOverrides([
+    ...existingOverrides.filter((item) => item.regionId !== normalized.regionId),
+    normalized,
+  ]);
+
+  activeProject.cursorRegionOverrides = nextOverrides;
+  persistProjectMutation();
+
+  return nextOverrides.map((item) => ({ ...item }));
+}
+
+/**
+ * Replace all cursor timeline region overrides in a single mutation.
+ */
+export function replaceCursorRegionOverrides(
+  cursorOverrides: CursorRegionOverride[],
+): CursorRegionOverride[] {
+  if (!activeProject) {
+    return [];
+  }
+
+  const nextOverrides = normalizeCursorRegionOverrides(cursorOverrides);
+  activeProject.cursorRegionOverrides = nextOverrides;
+  persistProjectMutation();
+
+  return nextOverrides.map((item) => ({ ...item }));
+}
+
+/**
+ * Remove an image override for a derived cursor timeline region.
+ */
+export function removeCursorRegionOverride(regionId: string): CursorRegionOverride[] {
+  if (!activeProject) {
+    return [];
+  }
+
+  const normalizedRegionId = typeof regionId === 'string' ? regionId.trim() : '';
+  const currentOverrides = normalizeCursorRegionOverrides(activeProject.cursorRegionOverrides);
+  const nextOverrides = currentOverrides.filter((item) => item.regionId !== normalizedRegionId);
+
+  activeProject.cursorRegionOverrides = nextOverrides;
+  persistProjectMutation();
+
+  return nextOverrides.map((item) => ({ ...item }));
 }
 
 /**

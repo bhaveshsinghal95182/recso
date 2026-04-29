@@ -11,7 +11,7 @@
 
 import { Dialog } from '@base-ui/react/dialog';
 import confetti from 'canvas-confetti';
-import { Check, Download, FolderOpen, Loader2, X } from 'lucide-react';
+import { Download, FolderOpen, Loader2, Play, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -52,10 +52,6 @@ const RESOLUTION_OPTIONS: { value: ExportResolution; label: string }[] = [
   { value: 'custom', label: 'Custom' },
 ];
 
-const FORMAT_OPTIONS: { value: ExportFormat; label: string }[] = [
-  { value: 'mp4', label: 'MP4 (H.264)' },
-];
-
 const QUALITY_OPTIONS: { value: ExportQuality; label: string }[] = [
   { value: 'low', label: 'Low (smaller file)' },
   { value: 'medium', label: 'Medium' },
@@ -68,6 +64,42 @@ const FPS_OPTIONS: { value: ExportFPS; label: string }[] = [
   { value: 30, label: '30 fps (standard)' },
   { value: 60, label: '60 fps (smooth)' },
 ];
+
+/**
+ * Confetti trigger component — fires confetti animation on mount
+ */
+function ConfettiTrigger() {
+  useEffect(() => {
+    // Burst of confetti from center
+    confetti({
+      particleCount: 100,
+      spread: 70,
+      origin: { y: 0.6 },
+      gravity: 0.8,
+      ticks: 200,
+    });
+
+    // Secondary burst from sides
+    setTimeout(() => {
+      confetti({
+        particleCount: 60,
+        spread: 100,
+        origin: { x: 0.2, y: 0.5 },
+        gravity: 0.8,
+        ticks: 160,
+      });
+      confetti({
+        particleCount: 60,
+        spread: 100,
+        origin: { x: 0.8, y: 0.5 },
+        gravity: 0.8,
+        ticks: 160,
+      });
+    }, 200);
+  }, []);
+
+  return null;
+}
 
 export function ExportModal({ open, onOpenChange }: ExportModalProps) {
   const { project, mouseEvents } = useProjectStore();
@@ -97,7 +129,7 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
   const [resolution, setResolution] = useState<ExportResolution>('1080p');
   const [customWidth, setCustomWidth] = useState(1920);
   const [customHeight, setCustomHeight] = useState(1080);
-  const [format, setFormat] = useState<ExportFormat>('mp4');
+  const format: ExportFormat = 'mp4'; // Only MP4 is currently supported
   const [quality, setQuality] = useState<ExportQuality>('high');
   const [fps, setFps] = useState<ExportFPS>(30);
   const [fileName, setFileName] = useState<string>('');
@@ -251,6 +283,12 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
       await window.electron.exporter.showInFolder(result.outputPath);
     } else {
       await window.electron.exporter.openExportsFolder();
+    }
+  }, [result]);
+
+  const handleOpenFile = useCallback(async () => {
+    if (result?.outputPath) {
+      await window.electron.exporter.openFile(result.outputPath);
     }
   }, [result]);
 
@@ -460,29 +498,106 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
 
           {/* Complete Step */}
           {step === 'complete' && result && (
-            <div className="space-y-6">
-              <div className="flex flex-col items-center justify-center py-6">
-                <div className="size-20 bg-green-500/10 rounded-full flex items-center justify-center mb-4 relative">
-                  <Check className="size-10 text-green-500 relative z-10" />
+            <div className="space-y-6 py-8">
+              {/* Confetti trigger on mount */}
+              <ConfettiTrigger />
+
+              {/* Animated checkmark */}
+              <div className="flex flex-col items-center justify-center space-y-4">
+                <div className="relative size-24 flex items-center justify-center">
+                  <svg
+                    className="size-24 text-green-500 drop-shadow-lg"
+                    style={{
+                      animation: 'checkmark 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) forwards',
+                    }}
+                    viewBox="0 0 48 48"
+                  >
+                    <circle cx="24" cy="24" r="22" fill="currentColor" opacity="0.1" />
+                    <path
+                      d="M20 28L14 22M20 28L34 14"
+                      stroke="currentColor"
+                      strokeWidth="3"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      fill="none"
+                      style={{
+                        strokeDasharray: 40,
+                        strokeDashoffset: 40,
+                        animation:
+                          'checkmark-stroke 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) 0.2s forwards',
+                      }}
+                    />
+                  </svg>
                 </div>
-                <h3 className="text-xl font-semibold text-foreground">Done!</h3>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Export successful • {formatFileSize(result.fileSize)}
-                </p>
+
+                {/* Done text */}
+                <div className="text-center space-y-2">
+                  <h2 className="text-3xl font-bold text-foreground">Done!</h2>
+                  <p className="text-base text-muted-foreground">Your video is ready</p>
+                </div>
+
+                {/* File details */}
+                <div className="bg-muted/50 rounded-lg px-4 py-3 w-full text-center text-sm">
+                  <div className="text-muted-foreground mb-1">File saved</div>
+                  <div className="font-medium text-foreground">
+                    {formatFileSize(result.fileSize)}
+                  </div>
+                </div>
               </div>
 
-              <div className="flex flex-col gap-3">
+              {/* Action buttons */}
+              <div className="flex gap-3">
                 <Button
-                  onClick={handleOpenFolder}
-                  className="w-full bg-primary hover:bg-primary/90 text-primary-foreground"
+                  onClick={handleOpenFile}
+                  className="flex-1 bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white shadow-lg"
                 >
-                  <FolderOpen className="mr-2 size-4" />
-                  Open Export Folder
+                  <Play className="mr-2 size-4" />
+                  Open File
                 </Button>
-                <Button variant="outline" onClick={() => onOpenChange(false)} className="w-full">
-                  Close
+                <Button variant="outline" onClick={handleOpenFolder} className="flex-1">
+                  <FolderOpen className="mr-2 size-4" />
+                  Show Folder
                 </Button>
               </div>
+
+              {/* Close button */}
+              <Button
+                variant="ghost"
+                onClick={() => onOpenChange(false)}
+                className="w-full text-muted-foreground hover:text-foreground"
+              >
+                Close
+              </Button>
+
+              {/* CSS animations */}
+              <style>{`
+                @keyframes checkmark {
+                  0% {
+                    opacity: 0;
+                    transform: scale(0.3) rotate(-45deg);
+                  }
+                  100% {
+                    opacity: 1;
+                    transform: scale(1) rotate(0deg);
+                  }
+                }
+                
+                @keyframes checkmark-stroke {
+                  from {
+                    stroke-dashoffset: 40;
+                  }
+                  to {
+                    stroke-dashoffset: 0;
+                  }
+                }
+                
+                @keyframes confetti-fall {
+                  to {
+                    transform: translateY(100vh) rotate(720deg);
+                    opacity: 0;
+                  }
+                }
+              `}</style>
             </div>
           )}
 

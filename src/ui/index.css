@@ -12,6 +12,8 @@
   --radius-3xl: calc(var(--radius) + 12px);
   --radius-4xl: calc(var(--radius) + 16px);
   --color-background: var(--background);
+  --color-bg-dark: var(--bg-dark);
+  --color-bg-light: var(--bg-light);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
@@ -55,7 +57,9 @@
 
 :root {
   --radius: 0.625rem;
+  --bg-dark: #040507;
   --background: black;
+  --bg-light: #1a252a;
   --brand-light: #34d399;
   --brand: #10b981;
   --brand-dark: #065f46;

@@ -1,6 +1,7 @@
 import type { BackgroundPatternConfig } from '../shared/patterns';
 import type {
   CursorConfig,
+  CursorRegionOverride,
   CutRegion,
   DesktopSource,
   ExportConfig,
@@ -205,6 +206,19 @@ interface ElectronAPI {
     /** Update cursor configuration */
     updateCursorConfig: (config: Partial<CursorConfig>) => Promise<CursorConfig | undefined>;
 
+    /** Upsert cursor image override for a timeline cursor region */
+    updateCursorRegionOverride: (
+      cursorOverride: CursorRegionOverride,
+    ) => Promise<CursorRegionOverride[]>;
+
+    /** Replace all cursor image overrides for timeline regions */
+    replaceCursorRegionOverrides: (
+      cursorOverrides: CursorRegionOverride[],
+    ) => Promise<CursorRegionOverride[]>;
+
+    /** Remove cursor image override for a timeline cursor region */
+    removeCursorRegionOverride: (regionId: string) => Promise<CursorRegionOverride[]>;
+
     /** Open file picker for custom cursor image */
     showCursorPicker: () => Promise<string | null>;
 
@@ -324,6 +338,9 @@ interface ElectronAPI {
 
     /** Show file in folder */
     showInFolder: (filePath: string) => Promise<boolean>;
+
+    /** Open file with the default system application */
+    openFile: (filePath: string) => Promise<boolean>;
 
     /** Resolve output path using exporter naming rules */
     resolveOutputPath: (config: ExportConfig) => Promise<string | null>;

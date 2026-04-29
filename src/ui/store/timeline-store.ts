@@ -39,6 +39,7 @@ interface TimelineState {
   zoomRegionsBySource: ZoomRegionsBySource;
   selectedCutId: string | null;
   selectedZoomId: string | null;
+  selectedCursorRegionId: string | null;
   isEditingFocalPoint: boolean;
 
   // Actions
@@ -58,6 +59,7 @@ interface TimelineState {
   updateZoomRegions: (zooms: ZoomRegion[], source?: ZoomSource) => Promise<void>;
   replaceZoomRegions: (zooms: ZoomRegion[], source?: ZoomSource) => Promise<void>;
   setSelectedZoom: (zoomId: string | null) => void;
+  setSelectedCursorRegion: (regionId: string | null) => void;
   setIsEditingFocalPoint: (isEditing: boolean) => void;
 
   // Reset
@@ -83,6 +85,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
   },
   selectedCutId: null,
   selectedZoomId: null,
+  selectedCursorRegionId: null,
   isEditingFocalPoint: false,
 
   setCuts: (cuts) => set({ cuts: normalizeCuts(cuts) }),
@@ -318,6 +321,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
   },
 
   setSelectedZoom: (zoomId) => set({ selectedZoomId: zoomId }),
+  setSelectedCursorRegion: (regionId) => set({ selectedCursorRegionId: regionId }),
   setIsEditingFocalPoint: (isEditing) => set({ isEditingFocalPoint: isEditing }),
 
   reset: () =>
@@ -331,6 +335,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
       },
       selectedCutId: null,
       selectedZoomId: null,
+      selectedCursorRegionId: null,
       isEditingFocalPoint: false,
     }),
 }));

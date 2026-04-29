@@ -4,9 +4,10 @@ import type {
   CompositionCursorEvent,
   VideoLayout,
 } from '../types';
-import { clampUnit, lerp, smoothstep } from './common';
+import { clampUnit, lerp } from './common';
 
 const DEFAULT_CURSOR_SIZE_PX = 22;
+const DEFAULT_FIXED_MOTION_BLUR_STRENGTH = 0.7;
 const MOTION_BLUR_TRAIL_MS = 90;
 const MAX_MOTION_BLUR_EVENT_GAP_MS = 260;
 const MOTION_BLUR_SPEED_SCALE = 220;
@@ -17,6 +18,7 @@ const cursorImageLoading = new Set<string>();
 interface CursorSample {
   normalizedX: number;
   normalizedY: number;
+  cursorOverrideImagePath?: string;
   cursorDataUrl?: string;
   cursorHotspotX?: number;
   cursorHotspotY?: number;
@@ -24,8 +26,6 @@ interface CursorSample {
   motionBlurFromX?: number;
   motionBlurFromY?: number;
   motionBlurIntensity?: number;
-  clickProgress?: number;
-  button?: 'left' | 'right' | 'middle';
 }
 
 function parseCursorHandleHex(cursorHandleHex: string | undefined): number | null {
@@ -151,6 +151,29 @@ function resolveEventNormalisedPosition(
   return null;
 }
 
+function resolveCursorOverrideImagePath(
+  cursor: CompositionCursorConfig,
+  timestampMs: number,
+): string | undefined {
+  const overrides = cursor.cursorRegionOverrides;
+  if (!overrides || overrides.length === 0) {
+    return undefined;
+  }
+
+  for (const cursorOverride of overrides) {
+    if (timestampMs >= cursorOverride.startMs && timestampMs < cursorOverride.endMs) {
+      return cursorOverride.imagePath;
+    }
+  }
+
+  const trailingOverride = overrides[overrides.length - 1];
+  if (trailingOverride && timestampMs === trailingOverride.endMs) {
+    return trailingOverride.imagePath;
+  }
+
+  return undefined;
+}
+
 function resolveCursorSample(
   cursor: CompositionCursorConfig,
   timestampMs: number,
@@ -178,14 +201,7 @@ function resolveCursorSample(
   let motionBlurFromY: number | undefined;
   let motionBlurIntensity: number | undefined;
 
-  if (
-    cursor.showMotionBlur &&
-    cursor.motionBlurStrength > 0 &&
-    beforeEvent &&
-    previousEvent &&
-    beforePosition &&
-    previousPosition
-  ) {
+  if (beforeEvent && previousEvent && beforePosition && previousPosition) {
     const gapMs = beforeEvent.timestampMs - previousEvent.timestampMs;
     const ageMs = timestampMs - beforeEvent.timestampMs;
 
@@ -201,7 +217,7 @@ function resolveCursorSample(
       );
       const speedFactor = clampUnit((distance / gapMs) * MOTION_BLUR_SPEED_SCALE);
       const ageFactor = 1 - ageMs / MOTION_BLUR_TRAIL_MS;
-      const strength = Math.max(0, cursor.motionBlurStrength);
+      const strength = DEFAULT_FIXED_MOTION_BLUR_STRENGTH;
       const intensity = clampUnit(speedFactor * ageFactor * strength);
 
       if (intensity > 0.015) {
@@ -212,30 +228,10 @@ function resolveCursorSample(
     }
   }
 
-  let clickProgress: number | undefined;
-  let button: 'left' | 'right' | 'middle' | undefined;
-
-  if (cursor.showClickAnimations) {
-    const displayWindowMs = Math.max(1, cursor.clickDisplayDuration);
-    for (let index = afterIndex - 1; index >= 0; index -= 1) {
-      const event = events[index];
-      const ageMs = timestampMs - event.timestampMs;
-
-      if (ageMs > displayWindowMs) {
-        break;
-      }
-
-      if (event.eventType === 'click') {
-        clickProgress = clampUnit(ageMs / displayWindowMs);
-        button = event.button;
-        break;
-      }
-    }
-  }
-
   return {
     normalizedX: clampUnit(resolvedPosition.x),
     normalizedY: clampUnit(resolvedPosition.y),
+    cursorOverrideImagePath: resolveCursorOverrideImagePath(cursor, timestampMs),
     cursorDataUrl:
       sourceEvent && typeof sourceEvent.cursorDataUrl === 'string'
         ? sourceEvent.cursorDataUrl
@@ -255,8 +251,6 @@ function resolveCursorSample(
     motionBlurFromX,
     motionBlurFromY,
     motionBlurIntensity,
-    clickProgress,
-    button,
   };
 }
 
@@ -343,42 +337,13 @@ function drawIBeamCursor(ctx: Canvas2DContext, x: number, y: number, size: numbe
   ctx.restore();
 }
 
-function drawClickAnimation(
-  ctx: Canvas2DContext,
-  x: number,
-  y: number,
-  cursorSize: number,
-  clickProgress: number,
-  clickScale: number,
-  button: 'left' | 'right' | 'middle' | undefined,
-): void {
-  const eased = smoothstep(1 - clampUnit(clickProgress));
-  const maxRadius = cursorSize * Math.max(1.35, clickScale * 1.3);
-  const radius = lerp(cursorSize * 0.22, maxRadius, eased);
-  const alpha = 0.42 * (1 - clampUnit(clickProgress));
-
-  const baseColor =
-    button === 'right'
-      ? `rgba(255, 145, 110, ${alpha})`
-      : button === 'middle'
-        ? `rgba(120, 210, 255, ${alpha})`
-        : `rgba(255, 255, 255, ${alpha})`;
-
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(x, y, radius, 0, Math.PI * 2);
-  ctx.strokeStyle = baseColor;
-  ctx.lineWidth = Math.max(1, cursorSize * 0.09);
-  ctx.stroke();
-  ctx.restore();
-}
-
 function drawCursorGlyph(
   ctx: Canvas2DContext,
   x: number,
   y: number,
   cursorSize: number,
   cursor: CompositionCursorConfig,
+  overrideCursorImagePath?: string,
   eventCursorDataUrl?: string,
   eventCursorHotspotX?: number,
   eventCursorHotspotY?: number,
@@ -412,6 +377,10 @@ function drawCursorGlyph(
     ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight);
     return true;
   };
+
+  if (drawCursorImage(overrideCursorImagePath)) {
+    return;
+  }
 
   if (isIBeamCursorHandle(eventCursorHandleHex)) {
     drawIBeamCursor(ctx, x, y, cursorSize);
@@ -450,6 +419,7 @@ function drawMotionBlurTrail(
   toX: number,
   toY: number,
   intensity: number,
+  overrideCursorImagePath?: string,
   eventCursorDataUrl?: string,
   eventCursorHotspotX?: number,
   eventCursorHotspotY?: number,
@@ -485,6 +455,7 @@ function drawMotionBlurTrail(
       y,
       cursorSize,
       cursor,
+      overrideCursorImagePath,
       eventCursorDataUrl,
       eventCursorHotspotX,
       eventCursorHotspotY,
@@ -528,7 +499,6 @@ export function drawCursorLayer(
   const cursorSize = Math.max(8, DEFAULT_CURSOR_SIZE_PX * Math.max(0.2, cursor.size) * sourceScale);
 
   if (
-    cursor.showMotionBlur &&
     typeof sample.motionBlurFromX === 'number' &&
     typeof sample.motionBlurFromY === 'number' &&
     typeof sample.motionBlurIntensity === 'number'
@@ -544,22 +514,11 @@ export function drawCursorLayer(
       cursorX,
       cursorY,
       sample.motionBlurIntensity,
+      sample.cursorOverrideImagePath,
       sample.cursorDataUrl,
       sample.cursorHotspotX,
       sample.cursorHotspotY,
       sample.cursorHandleHex,
-    );
-  }
-
-  if (cursor.showClickAnimations && typeof sample.clickProgress === 'number') {
-    drawClickAnimation(
-      ctx,
-      cursorX,
-      cursorY,
-      cursorSize,
-      sample.clickProgress,
-      Math.max(1, cursor.clickAnimationScale),
-      sample.button,
     );
   }
 
@@ -569,6 +528,7 @@ export function drawCursorLayer(
     cursorY,
     cursorSize,
     cursor,
+    sample.cursorOverrideImagePath,
     sample.cursorDataUrl,
     sample.cursorHotspotX,
     sample.cursorHotspotY,

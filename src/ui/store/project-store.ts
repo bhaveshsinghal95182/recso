@@ -4,6 +4,7 @@ import type { BackgroundPatternConfig } from '../../shared/patterns';
 import { debounce } from '../lib/utils';
 import type {
   CursorConfig,
+  CursorRegionOverride,
   Project,
   RecordedMouseEvent,
   WebcamOverlayConfig,
@@ -23,6 +24,9 @@ interface ProjectState {
   saveProject: () => Promise<boolean>;
   closeProject: () => void;
   updateCursorConfig: (config: Partial<CursorConfig>) => Promise<void>;
+  upsertCursorRegionOverride: (cursorOverride: CursorRegionOverride) => Promise<void>;
+  replaceCursorRegionOverrides: (cursorOverrides: CursorRegionOverride[]) => Promise<void>;
+  removeCursorRegionOverride: (regionId: string) => Promise<void>;
   updateZoomConfig: (config: Partial<ZoomConfig>) => Promise<void>;
   updateBackgroundColor: (color: string) => void;
   updateBackgroundPath: (path: string | null) => void;
@@ -131,6 +135,63 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }
     } catch (err) {
       console.error('[ProjectStore] updateCursorConfig error:', err);
+    }
+  },
+
+  upsertCursorRegionOverride: async (cursorOverride: CursorRegionOverride) => {
+    const { project } = get();
+    if (!project) return;
+
+    try {
+      const updated = await window.electron.editor.updateCursorRegionOverride(cursorOverride);
+      set((state) => ({
+        project: state.project
+          ? {
+              ...state.project,
+              cursorRegionOverrides: updated,
+            }
+          : null,
+      }));
+    } catch (err) {
+      console.error('[ProjectStore] upsertCursorRegionOverride error:', err);
+    }
+  },
+
+  replaceCursorRegionOverrides: async (cursorOverrides: CursorRegionOverride[]) => {
+    const { project } = get();
+    if (!project) return;
+
+    try {
+      const updated = await window.electron.editor.replaceCursorRegionOverrides(cursorOverrides);
+      set((state) => ({
+        project: state.project
+          ? {
+              ...state.project,
+              cursorRegionOverrides: updated,
+            }
+          : null,
+      }));
+    } catch (err) {
+      console.error('[ProjectStore] replaceCursorRegionOverrides error:', err);
+    }
+  },
+
+  removeCursorRegionOverride: async (regionId: string) => {
+    const { project } = get();
+    if (!project) return;
+
+    try {
+      const updated = await window.electron.editor.removeCursorRegionOverride(regionId);
+      set((state) => ({
+        project: state.project
+          ? {
+              ...state.project,
+              cursorRegionOverrides: updated,
+            }
+          : null,
+      }));
+    } catch (err) {
+      console.error('[ProjectStore] removeCursorRegionOverride error:', err);
     }
   },
 

@@ -146,6 +146,13 @@ export interface CursorConfig {
   motionBlurStrength: number;
 }
 
+export interface CursorRegionOverride {
+  regionId: string;
+  startMs: number;
+  endMs: number;
+  imagePath: string;
+}
+
 export interface ZoomConfig {
   level: number;
   focalX: number;
@@ -278,6 +285,7 @@ export interface Project {
   };
   timeline: Timeline;
   cursorConfig: CursorConfig;
+  cursorRegionOverrides?: CursorRegionOverride[];
   zoomConfig: ZoomConfig;
   spritesheetMeta: SpritesheetMeta | null;
   backgroundPath?: string;

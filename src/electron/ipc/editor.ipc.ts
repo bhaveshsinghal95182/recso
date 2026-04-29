@@ -16,6 +16,7 @@ import * as projectStorage from '../services/project-storage.service.js';
 import type { CutRegion } from '../types/cut.types.js';
 import type {
   CursorConfig,
+  CursorRegionOverride,
   TimelineLayerId,
   TimelineVisibilityMode,
   WebcamOverlayConfig,
@@ -68,6 +69,27 @@ export function registerEditorHandlers(): void {
   ipcMain.handle('editor:update-cursor-config', async (_event, config: Partial<CursorConfig>) => {
     editorService.updateCursorConfig(config);
     return editorService.getActiveProject()?.cursorConfig;
+  });
+
+  // Upsert cursor region image override
+  ipcMain.handle(
+    'editor:update-cursor-region-override',
+    async (_event, cursorOverride: CursorRegionOverride) => {
+      return editorService.updateCursorRegionOverride(cursorOverride);
+    },
+  );
+
+  // Replace all cursor region image overrides
+  ipcMain.handle(
+    'editor:replace-cursor-region-overrides',
+    async (_event, cursorOverrides: CursorRegionOverride[]) => {
+      return editorService.replaceCursorRegionOverrides(cursorOverrides);
+    },
+  );
+
+  // Remove cursor region image override
+  ipcMain.handle('editor:remove-cursor-region-override', async (_event, regionId: string) => {
+    return editorService.removeCursorRegionOverride(regionId);
   });
 
   // Open file picker for custom cursor image

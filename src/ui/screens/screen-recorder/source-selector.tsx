@@ -37,7 +37,7 @@ export function SourceSelector({
   const windowsCount = sources.filter((s) => !s.isScreen).length;
 
   return (
-    <div className="flex flex-col h-full bg-background/50 backdrop-blur-sm relative overflow-hidden">
+    <div className="flex flex-col h-full bg-background/50 backdrop-blur-sm relative overflow-hidden shadow-s">
       {/* Dynamic Background Gradients */}
       <div className="absolute top-0 left-0 w-full h-full pointer-events-none opacity-20">
         <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-brand-light/30 rounded-full blur-[100px]" />
@@ -89,7 +89,7 @@ export function SourceSelector({
         </Tooltip>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 z-10 custom-scrollbar">
+      <div className="flex-1 overflow-y-auto p-4 z-10 custom-scrollbar bg-bg-dark shadow-dig-l">
         {isLoading ? (
           <div className="h-full flex flex-col items-center justify-center text-muted-foreground gap-3">
             <RefreshCw className="animate-spin text-primary" size={32} />

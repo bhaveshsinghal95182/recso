@@ -115,11 +115,18 @@ export interface CompositionCursorEvent {
   button?: 'left' | 'right' | 'middle';
 }
 
+export interface CompositionCursorRegionOverride {
+  startMs: number;
+  endMs: number;
+  imagePath: string;
+}
+
 export interface CompositionCursorConfig {
   enabled: boolean;
   size: number;
   style: CursorStyle;
   customImagePath?: string;
+  cursorRegionOverrides?: CompositionCursorRegionOverride[];
   showClickAnimations: boolean;
   clickAnimationScale: number;
   clickDisplayDuration: number;
