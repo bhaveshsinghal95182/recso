@@ -97,3 +97,49 @@ export function getCutAdjustedDurationMs(
 
   return Math.max(0, safeDurationMs - getCutDurationBeforeTimeMs(safeDurationMs, cuts));
 }
+
+export function mapSourceCutRangesToCompositionCutRanges(
+  sourceCuts: CompositionCutRegion[],
+  compositionCuts?: CompositionCutRegion[],
+): CompositionCutRegion[] {
+  const screenCuts = normaliseCuts(compositionCuts ?? []);
+  const mappedCuts: CompositionCutRegion[] = [];
+
+  for (const cut of normaliseCuts(sourceCuts)) {
+    let segmentStartMs = cut.startMs;
+
+    for (const screenCut of screenCuts) {
+      if (screenCut.endMs <= segmentStartMs) {
+        continue;
+      }
+
+      if (screenCut.startMs >= cut.endMs) {
+        break;
+      }
+
+      const segmentEndMs = Math.min(screenCut.startMs, cut.endMs);
+      if (segmentEndMs > segmentStartMs) {
+        mappedCuts.push({
+          id: `${cut.id}:${mappedCuts.length}`,
+          startMs: mapSourceTimeToCompositionTimeMs(segmentStartMs, screenCuts),
+          endMs: mapSourceTimeToCompositionTimeMs(segmentEndMs, screenCuts),
+        });
+      }
+
+      segmentStartMs = Math.max(segmentStartMs, screenCut.endMs);
+      if (segmentStartMs >= cut.endMs) {
+        break;
+      }
+    }
+
+    if (segmentStartMs < cut.endMs) {
+      mappedCuts.push({
+        id: `${cut.id}:${mappedCuts.length}`,
+        startMs: mapSourceTimeToCompositionTimeMs(segmentStartMs, screenCuts),
+        endMs: mapSourceTimeToCompositionTimeMs(cut.endMs, screenCuts),
+      });
+    }
+  }
+
+  return mappedCuts.filter((cut) => cut.endMs > cut.startMs);
+}

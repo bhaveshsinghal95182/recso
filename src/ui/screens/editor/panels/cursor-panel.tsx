@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label';
 import {
   type CursorTimelineRegion,
   deriveCursorTimelineRegions,
+  resolveCursorRegionKey,
 } from '@/screens/editor/cursor-timeline-regions';
 import { useProjectStore } from '@/store/project-store';
 import { useTimelineStore } from '@/store/timeline-store';
@@ -16,6 +17,7 @@ interface CursorTypeGroup {
   key: string;
   label: string;
   regions: CursorTimelineRegion[];
+  sourceCursorDataUrl?: string;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -91,6 +93,22 @@ export function CursorPanel() {
     () => deriveCursorTimelineRegions(mouseEvents, project.timeline.duration),
     [mouseEvents, project.timeline.duration],
   );
+  const sourceCursorByKey = useMemo(() => {
+    const next = new Map<string, string>();
+
+    for (const event of mouseEvents) {
+      if (!event.cursorDataUrl) {
+        continue;
+      }
+
+      const key = resolveCursorRegionKey(event);
+      if (!next.has(key)) {
+        next.set(key, event.cursorDataUrl);
+      }
+    }
+
+    return next;
+  }, [mouseEvents]);
   const cursorTypeGroups = useMemo<CursorTypeGroup[]>(() => {
     const groups = new Map<string, CursorTypeGroup>();
     let dataCursorOrdinal = 0;
@@ -110,11 +128,12 @@ export function CursorPanel() {
         key: region.key,
         label: getCursorTypeLabel(region.key, dataCursorOrdinal),
         regions: [region],
+        sourceCursorDataUrl: sourceCursorByKey.get(region.key),
       });
     }
 
     return [...groups.values()];
-  }, [cursorRegions]);
+  }, [cursorRegions, sourceCursorByKey]);
   const cursorRegionKeyById = useMemo(
     () => new Map(cursorRegions.map((region) => [region.id, region.key])),
     [cursorRegions],
@@ -159,6 +178,7 @@ export function CursorPanel() {
   const hasPackImage = cursorTypeGroups.some(
     (group) => typeof packAssignments[group.key] === 'string' && packAssignments[group.key].trim(),
   );
+  const hasExistingOverrides = (project.cursorRegionOverrides ?? []).length > 0;
 
   const applyCursorImage = async (imagePath: string) => {
     if (selectedCursorRegion) {
@@ -286,7 +306,11 @@ export function CursorPanel() {
           <Button
             size="sm"
             onClick={() => void applyPackToTimeline()}
-            disabled={!hasPackImage || cursorRegions.length === 0 || isApplyingPack}
+            disabled={
+              (!hasPackImage && !hasExistingOverrides) ||
+              cursorRegions.length === 0 ||
+              isApplyingPack
+            }
           >
             {isApplyingPack ? 'Applying...' : 'Apply Pack'}
           </Button>
@@ -317,7 +341,9 @@ export function CursorPanel() {
           <div className="space-y-2">
             {cursorTypeGroups.map((group) => {
               const assignedPath = packAssignments[group.key]?.trim();
-              const previewSrc = toImageSrc(assignedPath);
+              const assignedPreviewSrc = toImageSrc(assignedPath);
+              const detectedPreviewSrc = toImageSrc(group.sourceCursorDataUrl);
+              const previewSrc = assignedPreviewSrc ?? detectedPreviewSrc;
 
               return (
                 <div
@@ -336,11 +362,19 @@ export function CursorPanel() {
                       {previewSrc ? (
                         <img
                           src={previewSrc}
-                          alt={`${group.label} pack cursor`}
+                          alt={`${group.label} cursor preview`}
                           className="h-7 w-7 rounded-sm border border-border/70 object-contain bg-muted/20"
+                          title={
+                            assignedPreviewSrc
+                              ? 'Assigned replacement cursor'
+                              : 'Detected source cursor'
+                          }
                         />
                       ) : (
-                        <div className="h-7 w-7 rounded-sm border border-dashed border-border/70 bg-muted/20" />
+                        <div
+                          className="h-7 w-7 rounded-sm border border-dashed border-border/70 bg-muted/20"
+                          title="No cursor preview available"
+                        />
                       )}
 
                       <Button

@@ -5,6 +5,7 @@ export {
   getCutAdjustedDurationMs,
   isInCutRegion,
   mapCompositionToSourceTimeMs,
+  mapSourceCutRangesToCompositionCutRanges,
   mapSourceTimeToCompositionTimeMs,
 } from './cuts';
 export { computeVideoLayout, computeWebcamLayout } from './layout';

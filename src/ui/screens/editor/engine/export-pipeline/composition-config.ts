@@ -1,6 +1,6 @@
 import type { Project, RecordedMouseEvent } from '@/types';
 
-import { defaultConfig, mapSourceTimeToCompositionTimeMs } from '../functions';
+import { defaultConfig, mapSourceCutRangesToCompositionCutRanges } from '../functions';
 import type { CompositionConfig, CompositionLayout, ZoomKeyframe } from '../types';
 import {
   clamp,
@@ -98,59 +98,6 @@ function cutTargetsScreen(cut: Project['cuts'][number]): boolean {
 
 function cutTargetsWebcam(cut: Project['cuts'][number]): boolean {
   return cut.targets?.webcam ?? true;
-}
-
-function mapSourceCutsToCompositionCuts(
-  sourceCuts: Project['cuts'],
-  compositionCuts: Project['cuts'],
-): CompositionConfig['webcamCuts'] {
-  const screenCuts = [...compositionCuts]
-    .filter((cut) => cut.endMs > cut.startMs)
-    .sort((a, b) => a.startMs - b.startMs);
-  const mappedCuts: NonNullable<CompositionConfig['webcamCuts']> = [];
-
-  for (const cut of sourceCuts) {
-    const sourceStartMs = Math.max(0, cut.startMs);
-    const sourceEndMs = Math.max(0, cut.endMs);
-    if (sourceEndMs <= sourceStartMs) {
-      continue;
-    }
-
-    let segmentStartMs = sourceStartMs;
-    for (const screenCut of screenCuts) {
-      if (screenCut.endMs <= segmentStartMs) {
-        continue;
-      }
-
-      if (screenCut.startMs >= sourceEndMs) {
-        break;
-      }
-
-      const segmentEndMs = Math.min(screenCut.startMs, sourceEndMs);
-      if (segmentEndMs > segmentStartMs) {
-        mappedCuts.push({
-          id: `${cut.id}:${mappedCuts.length}`,
-          startMs: mapSourceTimeToCompositionTimeMs(segmentStartMs, screenCuts),
-          endMs: mapSourceTimeToCompositionTimeMs(segmentEndMs, screenCuts),
-        });
-      }
-
-      segmentStartMs = Math.max(segmentStartMs, screenCut.endMs);
-      if (segmentStartMs >= sourceEndMs) {
-        break;
-      }
-    }
-
-    if (segmentStartMs < sourceEndMs) {
-      mappedCuts.push({
-        id: `${cut.id}:${mappedCuts.length}`,
-        startMs: mapSourceTimeToCompositionTimeMs(segmentStartMs, screenCuts),
-        endMs: mapSourceTimeToCompositionTimeMs(sourceEndMs, screenCuts),
-      });
-    }
-  }
-
-  return mappedCuts.filter((cut) => cut.endMs > cut.startMs);
 }
 
 function mapLegacyZoomConfigToZoomKeyframes(
@@ -316,7 +263,7 @@ export function buildExportCompositionConfig({
       startMs: cut.startMs,
       endMs: cut.endMs,
     })),
-    webcamCuts: mapSourceCutsToCompositionCuts(webcamCuts, screenCuts),
+    webcamCuts: mapSourceCutRangesToCompositionCutRanges(webcamCuts, screenCuts),
     cursor: {
       enabled: true,
       size: Number.isFinite(rawCursor?.size) ? Math.max(0.2, rawCursor.size) : 1,

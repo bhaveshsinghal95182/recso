@@ -3,6 +3,8 @@ import type { MutableRefObject, RefObject } from 'react';
 import { usePlaybackStore } from '@/store/playback-store';
 
 import type { CompositionEngine } from '../engine';
+import { mapCompositionToSourceTimeMs } from '../functions';
+import type { CompositionCutRegion } from '../types';
 import { syncVideoTime } from './video-time';
 
 let pendingPausedSeekRenderController: AbortController | null = null;
@@ -92,12 +94,16 @@ export interface SyncPreviewTransportOnPlayStateOptions extends PreviewTransport
   isPlaying: boolean;
   pausePlayback: () => void;
   webcamSrc: string;
+  playbackMode: 'source' | 'export';
+  cuts?: CompositionCutRegion[];
 }
 
 export function syncPreviewTransportOnPlayState({
   isPlaying,
   pausePlayback,
   webcamSrc,
+  playbackMode,
+  cuts,
   videoRef,
   webcamVideoRef,
   engineRef,
@@ -114,15 +120,18 @@ export function syncPreviewTransportOnPlayState({
 
   if (isPlaying) {
     const startTimeMs = usePlaybackStore.getState().currentTime;
+    const startSourceTimeMs =
+      playbackMode === 'export' ? mapCompositionToSourceTimeMs(startTimeMs, cuts) : startTimeMs;
 
     engineRef.current.play(startTimeMs / 1000);
+    syncVideoTime(video, startSourceTimeMs, 0);
     void video.play().catch(() => {
       pausePlayback();
     });
 
     if (webcamVideo && webcamSrc) {
       // Align webcam once on play start, then let it play continuously to avoid seek flicker.
-      syncVideoTime(webcamVideo, startTimeMs, 0);
+      syncVideoTime(webcamVideo, startSourceTimeMs, 0);
       void webcamVideo.play().catch(() => {
         // Webcam stream is optional in preview.
       });
@@ -141,6 +150,8 @@ export interface SyncPausedPreviewPositionOptions extends PreviewTransportRefs {
   currentTimeMs: number;
   webcamSrc: string;
   renderCurrentFrame: () => void;
+  playbackMode: 'source' | 'export';
+  cuts?: CompositionCutRegion[];
 }
 
 export function syncPausedPreviewPosition({
@@ -148,6 +159,8 @@ export function syncPausedPreviewPosition({
   currentTimeMs,
   webcamSrc,
   renderCurrentFrame,
+  playbackMode,
+  cuts,
   videoRef,
   webcamVideoRef,
   engineRef,
@@ -166,11 +179,13 @@ export function syncPausedPreviewPosition({
     return;
   }
 
-  // Keep editor preview/timeline in source-time; cuts are applied only during render/export.
-  syncVideoTime(video, currentTimeMs, 0.04);
+  const sourceTimeMs =
+    playbackMode === 'export' ? mapCompositionToSourceTimeMs(currentTimeMs, cuts) : currentTimeMs;
+
+  syncVideoTime(video, sourceTimeMs, 0.04);
   let shouldRefreshWebcamLater = false;
   if (webcamVideo && webcamSrc) {
-    syncVideoTime(webcamVideo, currentTimeMs, 0.1);
+    syncVideoTime(webcamVideo, sourceTimeMs, 0.1);
     shouldRefreshWebcamLater = webcamVideo.readyState < 2 || webcamVideo.seeking;
   }
 

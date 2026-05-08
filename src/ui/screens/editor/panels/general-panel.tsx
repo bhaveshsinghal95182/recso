@@ -208,7 +208,7 @@ export function GeneralPanel() {
                     items={patternItems}
                     itemsPerPage={8}
                     gridClassName="grid-cols-2"
-                    className="w-full"
+                    className="w-full max-w-44 mx-auto"
                     disableAnimation
                     renderItem={(pattern) => (
                       <div

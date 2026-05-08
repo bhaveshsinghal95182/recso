@@ -5,10 +5,11 @@ import type { Project } from '@/types';
 
 import { CanvasFrameContext, HtmlVideoCoverFrameSource, HtmlVideoFrameSource } from '../adapters';
 import type { CompositionEngine } from '../engine';
+import { mapCompositionToSourceTimeMs } from '../functions';
 import type { CanvasSize } from '../preview-config/types';
-import type { CompositionConfig } from '../types';
+import type { CompositionConfig, CompositionCutRegion } from '../types';
 import { renderEngineFrameSafely } from './rendering';
-import { syncVideoTime } from './video-time';
+import { getClampedVideoTime, syncVideoTime } from './video-time';
 
 interface PreviewSessionRefs {
   previewCanvasRef: RefObject<HTMLCanvasElement | null>;
@@ -29,6 +30,8 @@ export interface AttachPreviewSessionOptions extends PreviewSessionRefs {
   canvasSize: CanvasSize;
   durationMs: number;
   renderCurrentFrame: () => void;
+  playbackMode: 'source' | 'export';
+  cuts?: CompositionCutRegion[];
 }
 
 function stopLoop(rafRef: MutableRefObject<number | null>): void {
@@ -36,6 +39,38 @@ function stopLoop(rafRef: MutableRefObject<number | null>): void {
     cancelAnimationFrame(rafRef.current);
     rafRef.current = null;
   }
+}
+
+function syncPlaybackVideoTime(
+  video: HTMLVideoElement,
+  targetMs: number,
+  toleranceSeconds: number,
+): boolean {
+  if (video.seeking) {
+    return false;
+  }
+
+  if (video.readyState < 2) {
+    return false;
+  }
+
+  const nextSeconds = getClampedVideoTime(video, targetMs / 1000);
+  if (Math.abs(video.currentTime - nextSeconds) > toleranceSeconds) {
+    video.currentTime = nextSeconds;
+    return false;
+  }
+
+  return true;
+}
+
+function playPreviewVideo(video: HTMLVideoElement, pausePlayback: () => void): void {
+  if (!video.paused) {
+    return;
+  }
+
+  void video.play().catch(() => {
+    pausePlayback();
+  });
 }
 
 function renderLoopFrame(
@@ -47,8 +82,17 @@ function renderLoopFrame(
     return;
   }
 
-  const { previewContextRef, videoRef, rafRef, lastRenderMsRef, engineRef, previewErrorLoggedRef } =
-    options;
+  const {
+    previewContextRef,
+    videoRef,
+    webcamVideoRef,
+    rafRef,
+    lastRenderMsRef,
+    engineRef,
+    previewErrorLoggedRef,
+    playbackMode,
+    cuts,
+  } = options;
 
   const previewContext = previewContextRef.current;
   const sourceVideo = videoRef.current;
@@ -74,16 +118,45 @@ function renderLoopFrame(
   if (previewContext && sourceVideo) {
     try {
       const engineTime = engineRef.current.tick(now);
-      // In preview mode, use raw source time instead of cut-mapped composition time.
-      const targetSourceMs = engineTime * 1000;
+      const targetCompositionMs = engineTime * 1000;
+      const targetSourceMs =
+        playbackMode === 'export'
+          ? mapCompositionToSourceTimeMs(targetCompositionMs, cuts)
+          : targetCompositionMs;
 
       // Keep video and engine close, but avoid excessive seek churn.
-      syncVideoTime(sourceVideo, targetSourceMs, 0.1);
+      const sourceVideoReady = syncPlaybackVideoTime(sourceVideo, targetSourceMs, 0.1);
+      if (webcamVideoRef.current && options.webcamSrc) {
+        syncPlaybackVideoTime(webcamVideoRef.current, targetSourceMs, 0.1);
+      }
 
-      const compositionMs = sourceVideo.currentTime * 1000;
+      const compositionMs =
+        playbackMode === 'export' ? targetCompositionMs : sourceVideo.currentTime * 1000;
 
-      engineRef.current.seek(compositionMs / 1000);
+      if (playbackMode === 'source') {
+        engineRef.current.seek(compositionMs / 1000);
+      }
+
       playbackState.tick(compositionMs, 'absolute');
+
+      if (playbackMode === 'export' && !sourceVideoReady) {
+        sourceVideo.pause();
+        webcamVideoRef.current?.pause();
+        engineRef.current.play(compositionMs / 1000);
+        rafRef.current = requestAnimationFrame((nextNow) =>
+          renderLoopFrame(nextNow, options, cancelledRef),
+        );
+        return;
+      }
+
+      if (playbackMode === 'export') {
+        playPreviewVideo(sourceVideo, () => usePlaybackStore.getState().pause());
+        if (webcamVideoRef.current && options.webcamSrc) {
+          playPreviewVideo(webcamVideoRef.current, () => {
+            // Webcam is optional; keep the main preview running if it cannot resume.
+          });
+        }
+      }
 
       const rendered = renderEngineFrameSafely({
         previewContext,
@@ -126,6 +199,8 @@ export function attachPreviewSession(options: AttachPreviewSessionOptions): () =
     engineRef,
     compositionConfigRef,
     renderCurrentFrame,
+    playbackMode,
+    cuts,
   } = options;
 
   if (!project || !videoSrc) {
@@ -182,9 +257,13 @@ export function attachPreviewSession(options: AttachPreviewSessionOptions): () =
       }
 
       const compositionMs = usePlaybackStore.getState().currentTime;
-      syncVideoTime(video, compositionMs, 0.04);
+      const sourceTimeMs =
+        playbackMode === 'export'
+          ? mapCompositionToSourceTimeMs(compositionMs, cuts)
+          : compositionMs;
+      syncVideoTime(video, sourceTimeMs, 0.04);
       if (webcamVideo && webcamSrc) {
-        syncVideoTime(webcamVideo, compositionMs, 0.04);
+        syncVideoTime(webcamVideo, sourceTimeMs, 0.04);
       }
 
       engineRef.current.seek(compositionMs / 1000);

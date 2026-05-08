@@ -1,5 +1,5 @@
-import { Pause, Play } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { Maximize2, Minimize2, Pause, Play } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { usePlaybackStore } from '@/store/playback-store';
 import { useProjectStore } from '@/store/project-store';
@@ -17,7 +17,13 @@ import { FocalPointOverlay } from '../focal-point-overlay';
 import { VerticalTabs } from '../vertical-tabs';
 import { type CanvasFrameContext } from './adapters';
 import { CompositionEngine } from './engine';
-import { defaultConfig } from './functions';
+import {
+  defaultConfig,
+  getCutAdjustedDurationMs,
+  mapCompositionToSourceTimeMs,
+  mapSourceCutRangesToCompositionCutRanges,
+  mapSourceTimeToCompositionTimeMs,
+} from './functions';
 import { useEnginePreviewConfigMapper } from './preview-config-mapper.ts';
 import type { CompositionConfig } from './types';
 
@@ -36,6 +42,7 @@ export function EnginePreview() {
   const webcamZoomRegions = zoomRegionsBySource.webcam;
 
   const previewViewportRef = useRef<HTMLDivElement>(null);
+  const fullscreenContainerRef = useRef<HTMLDivElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const webcamVideoRef = useRef<HTMLVideoElement>(null);
@@ -46,6 +53,7 @@ export function EnginePreview() {
   const availableSize = usePreviewViewportSize(previewViewportRef);
   const engineRef = useRef<CompositionEngine>(new CompositionEngine(defaultConfig));
   const compositionConfigRef = useRef<CompositionConfig>(defaultConfig);
+  const [isExportPreviewFullscreen, setIsExportPreviewFullscreen] = useState(false);
   const {
     canvasSize,
     layout,
@@ -64,6 +72,23 @@ export function EnginePreview() {
     mouseEvents,
     webcamZoomRegions,
   );
+  const screenCuts = useMemo(() => cuts.filter((cut) => cut.targets?.screen ?? true), [cuts]);
+  const webcamCuts = useMemo(() => cuts.filter((cut) => cut.targets?.webcam ?? true), [cuts]);
+  const fullscreenDurationMs = useMemo(
+    () => getCutAdjustedDurationMs(durationMs, screenCuts),
+    [durationMs, screenCuts],
+  );
+  const playbackDurationMs = isExportPreviewFullscreen ? fullscreenDurationMs : durationMs;
+  const playbackCompositionConfig = useMemo<CompositionConfig>(() => {
+    if (!isExportPreviewFullscreen) {
+      return compositionConfig;
+    }
+
+    return {
+      ...compositionConfig,
+      webcamCuts: mapSourceCutRangesToCompositionCutRanges(webcamCuts, screenCuts),
+    };
+  }, [compositionConfig, isExportPreviewFullscreen, screenCuts, webcamCuts]);
 
   const selectedZoom = useMemo(
     () => zoomRegions.find((region) => region.id === selectedZoomId) ?? null,
@@ -90,28 +115,30 @@ export function EnginePreview() {
   }, []);
 
   useEffect(() => {
-    if (durationMs > 0) {
-      setDuration(durationMs);
-      engineRef.current.setDuration(durationMs / 1000);
+    if (playbackDurationMs > 0) {
+      setDuration(playbackDurationMs);
+      engineRef.current.setDuration(playbackDurationMs / 1000);
     }
-  }, [durationMs, setDuration]);
+  }, [playbackDurationMs, setDuration]);
 
   useEffect(() => {
-    compositionConfigRef.current = compositionConfig;
-    engineRef.current.setComposition(compositionConfig);
+    compositionConfigRef.current = playbackCompositionConfig;
+    engineRef.current.setComposition(playbackCompositionConfig);
     renderCurrentFrame();
-  }, [compositionConfig, renderCurrentFrame]);
+  }, [playbackCompositionConfig, renderCurrentFrame]);
 
   useEffect(() => {
     syncPreviewTransportOnPlayState({
       isPlaying,
       pausePlayback: pause,
       webcamSrc,
+      playbackMode: isExportPreviewFullscreen ? 'export' : 'source',
+      cuts: screenCuts,
       videoRef,
       webcamVideoRef,
       engineRef,
     });
-  }, [isPlaying, pause, webcamSrc]);
+  }, [isPlaying, pause, webcamSrc, isExportPreviewFullscreen, screenCuts]);
 
   useEffect(() => {
     syncPausedPreviewPosition({
@@ -119,11 +146,20 @@ export function EnginePreview() {
       currentTimeMs: currentTime,
       webcamSrc,
       renderCurrentFrame,
+      playbackMode: isExportPreviewFullscreen ? 'export' : 'source',
+      cuts: screenCuts,
       videoRef,
       webcamVideoRef,
       engineRef,
     });
-  }, [currentTime, isPlaying, renderCurrentFrame, webcamSrc]);
+  }, [
+    currentTime,
+    isPlaying,
+    renderCurrentFrame,
+    webcamSrc,
+    isExportPreviewFullscreen,
+    screenCuts,
+  ]);
 
   useEffect(() => {
     return attachPreviewSession({
@@ -132,6 +168,8 @@ export function EnginePreview() {
       webcamSrc,
       canvasSize,
       durationMs,
+      playbackMode: isExportPreviewFullscreen ? 'export' : 'source',
+      cuts: screenCuts,
       previewCanvasRef,
       videoRef,
       webcamVideoRef,
@@ -147,11 +185,36 @@ export function EnginePreview() {
     canvasSize.height,
     canvasSize.width,
     durationMs,
+    isExportPreviewFullscreen,
     project,
     renderCurrentFrame,
+    screenCuts,
     videoSrc,
     webcamSrc,
   ]);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const isPreviewFullscreen = document.fullscreenElement === fullscreenContainerRef.current;
+      setIsExportPreviewFullscreen((wasPreviewFullscreen) => {
+        if (wasPreviewFullscreen === isPreviewFullscreen) {
+          return wasPreviewFullscreen;
+        }
+
+        const playbackState = usePlaybackStore.getState();
+        const nextTime = isPreviewFullscreen
+          ? mapSourceTimeToCompositionTimeMs(playbackState.currentTime, screenCuts)
+          : mapCompositionToSourceTimeMs(playbackState.currentTime, screenCuts);
+        usePlaybackStore.setState({ currentTime: Math.max(0, nextTime) });
+        return isPreviewFullscreen;
+      });
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, [screenCuts]);
 
   useEffect(() => {
     return () => {
@@ -172,18 +235,39 @@ export function EnginePreview() {
     play();
   }, [isPlaying, pause, play]);
 
+  const handleFullscreenPreview = useCallback(() => {
+    const fullscreenElement = fullscreenContainerRef.current;
+    if (!fullscreenElement) {
+      return;
+    }
+
+    if (document.fullscreenElement === fullscreenElement) {
+      void document.exitFullscreen();
+      return;
+    }
+
+    void fullscreenElement.requestFullscreen();
+  }, []);
+
   if (!project) {
     return null;
   }
 
   return (
-    <div className="relative w-full h-full flex items-center justify-center bg-background">
+    <div
+      ref={fullscreenContainerRef}
+      className="relative w-full h-full flex items-center justify-center bg-background"
+    >
       <div
         ref={previewViewportRef}
-        className="relative h-full w-full p-4 flex items-center justify-center"
+        className={`relative h-full w-full flex items-center justify-center ${
+          isExportPreviewFullscreen ? 'p-0 bg-black' : 'p-4'
+        }`}
       >
         <div
-          className="relative rounded-lg shadow-2xl overflow-hidden"
+          className={`relative overflow-hidden ${
+            isExportPreviewFullscreen ? 'rounded-none shadow-none' : 'rounded-lg shadow-2xl'
+          }`}
           style={{
             width: `${previewDisplaySize.width}px`,
             height: `${previewDisplaySize.height}px`,
@@ -231,6 +315,7 @@ export function EnginePreview() {
       <button
         onClick={handlePlayPause}
         className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-black/60 backdrop-blur px-4 py-3 rounded-full text-white border-0 cursor-pointer hover:bg-black/70 transition-colors flex items-center justify-center"
+        title={isPlaying ? 'Pause preview' : 'Play preview'}
       >
         {isPlaying ? (
           <Pause className="w-5 h-5 fill-white" />
@@ -239,7 +324,26 @@ export function EnginePreview() {
         )}
       </button>
 
-      <VerticalTabs />
+      <button
+        onClick={handleFullscreenPreview}
+        className="absolute bottom-6 right-6 bg-black/60 backdrop-blur px-3 py-3 rounded-full text-white border-0 cursor-pointer hover:bg-black/70 transition-colors flex items-center justify-center"
+        title={
+          isExportPreviewFullscreen ? 'Exit fullscreen export preview' : 'Fullscreen export preview'
+        }
+        aria-label={
+          isExportPreviewFullscreen
+            ? 'Exit fullscreen export preview'
+            : 'Open fullscreen export preview'
+        }
+      >
+        {isExportPreviewFullscreen ? (
+          <Minimize2 className="w-5 h-5" />
+        ) : (
+          <Maximize2 className="w-5 h-5" />
+        )}
+      </button>
+
+      {!isExportPreviewFullscreen && <VerticalTabs />}
     </div>
   );
 }
