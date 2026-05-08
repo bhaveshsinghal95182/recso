@@ -32,7 +32,6 @@ export function EnginePreview() {
     updateZoom,
   } = useTimelineStore();
   const { isPlaying, currentTime, play, pause, setDuration } = usePlaybackStore();
-  const screenCuts = useMemo(() => cuts.filter((cut) => cut.targets?.screen ?? true), [cuts]);
   const screenZoomRegions = zoomRegionsBySource.screen;
   const webcamZoomRegions = zoomRegionsBySource.webcam;
 
@@ -61,7 +60,7 @@ export function EnginePreview() {
   } = useEnginePreviewConfigMapper(
     project,
     screenZoomRegions,
-    screenCuts,
+    cuts,
     mouseEvents,
     webcamZoomRegions,
   );

@@ -501,13 +501,16 @@ export function Timeline() {
   );
 
   const handleAddCutAtTime = useCallback(
-    (timeMs: number) => {
+    (timeMs: number, lane: CutLane) => {
       if (duration <= 0) {
         return;
       }
 
       const region = createCenteredRegion(timeMs, 2000, duration);
-      void addCut(region.startMs, region.endMs);
+      void addCut(region.startMs, region.endMs, {
+        screen: lane === 'screen',
+        webcam: lane === 'webcam',
+      });
     },
     [addCut, duration],
   );
@@ -1007,7 +1010,7 @@ export function Timeline() {
                   laneClassName="bg-primary/15"
                   onDoubleClick={(event) => {
                     const timeMs = clientXToTime(event.clientX);
-                    handleAddCutAtTime(timeMs);
+                    handleAddCutAtTime(timeMs, 'screen');
                   }}
                 >
                   {screenCuts.map((cut) => (
@@ -1037,7 +1040,7 @@ export function Timeline() {
                     laneClassName="bg-violet-500/10"
                     onDoubleClick={(event) => {
                       const timeMs = clientXToTime(event.clientX);
-                      handleAddCutAtTime(timeMs);
+                      handleAddCutAtTime(timeMs, 'webcam');
                     }}
                   >
                     {webcamCuts.map((cut) => (
@@ -1156,7 +1159,7 @@ export function Timeline() {
                   showWaveform={false}
                   onDoubleClick={(event) => {
                     const timeMs = clientXToTime(event.clientX);
-                    handleAddCutAtTime(timeMs);
+                    handleAddCutAtTime(timeMs, 'screen');
                   }}
                 >
                   {screenCuts.map((cut) => (
@@ -1188,7 +1191,7 @@ export function Timeline() {
                     showWaveform={false}
                     onDoubleClick={(event) => {
                       const timeMs = clientXToTime(event.clientX);
-                      handleAddCutAtTime(timeMs);
+                      handleAddCutAtTime(timeMs, 'webcam');
                     }}
                   >
                     {webcamCuts.map((cut) => (

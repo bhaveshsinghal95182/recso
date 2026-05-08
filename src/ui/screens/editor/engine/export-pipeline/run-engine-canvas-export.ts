@@ -68,7 +68,8 @@ export async function runEngineCanvasExport({
       1080;
 
     const sourceDurationMs = Math.max(0, project.timeline.duration || inputDurationMs);
-    const compositionDurationMs = getCutAdjustedDurationMs(sourceDurationMs, project.cuts);
+    const screenCuts = project.cuts.filter((cut) => cut.targets?.screen ?? true);
+    const compositionDurationMs = getCutAdjustedDurationMs(sourceDurationMs, screenCuts);
     const outputDimensions = resolveOutputDimensions(config);
     const layout = await resolveLayout(
       sourceVideoWidth,

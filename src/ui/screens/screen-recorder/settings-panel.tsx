@@ -152,7 +152,7 @@ export function SettingsPanel({
               value={micDeviceId || microphones[0]?.deviceId}
               onValueChange={(val) => val && onMicDeviceChange(val)}
             >
-              <SelectTrigger className="h-8 text-xs shadow-s">
+              <SelectTrigger className="h-8 w-50 text-xs shadow-s">
                 <SelectValue placeholder="Select Microphone" />
               </SelectTrigger>
               <SelectContent className="w-full">

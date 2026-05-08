@@ -182,6 +182,8 @@ export interface CompositionConfig {
   /** Webcam-source zoom regions used exclusively for webcam height overrides. */
   webcamZoomRegions?: CompositionZoomRegion[];
   cuts?: CompositionCutRegion[];
+  /** Composition-time regions where the webcam layer should be hidden. */
+  webcamCuts?: CompositionCutRegion[];
   layerStates?: CompositionLayerState[];
 }
 

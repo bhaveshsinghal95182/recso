@@ -10,6 +10,14 @@ import {
 import { defaultConfig } from '../functions';
 import type { CompositionConfig, CompositionLayout, ZoomKeyframe } from '../types';
 
+function cutTargetsScreen(cut: CutRegion): boolean {
+  return cut.targets?.screen ?? true;
+}
+
+function cutTargetsWebcam(cut: CutRegion): boolean {
+  return cut.targets?.webcam ?? true;
+}
+
 function resolveWebcamShadows(raw: Project['webcamOverlay']) {
   if (!raw?.shadows || raw.shadows.length === 0) {
     return DEFAULT_WEBCAM_STYLE.shadows;
@@ -238,7 +246,12 @@ export function buildPreviewCompositionConfig({
       webcamHeightRatio: region.webcamHeightRatio,
       webcamFullScreen: region.webcamFullScreen,
     })),
-    cuts: cuts.map((cut) => ({
+    cuts: cuts.filter(cutTargetsScreen).map((cut) => ({
+      id: cut.id,
+      startMs: cut.startMs,
+      endMs: cut.endMs,
+    })),
+    webcamCuts: cuts.filter(cutTargetsWebcam).map((cut) => ({
       id: cut.id,
       startMs: cut.startMs,
       endMs: cut.endMs,

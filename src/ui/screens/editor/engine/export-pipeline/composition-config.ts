@@ -1,6 +1,6 @@
 import type { Project, RecordedMouseEvent } from '@/types';
 
-import { defaultConfig } from '../functions';
+import { defaultConfig, mapSourceTimeToCompositionTimeMs } from '../functions';
 import type { CompositionConfig, CompositionLayout, ZoomKeyframe } from '../types';
 import {
   clamp,
@@ -92,6 +92,67 @@ function normalizeCursorRegionOverrides(project: Project) {
     .sort((a, b) => a.startMs - b.startMs);
 }
 
+function cutTargetsScreen(cut: Project['cuts'][number]): boolean {
+  return cut.targets?.screen ?? true;
+}
+
+function cutTargetsWebcam(cut: Project['cuts'][number]): boolean {
+  return cut.targets?.webcam ?? true;
+}
+
+function mapSourceCutsToCompositionCuts(
+  sourceCuts: Project['cuts'],
+  compositionCuts: Project['cuts'],
+): CompositionConfig['webcamCuts'] {
+  const screenCuts = [...compositionCuts]
+    .filter((cut) => cut.endMs > cut.startMs)
+    .sort((a, b) => a.startMs - b.startMs);
+  const mappedCuts: NonNullable<CompositionConfig['webcamCuts']> = [];
+
+  for (const cut of sourceCuts) {
+    const sourceStartMs = Math.max(0, cut.startMs);
+    const sourceEndMs = Math.max(0, cut.endMs);
+    if (sourceEndMs <= sourceStartMs) {
+      continue;
+    }
+
+    let segmentStartMs = sourceStartMs;
+    for (const screenCut of screenCuts) {
+      if (screenCut.endMs <= segmentStartMs) {
+        continue;
+      }
+
+      if (screenCut.startMs >= sourceEndMs) {
+        break;
+      }
+
+      const segmentEndMs = Math.min(screenCut.startMs, sourceEndMs);
+      if (segmentEndMs > segmentStartMs) {
+        mappedCuts.push({
+          id: `${cut.id}:${mappedCuts.length}`,
+          startMs: mapSourceTimeToCompositionTimeMs(segmentStartMs, screenCuts),
+          endMs: mapSourceTimeToCompositionTimeMs(segmentEndMs, screenCuts),
+        });
+      }
+
+      segmentStartMs = Math.max(segmentStartMs, screenCut.endMs);
+      if (segmentStartMs >= sourceEndMs) {
+        break;
+      }
+    }
+
+    if (segmentStartMs < sourceEndMs) {
+      mappedCuts.push({
+        id: `${cut.id}:${mappedCuts.length}`,
+        startMs: mapSourceTimeToCompositionTimeMs(segmentStartMs, screenCuts),
+        endMs: mapSourceTimeToCompositionTimeMs(sourceEndMs, screenCuts),
+      });
+    }
+  }
+
+  return mappedCuts.filter((cut) => cut.endMs > cut.startMs);
+}
+
 function mapLegacyZoomConfigToZoomKeyframes(
   zoomConfig: Project['zoomConfig'] | undefined,
   durationMs: number,
@@ -147,6 +208,8 @@ export function buildExportCompositionConfig({
   const resolvedScreenZoomRegions =
     screenZoomRegions ?? project.zoomRegionsBySource?.screen ?? project.zoomRegions;
   const resolvedWebcamZoomRegions = webcamZoomRegions ?? project.zoomRegionsBySource?.webcam ?? [];
+  const screenCuts = project.cuts.filter(cutTargetsScreen);
+  const webcamCuts = project.cuts.filter(cutTargetsWebcam);
   const hasZoomRegions = resolvedScreenZoomRegions.length > 0;
   const legacyZoomFallback = mapLegacyZoomConfigToZoomKeyframes(
     project.zoomConfig,
@@ -248,13 +311,12 @@ export function buildExportCompositionConfig({
       webcamHeightRatio: region.webcamHeightRatio,
       webcamFullScreen: region.webcamFullScreen,
     })),
-    cuts: project.cuts
-      .filter((cut) => cut.targets?.screen ?? true)
-      .map((cut) => ({
-        id: cut.id,
-        startMs: cut.startMs,
-        endMs: cut.endMs,
-      })),
+    cuts: screenCuts.map((cut) => ({
+      id: cut.id,
+      startMs: cut.startMs,
+      endMs: cut.endMs,
+    })),
+    webcamCuts: mapSourceCutsToCompositionCuts(webcamCuts, screenCuts),
     cursor: {
       enabled: true,
       size: Number.isFinite(rawCursor?.size) ? Math.max(0.2, rawCursor.size) : 1,

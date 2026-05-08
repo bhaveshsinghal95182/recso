@@ -9,6 +9,7 @@ import type {
 } from '../types';
 import { drawBackground } from './background';
 import { drawCursorLayer } from './cursor';
+import { isInCutRegion } from './cuts';
 import { computeVideoLayout } from './layout';
 import { drawVideoLayer, drawWebcamLayer } from './video-layers';
 import {
@@ -74,12 +75,13 @@ const LAYER_DEFINITIONS: Record<CompositionLayerId, LayerDefinition> = {
       ctx,
       frameWidth,
       frameHeight,
+      t,
       config,
       webcamSource,
       activeWebcamHeightRatio,
       activeWebcamFullScreenProgress,
     }) => {
-      if (config.webcam?.enabled && webcamSource) {
+      if (config.webcam?.enabled && webcamSource && !isInCutRegion(t * 1000, config.webcamCuts)) {
         drawWebcamLayer(
           ctx,
           frameWidth,

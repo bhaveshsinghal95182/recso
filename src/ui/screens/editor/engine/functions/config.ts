@@ -18,6 +18,7 @@ export const defaultConfig: CompositionConfig = {
   zooms: [],
   zoomRegions: [],
   cuts: [],
+  webcamCuts: [],
   layerStates: [
     { id: 'background', space: 'base' },
     { id: 'video', space: 'zoomed' },

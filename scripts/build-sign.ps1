@@ -1,5 +1,4 @@
 Write-Host "📦 Building the application..." -ForegroundColor Cyan
-cd ..
 pnpm dist:win
 
 # NOTE: Adjust '.\dist' if your output folder has a different name

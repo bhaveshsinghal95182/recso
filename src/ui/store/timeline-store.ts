@@ -48,7 +48,7 @@ interface TimelineState {
   setZoomRegionsBySource: (zoomRegionsBySource: Partial<ZoomRegionsBySource>) => void;
   setZoomSource: (source: ZoomSource) => Promise<void>;
 
-  addCut: (startMs: number, endMs: number) => Promise<void>;
+  addCut: (startMs: number, endMs: number, targets?: CutRegion['targets']) => Promise<void>;
   removeCut: (cutId: string) => Promise<void>;
   updateCut: (cut: CutRegion) => Promise<void>;
   setSelectedCut: (cutId: string | null) => void;
@@ -144,14 +144,14 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
     }
   },
 
-  addCut: async (startMs, endMs) => {
+  addCut: async (startMs, endMs, targets) => {
     const newCut: CutRegion = {
       id: crypto.randomUUID(),
       startMs,
       endMs,
       targets: {
-        screen: true,
-        webcam: true,
+        screen: targets?.screen ?? true,
+        webcam: targets?.webcam ?? true,
       },
     };
     try {
