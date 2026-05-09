@@ -1,7 +1,7 @@
 END USER LICENSE AGREEMENT (EULA)
 Software: Recso (Beta Version)
 Author: Bhavesh Singhal
-Effective Date: February 15, 2026
+Effective Date: May 9, 2026
 
 IMPORTANT – READ CAREFULLY:
 This End User License Agreement ("Agreement") is a legal agreement between you (either an individual or a single entity) and Bhavesh Singhal ("Licensor") for the "Recso" software product, which includes computer software and may include associated media, printed materials, and "online" or electronic documentation ("Software").
@@ -23,23 +23,24 @@ No Modification: You may not modify, adapt, translate, or create derivative work
 3. THIRD-PARTY COMPONENTS
 The Software bundles or uses certain third-party software components. Your use of these components is subject to their respective license terms:
 
-FFmpeg: This software uses code of FFmpeg (ffmpeg.org) licensed under the LGPLv2.1. FFmpeg is a trademark of Fabrice Bellard, originator of the FFmpeg project. Recso is not associated with or endorsed by the FFmpeg project. You may obtain the source code for FFmpeg from https://ffmpeg.org.
-
-Remotion: Video rendering capabilities are provided by Remotion (remotion.dev). This component is used under the Remotion Free License. Recso is not affiliated with Remotion AG.
-
 Electron & React: Portions of this software utilize the Electron framework and React library, licensed under the MIT License.
 
-4. BETA DISCLAIMER
+4. PERSONAL USE AND PERMISSIONS
+The Software is intended solely for personal, non-commercial use. It is designed to run locally for your own recording, review, and productivity workflows.
+
+To provide its core features, the Software may request access to your screen, webcam, system audio, and microphone audio. These permissions are used only to capture the media sources you choose to record or use within the Software.
+
+5. BETA DISCLAIMER
 WARNING: This Software is a "Beta" version. It is believed to contain defects and a primary purpose of this beta testing is to obtain feedback on software performance and the identification of defects. You are advised to safeguard important data, to use caution, and not to rely in any way on the correct functioning or performance of the Software and/or accompanying materials.
 
-5. DISCLAIMER OF WARRANTIES
+6. DISCLAIMER OF WARRANTIES
 THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. THE ENTIRE RISK AS TO THE QUALITY AND PERFORMANCE OF THE SOFTWARE IS WITH YOU.
 
-6. LIMITATION OF LIABILITY
+7. LIMITATION OF LIABILITY
 IN NO EVENT SHALL THE LICENSOR BE LIABLE FOR ANY DAMAGES WHATSOEVER (INCLUDING, WITHOUT LIMITATION, DAMAGES FOR LOSS OF BUSINESS PROFITS, BUSINESS INTERRUPTION, LOSS OF BUSINESS INFORMATION, OR ANY OTHER PECUNIARY LOSS) ARISING OUT OF THE USE OF OR INABILITY TO USE THIS SOFTWARE, EVEN IF THE LICENSOR HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
 
-7. TERMINATION
+8. TERMINATION
 This Agreement is effective until terminated. Your rights under this Agreement will terminate automatically without notice from the Licensor if you fail to comply with any term(s) of this Agreement. Upon termination, you shall cease all use of the Software and destroy all copies, full or partial, of the Software.
 
-8. GOVERNING LAW
-This Agreement shall be governed by and construed in accordance with the laws of India. Any disputes arising under or in connection with this Agreement shall be subject to the exclusive jurisdiction of the courts located in Ludhiana, Punjab.
+9. GOVERNING LAW
+This Agreement shall be governed by and construed in accordance with the laws of India. Any disputes arising under or in connection with this Agreement shall be subject to the exclusive jurisdiction of the courts located in Ambala, Haryana.
