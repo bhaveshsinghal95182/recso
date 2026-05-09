@@ -42,42 +42,15 @@ export const WindowTitlebar = () => {
   // };
 
   return (
-    <nav className="flex items-center justify-between px-4 py-2 bg-linear-to-b from-gray-900/90 to-gray-800/90 backdrop-blur-md border-b border-white/10 shadow-lg select-none z-50 app-region-drag">
-      <div className="flex items-center gap-2">
-        <div className="w-2 h-2 rounded-full bg-red-500/80 shadow-[0_0_8px_rgba(239,68,68,0.6)]"></div>
-        <h1 className="text-sm font-semibold tracking-wide text-white/90 font-inter">Recso</h1>
+    <nav className="flex items-center justify-between  bg-linear-to-b from-gray-900/90 to-gray-800/90 backdrop-blur-md border-b border-white/10 shadow-lg select-none z-50 app-region-drag">
+      <div className="flex items-center gap-2 px-4 py-2">
+        <h1 className="text-md font-semibold tracking-wide text-white/70 font-inter">Recso</h1>
       </div>
-      <div className="nav-buttons flex items-center gap-1.5 app-region-no-drag">
-        {/* Support ID Button */}
-        {/* {supportId && (
-          <Tooltip delayDuration={300}>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className="cursor-pointer text-gray-400 hover:text-white hover:bg-white/10 group h-6 w-6 mr-2"
-                onClick={handleCopySupportId}
-              >
-                {copied ? (
-                  <Check size="14" className="text-green-500" />
-                ) : (
-                  <Headset
-                    size="14"
-                    className="transform group-hover:scale-105 transition-transform"
-                  />
-                )}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" className="text-xs font-mono">
-              {copied ? 'Copied!' : `Support ID: ${supportId} (Click to copy)`}
-            </TooltipContent>
-          </Tooltip>
-        )} */}
-
+      <div className="nav-buttons flex items-center app-region-no-drag h-full">
         <Button
           variant="ghost"
-          size="icon-sm"
-          className="tray-btn cursor-pointer text-gray-400 hover:text-white hover:bg-white/10 group h-6 w-6"
+          size="icon-lg"
+          className="tray-btn cursor-pointer text-gray-400 hover:text-white hover:bg-white/10 group h-full w-12"
           onClick={handleHideToTray}
           title="Hide to Tray"
         >
@@ -88,8 +61,8 @@ export const WindowTitlebar = () => {
         </Button>
         <Button
           variant="ghost"
-          size="icon-sm"
-          className="max-btn cursor-pointer text-gray-400 hover:text-white hover:bg-white/10 group h-6 w-6"
+          size="icon-lg"
+          className="max-btn cursor-pointer text-gray-400 hover:text-white hover:bg-white/10 group h-full w-12"
           onClick={handleMaximizeToggle}
           title={isMaximized ? 'Restore' : 'Maximize'}
         >
@@ -101,8 +74,8 @@ export const WindowTitlebar = () => {
         </Button>
         <Button
           variant="ghost"
-          size="icon-sm"
-          className="close-btn cursor-pointer text-gray-400 hover:text-white hover:bg-red-500/80 group h-6 w-6"
+          size="icon-lg"
+          className="close-btn cursor-pointer text-gray-400 hover:text-red-500 hover:bg-red-500/80 group h-full w-12"
           onClick={handleClose}
           title="Close"
         >
