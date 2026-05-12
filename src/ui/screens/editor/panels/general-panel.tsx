@@ -39,22 +39,21 @@ function hslToHex(h: number, s: number, l: number) {
 }
 
 export function GeneralPanel() {
-  const { project, updateBackgroundColor, updateBackgroundPattern, updateBackgroundPath } =
-    useProjectStore();
+  const {
+    project,
+    updateBackgroundColor,
+    updateBackgroundPattern,
+    updateBackgroundPath,
+    updateCanvasBackgroundEnabled,
+  } = useProjectStore();
   const [presetColors, setPresetColors] = useState<string[]>(PASTEL_COLORS);
 
   if (!project) return null;
 
-  const isBackgroundEnabled = project.backgroundColor !== 'transparent';
+  const isBackgroundEnabled = project.canvasBackgroundEnabled !== false;
 
   const handleBackgroundToggle = (checked: boolean) => {
-    if (checked) {
-      updateBackgroundColor('#000000');
-    } else {
-      updateBackgroundColor('transparent');
-      updateBackgroundPattern(null); // Clear the pattern when background is disabled
-      updateBackgroundPath(null); // Clear the custom image when background is disabled
-    }
+    updateCanvasBackgroundEnabled(checked);
   };
 
   const handleRefreshColors = () => {

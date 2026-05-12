@@ -12,6 +12,7 @@ import {
   buildFallbackPreviewLayoutSnapshot,
   calculateFallbackLayout,
   calculateFallbackWebcamLayout,
+  calculateFullBleedLayout,
   DEFAULT_CANVAS_SIZE,
   loadPreviewLayoutSnapshot,
 } from './preview-config/layout';
@@ -46,6 +47,8 @@ export function useEnginePreviewConfigMapper(
     }
 
     let cancelled = false;
+    setBackendLayout(null);
+    setBackendWebcamLayout(null);
 
     const syncLayoutFromBackend = async () => {
       try {
@@ -77,6 +80,7 @@ export function useEnginePreviewConfigMapper(
   }, [
     project?.videoDimensions?.height,
     project?.videoDimensions?.width,
+    project?.canvasBackgroundEnabled,
     project?.webcamOverlay,
     webcamSourcePath,
   ]);
@@ -92,6 +96,15 @@ export function useEnginePreviewConfigMapper(
       };
     }
 
+    if (project.canvasBackgroundEnabled === false) {
+      return calculateFullBleedLayout(
+        project.videoDimensions.width,
+        project.videoDimensions.height,
+        canvasSize.width,
+        canvasSize.height,
+      );
+    }
+
     if (backendLayout) {
       return backendLayout;
     }
@@ -102,7 +115,13 @@ export function useEnginePreviewConfigMapper(
       canvasSize.width,
       canvasSize.height,
     );
-  }, [backendLayout, canvasSize.height, canvasSize.width, project?.videoDimensions]);
+  }, [
+    backendLayout,
+    canvasSize.height,
+    canvasSize.width,
+    project?.canvasBackgroundEnabled,
+    project?.videoDimensions,
+  ]);
 
   const legacyZoomFallback = useMemo(
     () =>
@@ -179,5 +198,6 @@ export function useEnginePreviewConfigMapper(
     backgroundContainerStyle: previewBackgroundPresentation.backgroundContainerStyle,
     selectedPattern: previewBackgroundPresentation.selectedPattern,
     hasPattern: previewBackgroundPresentation.hasPattern,
+    shouldRenderBackground: previewBackgroundPresentation.shouldRenderBackground,
   };
 }

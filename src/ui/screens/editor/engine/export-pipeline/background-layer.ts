@@ -148,6 +148,13 @@ export async function buildStaticBackgroundLayer(
   width: number,
   height: number,
 ): Promise<BackgroundLayerCanvas | null> {
+  const canvasBackgroundEnabled = project.canvasBackgroundEnabled !== false;
+
+  // Skip background layer entirely in full-bleed mode
+  if (!canvasBackgroundEnabled) {
+    return null;
+  }
+
   const selectedPattern = project.backgroundPattern;
   const hasPattern = Boolean(selectedPattern && selectedPattern.id !== 'none');
   const backgroundImageUrl = toFileUrl(project.backgroundPath);

@@ -62,17 +62,40 @@ export function registerBackgroundHandlers(): void {
   });
 
   /**
+   * Update whether canvas background is enabled for the active project
+   * Accepts: boolean
+   */
+  ipcMain.handle(
+    'background:update-canvas-background-enabled',
+    async (_event, enabled: boolean) => {
+      try {
+        const result = editorService.updateCanvasBackgroundEnabled(enabled);
+        return { success: result, enabled };
+      } catch (err) {
+        console.error('[BackgroundIPC] updateCanvasBackgroundEnabled error:', err);
+        throw err;
+      }
+    },
+  );
+
+  /**
    * Get current background configuration for the active project
    */
   ipcMain.handle('background:get-config', async () => {
     const project = editorService.getActiveProject();
     if (!project) {
-      return { backgroundPath: null, backgroundColor: '#ffffff', backgroundPattern: null };
+      return {
+        backgroundPath: null,
+        backgroundColor: '#ffffff',
+        backgroundPattern: null,
+        canvasBackgroundEnabled: true,
+      };
     }
     return {
       backgroundPath: project.backgroundPath || null,
       backgroundColor: project.backgroundColor,
       backgroundPattern: project.backgroundPattern,
+      canvasBackgroundEnabled: project.canvasBackgroundEnabled !== false,
     };
   });
 

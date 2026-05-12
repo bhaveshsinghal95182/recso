@@ -25,19 +25,25 @@ export interface PreviewBackgroundPresentation {
   selectedPattern: Project['backgroundPattern'];
   hasPattern: boolean;
   backgroundContainerStyle: React.CSSProperties;
+  shouldRenderBackground: boolean;
 }
 
 export function getPreviewBackgroundPresentation(
   project: Project | null,
 ): PreviewBackgroundPresentation {
   const selectedPattern = project?.backgroundPattern ?? null;
+  const canvasBackgroundEnabled = project?.canvasBackgroundEnabled !== false;
 
   return {
     selectedPattern,
-    hasPattern: selectedPattern !== null && selectedPattern.id !== 'none',
-    backgroundContainerStyle: {
-      backgroundColor: project?.backgroundColor || '#000000',
-      ...(selectedPattern?.containerStyle || {}),
-    },
+    hasPattern:
+      canvasBackgroundEnabled && selectedPattern !== null && selectedPattern.id !== 'none',
+    backgroundContainerStyle: canvasBackgroundEnabled
+      ? {
+          backgroundColor: project?.backgroundColor || '#000000',
+          ...(selectedPattern?.containerStyle || {}),
+        }
+      : {},
+    shouldRenderBackground: canvasBackgroundEnabled,
   };
 }

@@ -19,6 +19,25 @@ function toDefaultLayout(canvasSize: CanvasSize): CompositionLayout {
   };
 }
 
+export function calculateFullBleedLayout(
+  videoWidth: number,
+  videoHeight: number,
+  canvasWidth: number,
+  canvasHeight: number,
+): CompositionLayout {
+  const scaleX = canvasWidth / Math.max(1, videoWidth);
+  const scaleY = canvasHeight / Math.max(1, videoHeight);
+  const scale = Math.max(scaleX, scaleY);
+
+  return {
+    x: 0,
+    y: 0,
+    width: canvasWidth,
+    height: canvasHeight,
+    scale: Number.isFinite(scale) && scale > 0 ? scale : 1,
+  };
+}
+
 export function calculateFallbackLayout(
   videoWidth: number,
   videoHeight: number,
@@ -139,13 +158,21 @@ export async function loadPreviewLayoutSnapshot(
   }
 
   const canvasSize = await window.electron.compositor.getCanvasSize();
-  const layout = await window.electron.compositor.calculateLayout(
-    {
-      width: project.videoDimensions.width,
-      height: project.videoDimensions.height,
-    },
-    canvasSize,
-  );
+  const layout =
+    project.canvasBackgroundEnabled === false
+      ? calculateFullBleedLayout(
+          project.videoDimensions.width,
+          project.videoDimensions.height,
+          canvasSize.width,
+          canvasSize.height,
+        )
+      : await window.electron.compositor.calculateLayout(
+          {
+            width: project.videoDimensions.width,
+            height: project.videoDimensions.height,
+          },
+          canvasSize,
+        );
 
   let webcamLayout: CompositionLayout | null = null;
   if (project.webcamOverlay?.enabled && webcamSourcePath) {
@@ -186,12 +213,20 @@ export function buildFallbackPreviewLayoutSnapshot(
     };
   }
 
-  const layout = calculateFallbackLayout(
-    project.videoDimensions.width,
-    project.videoDimensions.height,
-    DEFAULT_CANVAS_SIZE.width,
-    DEFAULT_CANVAS_SIZE.height,
-  );
+  const layout =
+    project.canvasBackgroundEnabled === false
+      ? calculateFullBleedLayout(
+          project.videoDimensions.width,
+          project.videoDimensions.height,
+          DEFAULT_CANVAS_SIZE.width,
+          DEFAULT_CANVAS_SIZE.height,
+        )
+      : calculateFallbackLayout(
+          project.videoDimensions.width,
+          project.videoDimensions.height,
+          DEFAULT_CANVAS_SIZE.width,
+          DEFAULT_CANVAS_SIZE.height,
+        );
 
   const webcamLayout =
     project.webcamOverlay?.enabled && webcamSourcePath

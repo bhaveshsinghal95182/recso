@@ -66,6 +66,8 @@ export interface CompositorConfig {
   canvasSize: Size;
   /** Layout configuration */
   layout: LayoutConfig;
+  /** Whether canvas background is enabled (true for framed, false for full-bleed) */
+  canvasBackgroundEnabled: boolean;
 }
 
 /** Default compositor configuration */
@@ -78,4 +80,5 @@ export const DEFAULT_COMPOSITOR_CONFIG: CompositorConfig = {
     maxScale: 0.9,
     scaleUp: true,
   },
+  canvasBackgroundEnabled: true,
 };

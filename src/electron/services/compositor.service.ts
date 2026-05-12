@@ -151,12 +151,36 @@ export function getLayoutConfig(): LayoutConfig {
 export function calculateLayout(videoBounds: Rectangle | Size, canvasSize?: Size): LayoutResult {
   const canvas = canvasSize || config.canvasSize;
   const layout = config.layout;
+  const canvasBackgroundEnabled = config.canvasBackgroundEnabled !== false;
 
   // Extract video dimensions
   const videoWidth = videoBounds.width;
   const videoHeight = videoBounds.height;
 
-  console.log('[Compositor] Calculating layout:', {
+  // In full-bleed mode (background disabled), always fill the canvas exactly.
+  // Keep scale representative of the draw target so cursor sizing/mapping stays aligned.
+  if (!canvasBackgroundEnabled) {
+    const scaleX = canvas.width / Math.max(1, videoWidth);
+    const scaleY = canvas.height / Math.max(1, videoHeight);
+    const scale = Math.max(scaleX, scaleY);
+
+    console.log('[Compositor] Calculating full-bleed layout:', {
+      video: `${videoWidth}x${videoHeight}`,
+      canvas: `${canvas.width}x${canvas.height}`,
+      mode: 'full-bleed',
+    });
+
+    return {
+      x: 0,
+      y: 0,
+      width: canvas.width,
+      height: canvas.height,
+      scale: Number.isFinite(scale) && scale > 0 ? scale : 1,
+    };
+  }
+
+  // Framed mode (background enabled) - existing behavior
+  console.log('[Compositor] Calculating framed layout:', {
     video: `${videoWidth}x${videoHeight}`,
     canvas: `${canvas.width}x${canvas.height}`,
     padding: layout.padding,

@@ -457,6 +457,10 @@ electron.contextBridge.exposeInMainWorld('electron', {
     updatePattern: (pattern: Record<string, unknown> | null) =>
       electron.ipcRenderer.invoke('background:update-pattern', pattern),
 
+    /** Update whether canvas background is enabled for the active project */
+    updateCanvasBackgroundEnabled: (enabled: boolean) =>
+      electron.ipcRenderer.invoke('background:update-canvas-background-enabled', enabled),
+
     /** Get current background configuration */
     getConfig: () => electron.ipcRenderer.invoke('background:get-config'),
   },

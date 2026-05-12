@@ -172,6 +172,8 @@ export interface Project {
   backgroundColor: string;
   /** Optional background pattern */
   backgroundPattern?: BackgroundPatternConfig | null;
+  /** Whether canvas background is enabled (defaults to true for backward compatibility) */
+  canvasBackgroundEnabled?: boolean;
   /** Optional webcam overlay settings */
   webcamOverlay?: WebcamOverlayConfig | null;
   /** Cut regions to exclude from export */

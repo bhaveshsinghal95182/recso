@@ -216,6 +216,7 @@ function normalizeCursorRegionOverrides(
 function normalizeProjectData(project: Project): Project {
   project.cuts = normalizeCuts(project.cuts);
   project.cursorRegionOverrides = normalizeCursorRegionOverrides(project.cursorRegionOverrides);
+  project.canvasBackgroundEnabled = project.canvasBackgroundEnabled !== false;
 
   const zoomRegionsBySource = normalizeZoomRegionsBySource(project);
   project.zoomRegionsBySource = zoomRegionsBySource;
@@ -336,6 +337,7 @@ export async function createProject(recordingId: string): Promise<Project | null
     spritesheetMeta,
     backgroundColor: '#000000',
     backgroundPattern: null,
+    canvasBackgroundEnabled: true,
     webcamOverlay: createDefaultWebcamOverlay(recording.finalPath),
     cuts: [],
     zoomRegions: [],
@@ -415,6 +417,9 @@ export function loadProject(recordingDir: string): Project | null {
     try {
       CompositorService.setBackgroundColor(project.backgroundColor);
       CompositorService.setBackground(project.backgroundPath || null);
+      CompositorService.updateConfig({
+        canvasBackgroundEnabled: project.canvasBackgroundEnabled !== false,
+      });
     } catch (err) {
       console.warn('[EditorService] Failed to sync compositor state on load:', err);
     }
@@ -623,6 +628,25 @@ export function updateBackgroundPath(imagePath: string | null): boolean {
     CompositorService.setBackground(imagePath);
   } catch (err) {
     console.warn('[EditorService] Failed to update compositor background path:', err);
+  }
+
+  // Auto-save metadata
+  persistProjectMutation();
+  return true;
+}
+
+/**
+ * Update whether canvas background is enabled
+ */
+export function updateCanvasBackgroundEnabled(enabled: boolean): boolean {
+  if (!activeProject) return false;
+
+  activeProject.canvasBackgroundEnabled = enabled;
+
+  try {
+    CompositorService.updateConfig({ canvasBackgroundEnabled: enabled });
+  } catch (err) {
+    console.warn('[EditorService] Failed to update compositor canvas background enabled:', err);
   }
 
   // Auto-save metadata

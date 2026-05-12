@@ -31,6 +31,7 @@ interface ProjectState {
   updateBackgroundColor: (color: string) => void;
   updateBackgroundPath: (path: string | null) => void;
   updateBackgroundPattern: (pattern: BackgroundPatternConfig | null) => void;
+  updateCanvasBackgroundEnabled: (enabled: boolean) => Promise<void>;
   updateWebcamOverlay: (config: Partial<WebcamOverlayConfig>) => Promise<void>;
   updateDuration: (durationMs: number) => Promise<void>;
 
@@ -255,6 +256,49 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     window.electron.background.updatePattern(pattern).catch((err) => {
       console.error('[ProjectStore] updateBackgroundPattern error:', err);
     });
+  },
+
+  updateCanvasBackgroundEnabled: async (enabled: boolean) => {
+    const { project } = get();
+    if (!project) return;
+
+    const previousEnabled = project.canvasBackgroundEnabled !== false;
+
+    try {
+      // Optimistic update
+      set((state) => ({
+        project: state.project
+          ? {
+              ...state.project,
+              canvasBackgroundEnabled: enabled,
+            }
+          : null,
+      }));
+
+      const result = await window.electron.background.updateCanvasBackgroundEnabled(enabled);
+      if (!result.success) {
+        throw new Error('Canvas background update was rejected');
+      }
+
+      set((state) => ({
+        project: state.project
+          ? {
+              ...state.project,
+              canvasBackgroundEnabled: result.enabled,
+            }
+          : null,
+      }));
+    } catch (err) {
+      set((state) => ({
+        project: state.project
+          ? {
+              ...state.project,
+              canvasBackgroundEnabled: previousEnabled,
+            }
+          : null,
+      }));
+      console.error('[ProjectStore] updateCanvasBackgroundEnabled error:', err);
+    }
   },
 
   updateWebcamOverlay: async (config: Partial<WebcamOverlayConfig>) => {

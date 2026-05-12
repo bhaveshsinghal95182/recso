@@ -188,7 +188,7 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
       totalFrames: 0,
       fps: 0,
       eta: 0,
-      stage: 'export',
+      stage: 'composition',
       stagePercent: 0,
     });
 

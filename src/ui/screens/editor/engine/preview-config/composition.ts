@@ -178,6 +178,8 @@ export function buildPreviewCompositionConfig({
     1,
   );
 
+  const canvasBackgroundEnabled = project?.canvasBackgroundEnabled !== false;
+
   return {
     ...defaultConfig,
     background: {
@@ -187,11 +189,16 @@ export function buildPreviewCompositionConfig({
     },
     video: {
       scale: layout.scale,
-      borderRadius: DEFAULT_VIDEO_STYLE.borderRadius,
-      border: {
-        width: DEFAULT_VIDEO_STYLE.borderWidth,
-        color: DEFAULT_VIDEO_STYLE.borderColor,
-      },
+      borderRadius: canvasBackgroundEnabled ? DEFAULT_VIDEO_STYLE.borderRadius : 0,
+      border: canvasBackgroundEnabled
+        ? {
+            width: DEFAULT_VIDEO_STYLE.borderWidth,
+            color: DEFAULT_VIDEO_STYLE.borderColor,
+          }
+        : {
+            width: 0,
+            color: 'transparent',
+          },
     },
     webcam: webcamEnabled
       ? {

@@ -30,6 +30,25 @@ function calculateFallbackLayout(
   return { x, y, width, height, scale };
 }
 
+function calculateFullBleedLayout(
+  videoWidth: number,
+  videoHeight: number,
+  canvasWidth: number,
+  canvasHeight: number,
+): CompositionLayout {
+  const scaleX = canvasWidth / Math.max(1, videoWidth);
+  const scaleY = canvasHeight / Math.max(1, videoHeight);
+  const scale = Math.max(scaleX, scaleY);
+
+  return {
+    x: 0,
+    y: 0,
+    width: canvasWidth,
+    height: canvasHeight,
+    scale: Number.isFinite(scale) && scale > 0 ? scale : 1,
+  };
+}
+
 function calculateFallbackWebcamLayout(
   canvasWidth: number,
   canvasHeight: number,
@@ -109,7 +128,12 @@ export async function resolveLayout(
   videoHeight: number,
   canvasWidth: number,
   canvasHeight: number,
+  canvasBackgroundEnabled = true,
 ): Promise<CompositionLayout> {
+  if (!canvasBackgroundEnabled) {
+    return calculateFullBleedLayout(videoWidth, videoHeight, canvasWidth, canvasHeight);
+  }
+
   try {
     return await window.electron.compositor.calculateLayout(
       {

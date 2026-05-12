@@ -76,6 +76,7 @@ export async function runEngineCanvasExport({
       sourceVideoHeight,
       outputDimensions.width,
       outputDimensions.height,
+      project.canvasBackgroundEnabled !== false,
     );
 
     const webcamLayout =

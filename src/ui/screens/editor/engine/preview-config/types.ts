@@ -20,4 +20,5 @@ export interface EnginePreviewMappedConfig {
   backgroundContainerStyle: React.CSSProperties;
   selectedPattern: Project['backgroundPattern'];
   hasPattern: boolean;
+  shouldRenderBackground: boolean;
 }

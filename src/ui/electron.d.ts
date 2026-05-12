@@ -116,6 +116,7 @@ interface ElectronAPI {
       backgroundColor: string;
       canvasSize: { width: number; height: number };
       layout: { padding: number; maxScale: number; scaleUp: boolean };
+      canvasBackgroundEnabled: boolean;
     }>;
 
     /** Update compositor configuration (partial) */
@@ -124,6 +125,7 @@ interface ElectronAPI {
       backgroundColor: string;
       canvasSize: { width: number; height: number };
       layout: { padding: number; maxScale: number; scaleUp: boolean };
+      canvasBackgroundEnabled: boolean;
     }>;
 
     /** Set background image path */
@@ -175,6 +177,7 @@ interface ElectronAPI {
       backgroundColor: string;
       canvasSize: { width: number; height: number };
       layout: { padding: number; maxScale: number; scaleUp: boolean };
+      canvasBackgroundEnabled: boolean;
     }>;
 
     /** Open file picker for background image */
@@ -321,11 +324,17 @@ interface ElectronAPI {
       pattern: BackgroundPatternConfig | null,
     ) => Promise<{ success: boolean; pattern: BackgroundPatternConfig | null }>;
 
+    /** Update whether canvas background is enabled */
+    updateCanvasBackgroundEnabled: (
+      enabled: boolean,
+    ) => Promise<{ success: boolean; enabled: boolean }>;
+
     /** Get current background configuration */
     getConfig: () => Promise<{
       backgroundPath: string | null;
       backgroundColor: string;
       backgroundPattern: BackgroundPatternConfig | null;
+      canvasBackgroundEnabled: boolean;
     }>;
   };
 

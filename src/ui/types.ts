@@ -291,6 +291,7 @@ export interface Project {
   backgroundPath?: string;
   backgroundColor: string;
   backgroundPattern?: BackgroundPatternConfig | null;
+  canvasBackgroundEnabled?: boolean;
   webcamOverlay?: WebcamOverlayConfig | null;
   cuts: CutRegion[];
   /** Legacy screen zoom regions. Prefer zoomRegionsBySource.screen for new code. */

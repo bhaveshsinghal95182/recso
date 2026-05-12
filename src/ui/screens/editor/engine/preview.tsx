@@ -65,6 +65,7 @@ export function EnginePreview() {
     backgroundContainerStyle,
     selectedPattern,
     hasPattern,
+    shouldRenderBackground,
   } = useEnginePreviewConfigMapper(
     project,
     screenZoomRegions,
@@ -273,17 +274,19 @@ export function EnginePreview() {
             height: `${previewDisplaySize.height}px`,
           }}
         >
-          <div className="absolute inset-0" style={backgroundContainerStyle}>
-            {backgroundImageSrc ? (
-              <img
-                src={backgroundImageSrc}
-                alt="Preview background"
-                className="absolute inset-0 w-full h-full object-cover"
-              />
-            ) : hasPattern && selectedPattern ? (
-              <div className="absolute inset-0" style={selectedPattern.style} />
-            ) : null}
-          </div>
+          {shouldRenderBackground && (
+            <div className="absolute inset-0" style={backgroundContainerStyle}>
+              {backgroundImageSrc ? (
+                <img
+                  src={backgroundImageSrc}
+                  alt="Preview background"
+                  className="absolute inset-0 w-full h-full object-cover"
+                />
+              ) : hasPattern && selectedPattern ? (
+                <div className="absolute inset-0" style={selectedPattern.style} />
+              ) : null}
+            </div>
+          )}
 
           <canvas ref={previewCanvasRef} className="absolute inset-0 w-full h-full" />
 

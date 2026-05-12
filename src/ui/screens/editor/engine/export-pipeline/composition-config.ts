@@ -189,21 +189,28 @@ export function buildExportCompositionConfig({
     1,
   );
 
+  const canvasBackgroundEnabled = project.canvasBackgroundEnabled !== false;
+
   return {
     ...defaultConfig,
     background: {
-      enabled: true,
+      enabled: canvasBackgroundEnabled,
       type: 'color',
       // Keep canvas content when we pre-compose a background layer (preview-like behavior).
       color: preserveUnderlyingBackground ? 'transparent' : project.backgroundColor || '#000000',
     },
     video: {
       scale: layout.scale,
-      borderRadius: DEFAULT_VIDEO_STYLE.borderRadius,
-      border: {
-        width: DEFAULT_VIDEO_STYLE.borderWidth,
-        color: DEFAULT_VIDEO_STYLE.borderColor,
-      },
+      borderRadius: canvasBackgroundEnabled ? DEFAULT_VIDEO_STYLE.borderRadius : 0,
+      border: canvasBackgroundEnabled
+        ? {
+            width: DEFAULT_VIDEO_STYLE.borderWidth,
+            color: DEFAULT_VIDEO_STYLE.borderColor,
+          }
+        : {
+            width: 0,
+            color: 'transparent',
+          },
     },
     webcam: webcamEnabled
       ? {

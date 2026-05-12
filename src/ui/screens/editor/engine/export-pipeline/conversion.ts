@@ -9,6 +9,10 @@ import type { CompositionConfig } from '../types';
 import { resolveVideoBitrate } from './settings';
 import type { BackgroundLayerCanvas, OutputDimensions, PreparedWebcamSource } from './types';
 
+const PROGRESS_REPORT_INTERVAL_MS = 120;
+const PROGRESS_REPORT_MIN_DELTA = 0.002;
+const UI_YIELD_INTERVAL_MS = 120;
+
 export interface RunConversionOptions {
   input: MediabunnyInput;
   config: ExportConfig;
@@ -63,6 +67,44 @@ export async function runCanvasConversion({
 
   const totalFrames = Math.max(1, Math.ceil((compositionDurationMs / 1000) * config.fps));
   const startedAtMs = performance.now();
+  const safeCompositionDurationMs = Math.max(1, compositionDurationMs);
+  const compositionDurationSeconds = Math.max(0.001, compositionDurationMs / 1000);
+  let lastReportedFraction = 0;
+  let lastProgressReportAtMs = 0;
+  let lastUiYieldAtMs = 0;
+
+  const reportProgress = (fraction: number, force = false): boolean => {
+    if (!onProgress) {
+      return false;
+    }
+
+    const clamped = Math.max(0, Math.min(1, fraction));
+    const nextFraction = Math.max(lastReportedFraction, clamped);
+    const now = performance.now();
+    const hasMeaningfulChange = nextFraction - lastReportedFraction >= PROGRESS_REPORT_MIN_DELTA;
+    const hasWaitedLongEnough = now - lastProgressReportAtMs >= PROGRESS_REPORT_INTERVAL_MS;
+
+    if (!force && nextFraction < 1 && (!hasMeaningfulChange || !hasWaitedLongEnough)) {
+      return false;
+    }
+
+    lastReportedFraction = nextFraction;
+    lastProgressReportAtMs = now;
+    onProgress(nextFraction, totalFrames, startedAtMs);
+    return true;
+  };
+
+  const reportProgressAndYield = async (fraction: number, force = false): Promise<void> => {
+    const reported = reportProgress(fraction, force);
+    const now = performance.now();
+
+    if (reported && now - lastUiYieldAtMs >= UI_YIELD_INTERVAL_MS) {
+      lastUiYieldAtMs = now;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    }
+  };
 
   const conversion = await Conversion.init({
     input,
@@ -84,6 +126,10 @@ export async function runCanvasConversion({
 
         const sourceTimeMs = sample.timestamp * 1000;
         if (isInCutRegion(sourceTimeMs, compositionConfig.cuts)) {
+          await reportProgressAndYield(
+            mapSourceTimeToCompositionTimeMs(sourceTimeMs, compositionConfig.cuts) /
+              safeCompositionDurationMs,
+          );
           return null;
         }
 
@@ -115,6 +161,8 @@ export async function runCanvasConversion({
           new MediabunnySampleSource(sample),
           preparedWebcamSource?.frameSource ?? null,
         );
+
+        await reportProgressAndYield(compositionTimeSeconds / compositionDurationSeconds);
 
         return context.getCanvas();
       },
@@ -150,11 +198,14 @@ export async function runCanvasConversion({
     throw new Error('Export cancelled');
   }
 
+  reportProgress(0, true);
+
   conversion.onProgress = (fraction) => {
-    onProgress?.(fraction, totalFrames, startedAtMs);
+    reportProgress(fraction);
   };
 
   await conversion.execute();
+  reportProgress(1, true);
 
   const encodedBuffer = target.buffer;
   if (!encodedBuffer) {
