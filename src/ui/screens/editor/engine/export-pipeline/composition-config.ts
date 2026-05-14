@@ -1,6 +1,11 @@
 import type { Project, RecordedMouseEvent } from '@/types';
 
-import { defaultConfig, mapSourceCutRangesToCompositionCutRanges } from '../functions';
+import {
+  defaultConfig,
+  isInCutRegion,
+  mapSourceCutRangesToCompositionCutRanges,
+  mapSourceTimeToCompositionTimeMs,
+} from '../functions';
 import type { CompositionConfig, CompositionLayout, ZoomKeyframe } from '../types';
 import {
   clamp,
@@ -191,6 +196,24 @@ export function buildExportCompositionConfig({
 
   const canvasBackgroundEnabled = project.canvasBackgroundEnabled !== false;
 
+  const cursorEvents = [...mouseEvents]
+    .filter((event) => Number.isFinite(event.timestampMs))
+    .filter((event) => !isInCutRegion(event.timestampMs, screenCuts))
+    .sort((a, b) => a.timestampMs - b.timestampMs)
+    .map((event) => ({
+      timestampMs: mapSourceTimeToCompositionTimeMs(event.timestampMs, screenCuts),
+      x: event.x,
+      y: event.y,
+      normalizedX: event.normalizedX,
+      normalizedY: event.normalizedY,
+      cursorDataUrl: event.cursorDataUrl,
+      cursorHotspotX: event.cursorHotspotX,
+      cursorHotspotY: event.cursorHotspotY,
+      cursorHandleHex: event.cursorHandleHex,
+      eventType: event.eventType,
+      button: event.button,
+    }));
+
   return {
     ...defaultConfig,
     background: {
@@ -290,22 +313,7 @@ export function buildExportCompositionConfig({
         : 0.7,
       sourceWidth,
       sourceHeight,
-      events: [...mouseEvents]
-        .filter((event) => Number.isFinite(event.timestampMs))
-        .sort((a, b) => a.timestampMs - b.timestampMs)
-        .map((event) => ({
-          timestampMs: event.timestampMs,
-          x: event.x,
-          y: event.y,
-          normalizedX: event.normalizedX,
-          normalizedY: event.normalizedY,
-          cursorDataUrl: event.cursorDataUrl,
-          cursorHotspotX: event.cursorHotspotX,
-          cursorHotspotY: event.cursorHotspotY,
-          cursorHandleHex: event.cursorHandleHex,
-          eventType: event.eventType,
-          button: event.button,
-        })),
+      events: cursorEvents,
     },
   };
 }

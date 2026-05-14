@@ -148,11 +148,44 @@ function normalizeCutRegion(cut: CutRegion): CutRegion {
 }
 
 function normalizeCuts(cuts: CutRegion[] | undefined): CutRegion[] {
-  if (!Array.isArray(cuts)) {
-    return [];
+  if (!Array.isArray(cuts)) return [];
+
+  // Normalize and filter invalid ranges
+  const normalized = [...cuts]
+    .map((c) => {
+      const n = normalizeCutRegion(c);
+      return {
+        ...n,
+        startMs: Math.max(0, Math.min(Number(n.startMs) || 0, Number(n.endMs) || 0)),
+        endMs: Math.max(0, Number(n.endMs) || 0),
+      } as CutRegion;
+    })
+    .filter((c) => Number.isFinite(c.startMs) && Number.isFinite(c.endMs) && c.endMs > c.startMs)
+    .sort((a, b) => a.startMs - b.startMs);
+
+  // Merge overlapping or adjacent regions
+  const merged: CutRegion[] = [];
+  for (const cut of normalized) {
+    if (merged.length === 0) {
+      merged.push({ ...cut });
+      continue;
+    }
+
+    const last = merged[merged.length - 1];
+    // If overlapping or contiguous (touching), merge
+    if (cut.startMs <= last.endMs) {
+      last.endMs = Math.max(last.endMs, cut.endMs);
+      // Merge targets by union (if either targets a lane, keep it)
+      last.targets = {
+        screen: (last.targets?.screen ?? true) || (cut.targets?.screen ?? true),
+        webcam: (last.targets?.webcam ?? true) || (cut.targets?.webcam ?? true),
+      };
+    } else {
+      merged.push({ ...cut });
+    }
   }
 
-  return [...cuts].map(normalizeCutRegion).sort((a, b) => a.startMs - b.startMs);
+  return merged;
 }
 
 function normalizeCursorRegionOverride(
