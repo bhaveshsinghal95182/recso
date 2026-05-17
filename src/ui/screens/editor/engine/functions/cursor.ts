@@ -134,6 +134,10 @@ function resolveEventNormalisedPosition(
     return null;
   }
 
+  if (event.visible === false) {
+    return null;
+  }
+
   if (Number.isFinite(event.normalizedX) && Number.isFinite(event.normalizedY)) {
     return {
       x: clampUnit(event.normalizedX as number),
@@ -191,8 +195,8 @@ function resolveCursorSample(
   const beforePosition = resolveEventNormalisedPosition(beforeEvent, cursor);
   const previousPosition = resolveEventNormalisedPosition(previousEvent, cursor);
   const afterPosition = resolveEventNormalisedPosition(afterEvent, cursor);
-  const resolvedPosition = beforePosition ?? afterPosition;
-  const sourceEvent = beforeEvent ?? afterEvent;
+  const resolvedPosition = beforeEvent ? beforePosition : afterPosition;
+  const sourceEvent = beforeEvent ? beforeEvent : afterEvent;
   if (!resolvedPosition) {
     return null;
   }

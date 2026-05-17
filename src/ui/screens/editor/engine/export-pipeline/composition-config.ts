@@ -222,6 +222,7 @@ export function buildExportCompositionConfig({
         y: cursorPosition.y,
         normalizedX: cursorPosition.normalizedX,
         normalizedY: cursorPosition.normalizedY,
+        visible: cursorPosition.visible,
         cursorDataUrl: event.cursorDataUrl,
         cursorHotspotX: event.cursorHotspotX,
         cursorHotspotY: event.cursorHotspotY,

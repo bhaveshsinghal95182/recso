@@ -336,12 +336,10 @@ export function EnginePreview() {
         )}
       </button>
 
-      <div className="absolute bottom-6 right-6 flex items-center gap-2">
+      <div className="bottom-toolbar absolute bottom-6 right-6 flex items-center text-white bg-black/60 backdrop-blur overflow-hidden">
         <button
           onClick={() => setIsCropDialogOpen(true)}
-          className={`bg-black/60 backdrop-blur px-3 py-3 rounded-full text-white border-0 cursor-pointer hover:bg-black/70 transition-colors flex items-center justify-center ${
-            hasCrop ? 'ring-2 ring-primary ring-offset-1 ring-offset-transparent' : ''
-          }`}
+          className={`px-3 py-3 border-0 cursor-pointer hover:bg-black/70 transition-colors flex items-center justify-center`}
           title="Crop recording"
           aria-label="Crop recording"
         >
@@ -350,7 +348,7 @@ export function EnginePreview() {
 
         <button
           onClick={handleFullscreenPreview}
-          className="bg-black/60 backdrop-blur px-3 py-3 rounded-full text-white border-0 cursor-pointer hover:bg-black/70 transition-colors flex items-center justify-center"
+          className="px-3 py-3 border-0 cursor-pointer hover:bg-black/70 transition-colors flex items-center justify-center"
           title={
             isExportPreviewFullscreen
               ? 'Exit fullscreen export preview'

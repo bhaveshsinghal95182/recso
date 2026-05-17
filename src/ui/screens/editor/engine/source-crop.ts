@@ -15,6 +15,7 @@ export interface CropLocalCursorPosition {
   y: number;
   normalizedX: number;
   normalizedY: number;
+  visible: boolean;
 }
 
 const MIN_VISIBLE_FRACTION = 0.05;
@@ -96,20 +97,32 @@ export function resolveCropLocalCursorPosition(
   const sourceWidth = Math.max(1, sourceDimensions.width || 1);
   const sourceHeight = Math.max(1, sourceDimensions.height || 1);
   const resolvedCrop = resolveSourceCrop(crop);
+  const rawX = Number(event.x);
+  const rawY = Number(event.y);
+  const hasRawPosition = Number.isFinite(rawX) && Number.isFinite(rawY);
+  const sourceX = hasRawPosition
+    ? rawX
+    : Number.isFinite(event.normalizedX)
+      ? (event.normalizedX as number) * sourceWidth
+      : 0;
+  const sourceY = hasRawPosition
+    ? rawY
+    : Number.isFinite(event.normalizedY)
+      ? (event.normalizedY as number) * sourceHeight
+      : 0;
+  const isInsideSource =
+    sourceX >= 0 && sourceX <= sourceWidth && sourceY >= 0 && sourceY <= sourceHeight;
 
   if (!resolvedCrop) {
-    const normalizedX = Number.isFinite(event.normalizedX)
-      ? clampUnit(event.normalizedX as number)
-      : clampUnit(event.x / sourceWidth);
-    const normalizedY = Number.isFinite(event.normalizedY)
-      ? clampUnit(event.normalizedY as number)
-      : clampUnit(event.y / sourceHeight);
+    const normalizedX = clampUnit(sourceX / sourceWidth);
+    const normalizedY = clampUnit(sourceY / sourceHeight);
 
     return {
       x: normalizedX * sourceWidth,
       y: normalizedY * sourceHeight,
       normalizedX,
       normalizedY,
+      visible: isInsideSource,
     };
   }
 
@@ -117,14 +130,18 @@ export function resolveCropLocalCursorPosition(
     { width: sourceWidth, height: sourceHeight },
     resolvedCrop,
   );
-  const sourceX = Number.isFinite(event.normalizedX)
-    ? clampUnit(event.normalizedX as number) * sourceWidth
-    : event.x;
-  const sourceY = Number.isFinite(event.normalizedY)
-    ? clampUnit(event.normalizedY as number) * sourceHeight
-    : event.y;
-  const cropLocalX = sourceX - sourceWidth * resolvedCrop.left;
-  const cropLocalY = sourceY - sourceHeight * resolvedCrop.top;
+  const cropLeftPx = sourceWidth * resolvedCrop.left;
+  const cropTopPx = sourceHeight * resolvedCrop.top;
+  const cropRightPx = sourceWidth * (1 - resolvedCrop.right);
+  const cropBottomPx = sourceHeight * (1 - resolvedCrop.bottom);
+  const cropLocalX = sourceX - cropLeftPx;
+  const cropLocalY = sourceY - cropTopPx;
+  const isInsideCrop =
+    isInsideSource &&
+    sourceX >= cropLeftPx &&
+    sourceX <= cropRightPx &&
+    sourceY >= cropTopPx &&
+    sourceY <= cropBottomPx;
   const normalizedX = clampUnit(cropLocalX / croppedDimensions.width);
   const normalizedY = clampUnit(cropLocalY / croppedDimensions.height);
 
@@ -133,5 +150,6 @@ export function resolveCropLocalCursorPosition(
     y: normalizedY * croppedDimensions.height,
     normalizedX,
     normalizedY,
+    visible: isInsideCrop,
   };
 }

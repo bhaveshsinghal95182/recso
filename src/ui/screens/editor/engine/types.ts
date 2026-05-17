@@ -107,6 +107,7 @@ export interface CompositionCursorEvent {
   y: number;
   normalizedX?: number;
   normalizedY?: number;
+  visible?: boolean;
   cursorDataUrl?: string;
   cursorHotspotX?: number;
   cursorHotspotY?: number;

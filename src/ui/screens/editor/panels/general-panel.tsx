@@ -206,7 +206,7 @@ export function GeneralPanel() {
                   <PaginatedGrid<BackgroundPatternConfig>
                     items={patternItems}
                     itemsPerPage={8}
-                    gridClassName="grid-cols-2"
+                    gridClassName="grid-cols-4"
                     className="w-full max-w-44 mx-auto"
                     disableAnimation
                     renderItem={(pattern) => (
