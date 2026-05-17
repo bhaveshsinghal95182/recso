@@ -260,6 +260,9 @@ electron.contextBridge.exposeInMainWorld('electron', {
     updateZoomConfig: (config: Record<string, unknown>) =>
       electron.ipcRenderer.invoke('editor:update-zoom-config', config),
 
+    updateCropConfig: (config: { top: number; left: number; bottom: number; right: number } | null) =>
+      electron.ipcRenderer.invoke('editor:update-crop-config', config),
+
     updateWebcamOverlay: (config: Record<string, unknown>) =>
       electron.ipcRenderer.invoke('editor:update-webcam-overlay', config),
 

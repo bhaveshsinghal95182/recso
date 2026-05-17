@@ -15,6 +15,7 @@ import { mouseTrackerService } from '../services/mouse-tracker.service.js';
 import * as projectStorage from '../services/project-storage.service.js';
 import type { CutRegion } from '../types/cut.types.js';
 import type {
+  CropConfig,
   CursorConfig,
   CursorRegionOverride,
   TimelineLayerId,
@@ -111,6 +112,11 @@ export function registerEditorHandlers(): void {
   ipcMain.handle('editor:update-zoom-config', async (_event, config: Partial<ZoomConfig>) => {
     editorService.updateZoomConfig(config);
     return editorService.getActiveProject()?.zoomConfig;
+  });
+
+  // Update crop configuration
+  ipcMain.handle('editor:update-crop-config', async (_event, config: CropConfig | null) => {
+    return editorService.updateCropConfig(config);
   });
 
   // Update webcam overlay configuration

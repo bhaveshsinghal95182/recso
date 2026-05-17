@@ -20,6 +20,7 @@ import type {
   CanvasSize,
   EnginePreviewMappedConfig as PreviewMappedConfig,
 } from './preview-config/types';
+import { resolveCroppedSourceDimensions } from './source-crop';
 import type { CompositionLayout } from './types';
 
 export type { EnginePreviewMappedConfig } from './preview-config/types';
@@ -81,6 +82,7 @@ export function useEnginePreviewConfigMapper(
     project?.videoDimensions?.height,
     project?.videoDimensions?.width,
     project?.canvasBackgroundEnabled,
+    project?.cropConfig,
     project?.webcamOverlay,
     webcamSourcePath,
   ]);
@@ -96,10 +98,15 @@ export function useEnginePreviewConfigMapper(
       };
     }
 
+    const sourceDimensions = resolveCroppedSourceDimensions(
+      project.videoDimensions,
+      project.cropConfig,
+    );
+
     if (project.canvasBackgroundEnabled === false) {
       return calculateFullBleedLayout(
-        project.videoDimensions.width,
-        project.videoDimensions.height,
+        sourceDimensions.width,
+        sourceDimensions.height,
         canvasSize.width,
         canvasSize.height,
       );
@@ -110,8 +117,8 @@ export function useEnginePreviewConfigMapper(
     }
 
     return calculateFallbackLayout(
-      project.videoDimensions.width,
-      project.videoDimensions.height,
+      sourceDimensions.width,
+      sourceDimensions.height,
       canvasSize.width,
       canvasSize.height,
     );
@@ -120,6 +127,7 @@ export function useEnginePreviewConfigMapper(
     canvasSize.height,
     canvasSize.width,
     project?.canvasBackgroundEnabled,
+    project?.cropConfig,
     project?.videoDimensions,
   ]);
 

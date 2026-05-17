@@ -1,6 +1,7 @@
 import { Application, Sprite, Texture } from 'pixi.js';
 
 import type { FrameContext } from './engine';
+import { resolveSourceCrop, type SourceCropConfig } from './source-crop';
 import { type Canvas2DContext, type FrameVideoSource } from './types';
 
 export class CanvasFrameContext implements FrameContext {
@@ -41,6 +42,53 @@ export class HtmlVideoFrameSource implements FrameVideoSource {
 
     ctx.drawImage(this.video, x, y, width, height);
   }
+}
+
+/**
+ * Draws a cropped region of an HTMLVideoElement.
+ * Crop values are normalized 0-1 insets from each edge.
+ */
+export class CroppedHtmlVideoFrameSource implements FrameVideoSource {
+  private video: HTMLVideoElement;
+  private cropTop: number;
+  private cropLeft: number;
+  private cropBottom: number;
+  private cropRight: number;
+
+  constructor(video: HTMLVideoElement, crop: SourceCropConfig) {
+    this.video = video;
+    this.cropTop = crop.top;
+    this.cropLeft = crop.left;
+    this.cropBottom = crop.bottom;
+    this.cropRight = crop.right;
+  }
+
+  draw(ctx: Canvas2DContext, x: number, y: number, width: number, height: number): void {
+    if (this.video.readyState < 2 || this.video.videoWidth <= 0 || this.video.videoHeight <= 0) {
+      return;
+    }
+
+    const srcX = this.video.videoWidth * this.cropLeft;
+    const srcY = this.video.videoHeight * this.cropTop;
+    const srcW = this.video.videoWidth * (1 - this.cropLeft - this.cropRight);
+    const srcH = this.video.videoHeight * (1 - this.cropTop - this.cropBottom);
+
+    if (srcW <= 0 || srcH <= 0) {
+      return;
+    }
+
+    ctx.drawImage(this.video, srcX, srcY, srcW, srcH, x, y, width, height);
+  }
+}
+
+export function createHtmlVideoFrameSource(
+  video: HTMLVideoElement,
+  crop?: SourceCropConfig | null,
+): FrameVideoSource {
+  const resolvedCrop = resolveSourceCrop(crop);
+  return resolvedCrop
+    ? new CroppedHtmlVideoFrameSource(video, resolvedCrop)
+    : new HtmlVideoFrameSource(video);
 }
 
 export class HtmlVideoCoverFrameSource implements FrameVideoSource {
@@ -131,6 +179,84 @@ export class MediabunnySampleSource implements FrameVideoSource {
   draw(ctx: Canvas2DContext, x: number, y: number, width: number, height: number): void {
     this.sample.draw(ctx, x, y, width, height);
   }
+}
+
+let mediabunnyCropScratchCanvas: OffscreenCanvas | HTMLCanvasElement | null = null;
+
+function getMediabunnyCropScratchCanvas(
+  width: number,
+  height: number,
+): OffscreenCanvas | HTMLCanvasElement {
+  if (
+    !mediabunnyCropScratchCanvas ||
+    mediabunnyCropScratchCanvas.width !== width ||
+    mediabunnyCropScratchCanvas.height !== height
+  ) {
+    mediabunnyCropScratchCanvas = createFrameCanvas(width, height);
+  }
+
+  return mediabunnyCropScratchCanvas;
+}
+
+/**
+ * Draws a cropped portion of a Mediabunny video sample.
+ * Crop values are normalized 0-1 insets from each edge.
+ */
+export class CroppedMediabunnySampleSource implements FrameVideoSource {
+  private sample: MediabunnyVideoSample;
+  private cropTop: number;
+  private cropLeft: number;
+  private cropBottom: number;
+  private cropRight: number;
+
+  constructor(sample: MediabunnyVideoSample, crop: SourceCropConfig) {
+    this.sample = sample;
+    this.cropTop = crop.top;
+    this.cropLeft = crop.left;
+    this.cropBottom = crop.bottom;
+    this.cropRight = crop.right;
+  }
+
+  draw(ctx: Canvas2DContext, x: number, y: number, width: number, height: number): void {
+    const fullW = this.sample.displayWidth;
+    const fullH = this.sample.displayHeight;
+
+    if (fullW <= 0 || fullH <= 0) {
+      this.sample.draw(ctx, x, y, width, height);
+      return;
+    }
+
+    const tempCanvas = getMediabunnyCropScratchCanvas(fullW, fullH);
+    const tempCtx = tempCanvas.getContext('2d') as Canvas2DContext;
+    if (!tempCtx) {
+      this.sample.draw(ctx, x, y, width, height);
+      return;
+    }
+
+    tempCtx.clearRect(0, 0, fullW, fullH);
+    this.sample.draw(tempCtx, 0, 0, fullW, fullH);
+
+    const srcX = fullW * this.cropLeft;
+    const srcY = fullH * this.cropTop;
+    const srcW = fullW * (1 - this.cropLeft - this.cropRight);
+    const srcH = fullH * (1 - this.cropTop - this.cropBottom);
+
+    if (srcW <= 0 || srcH <= 0) {
+      return;
+    }
+
+    ctx.drawImage(tempCanvas, srcX, srcY, srcW, srcH, x, y, width, height);
+  }
+}
+
+export function createMediabunnySampleFrameSource(
+  sample: MediabunnyVideoSample,
+  crop?: SourceCropConfig | null,
+): FrameVideoSource {
+  const resolvedCrop = resolveSourceCrop(crop);
+  return resolvedCrop
+    ? new CroppedMediabunnySampleSource(sample, resolvedCrop)
+    : new MediabunnySampleSource(sample);
 }
 
 export class PixiPreviewSurface {

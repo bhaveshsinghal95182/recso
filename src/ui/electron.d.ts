@@ -1,5 +1,6 @@
 import type { BackgroundPatternConfig } from '../shared/patterns';
 import type {
+  CropConfig,
   CursorConfig,
   CursorRegionOverride,
   CutRegion,
@@ -227,6 +228,9 @@ interface ElectronAPI {
 
     /** Update zoom configuration */
     updateZoomConfig: (config: Partial<ZoomConfig>) => Promise<ZoomConfig | undefined>;
+
+    /** Update crop configuration for the source recording */
+    updateCropConfig: (config: CropConfig | null) => Promise<CropConfig | null>;
 
     /** Update webcam overlay configuration */
     updateWebcamOverlay: (

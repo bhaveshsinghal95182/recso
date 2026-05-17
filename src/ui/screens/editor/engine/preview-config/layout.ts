@@ -1,6 +1,7 @@
 import type { Project } from '@/types';
 
 import { clamp, DEFAULT_LAYOUT_CONFIG, DEFAULT_WEBCAM_STYLE } from '../export-pipeline/defaults';
+import { resolveCroppedSourceDimensions } from '../source-crop';
 import type { CompositionLayout } from '../types';
 import type { CanvasSize } from './types';
 
@@ -157,19 +158,24 @@ export async function loadPreviewLayoutSnapshot(
     };
   }
 
+  const effectiveVideoDimensions = resolveCroppedSourceDimensions(
+    project.videoDimensions,
+    project.cropConfig,
+  );
+
   const canvasSize = await window.electron.compositor.getCanvasSize();
   const layout =
     project.canvasBackgroundEnabled === false
       ? calculateFullBleedLayout(
-          project.videoDimensions.width,
-          project.videoDimensions.height,
+          effectiveVideoDimensions.width,
+          effectiveVideoDimensions.height,
           canvasSize.width,
           canvasSize.height,
         )
       : await window.electron.compositor.calculateLayout(
           {
-            width: project.videoDimensions.width,
-            height: project.videoDimensions.height,
+            width: effectiveVideoDimensions.width,
+            height: effectiveVideoDimensions.height,
           },
           canvasSize,
         );
@@ -213,17 +219,22 @@ export function buildFallbackPreviewLayoutSnapshot(
     };
   }
 
+  const effectiveVideoDimensions = resolveCroppedSourceDimensions(
+    project.videoDimensions,
+    project.cropConfig,
+  );
+
   const layout =
     project.canvasBackgroundEnabled === false
       ? calculateFullBleedLayout(
-          project.videoDimensions.width,
-          project.videoDimensions.height,
+          effectiveVideoDimensions.width,
+          effectiveVideoDimensions.height,
           DEFAULT_CANVAS_SIZE.width,
           DEFAULT_CANVAS_SIZE.height,
         )
       : calculateFallbackLayout(
-          project.videoDimensions.width,
-          project.videoDimensions.height,
+          effectiveVideoDimensions.width,
+          effectiveVideoDimensions.height,
           DEFAULT_CANVAS_SIZE.width,
           DEFAULT_CANVAS_SIZE.height,
         );

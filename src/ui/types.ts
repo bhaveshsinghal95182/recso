@@ -271,6 +271,18 @@ export interface WebcamOverlayConfig {
   shadows?: WebcamShadowLayer[];
 }
 
+/** Crop configuration — normalised 0–1 insets from each edge of the source video. */
+export interface CropConfig {
+  /** Fraction cropped from the top (0 = no crop, 0.25 = crop 25 % from top) */
+  top: number;
+  /** Fraction cropped from the left */
+  left: number;
+  /** Fraction cropped from the bottom */
+  bottom: number;
+  /** Fraction cropped from the right */
+  right: number;
+}
+
 import type { BackgroundPatternConfig } from '../shared/patterns';
 
 export interface Project {
@@ -292,6 +304,8 @@ export interface Project {
   backgroundColor: string;
   backgroundPattern?: BackgroundPatternConfig | null;
   canvasBackgroundEnabled?: boolean;
+  /** Optional crop configuration for the source recording */
+  cropConfig?: CropConfig | null;
   webcamOverlay?: WebcamOverlayConfig | null;
   cuts: CutRegion[];
   /** Legacy screen zoom regions. Prefer zoomRegionsBySource.screen for new code. */

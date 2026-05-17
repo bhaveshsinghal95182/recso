@@ -1,4 +1,5 @@
 import { getCutAdjustedDurationMs } from '../functions';
+import { resolveCroppedSourceDimensions } from '../source-crop';
 import { buildStaticBackgroundLayer } from './background-layer';
 import { buildExportCompositionConfig } from './composition-config';
 import { runCanvasConversion } from './conversion';
@@ -56,24 +57,31 @@ export async function runEngineCanvasExport({
   try {
     const inputDurationMs = Math.max(0, Math.round((await input.computeDuration()) * 1000));
     const primaryVideoTrack = await input.getPrimaryVideoTrack();
-    const sourceVideoWidth =
+    const rawSourceVideoWidth =
       project.videoDimensions?.width ||
       primaryVideoTrack?.displayWidth ||
       config.customWidth ||
       1920;
-    const sourceVideoHeight =
+    const rawSourceVideoHeight =
       project.videoDimensions?.height ||
       primaryVideoTrack?.displayHeight ||
       config.customHeight ||
       1080;
+    const sourceDimensions = resolveCroppedSourceDimensions(
+      {
+        width: rawSourceVideoWidth,
+        height: rawSourceVideoHeight,
+      },
+      project.cropConfig,
+    );
 
     const sourceDurationMs = Math.max(0, project.timeline.duration || inputDurationMs);
     const screenCuts = project.cuts.filter((cut) => cut.targets?.screen ?? true);
     const compositionDurationMs = getCutAdjustedDurationMs(sourceDurationMs, screenCuts);
     const outputDimensions = resolveOutputDimensions(config);
     const layout = await resolveLayout(
-      sourceVideoWidth,
-      sourceVideoHeight,
+      sourceDimensions.width,
+      sourceDimensions.height,
       outputDimensions.width,
       outputDimensions.height,
       project.canvasBackgroundEnabled !== false,
@@ -121,6 +129,7 @@ export async function runEngineCanvasExport({
       outputDimensions,
       compositionDurationMs,
       compositionConfig,
+      sourceCrop: project.cropConfig,
       backgroundLayer,
       preparedWebcamSource,
       cancelRequestedRef,

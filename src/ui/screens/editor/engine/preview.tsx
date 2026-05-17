@@ -1,4 +1,4 @@
-import { Maximize2, Minimize2, Pause, Play } from 'lucide-react';
+import { Crop, Maximize2, Minimize2, Pause, Play } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { usePlaybackStore } from '@/store/playback-store';
@@ -13,6 +13,7 @@ import {
 import { renderEngineFrameSafely } from './preview-runtime/rendering';
 import { attachPreviewSession } from './preview-runtime/session';
 import { usePreviewViewportSize } from './preview-runtime/viewport';
+import { CropDialog } from '../crop-dialog';
 import { FocalPointOverlay } from '../focal-point-overlay';
 import { VerticalTabs } from '../vertical-tabs';
 import { type CanvasFrameContext } from './adapters';
@@ -54,6 +55,7 @@ export function EnginePreview() {
   const engineRef = useRef<CompositionEngine>(new CompositionEngine(defaultConfig));
   const compositionConfigRef = useRef<CompositionConfig>(defaultConfig);
   const [isExportPreviewFullscreen, setIsExportPreviewFullscreen] = useState(false);
+  const [isCropDialogOpen, setIsCropDialogOpen] = useState(false);
   const {
     canvasSize,
     layout,
@@ -254,6 +256,13 @@ export function EnginePreview() {
     return null;
   }
 
+  const hasCrop =
+    project.cropConfig &&
+    (project.cropConfig.top > 0 ||
+      project.cropConfig.left > 0 ||
+      project.cropConfig.bottom > 0 ||
+      project.cropConfig.right > 0);
+
   return (
     <div
       ref={fullscreenContainerRef}
@@ -327,26 +336,43 @@ export function EnginePreview() {
         )}
       </button>
 
-      <button
-        onClick={handleFullscreenPreview}
-        className="absolute bottom-6 right-6 bg-black/60 backdrop-blur px-3 py-3 rounded-full text-white border-0 cursor-pointer hover:bg-black/70 transition-colors flex items-center justify-center"
-        title={
-          isExportPreviewFullscreen ? 'Exit fullscreen export preview' : 'Fullscreen export preview'
-        }
-        aria-label={
-          isExportPreviewFullscreen
-            ? 'Exit fullscreen export preview'
-            : 'Open fullscreen export preview'
-        }
-      >
-        {isExportPreviewFullscreen ? (
-          <Minimize2 className="w-5 h-5" />
-        ) : (
-          <Maximize2 className="w-5 h-5" />
-        )}
-      </button>
+      <div className="absolute bottom-6 right-6 flex items-center gap-2">
+        <button
+          onClick={() => setIsCropDialogOpen(true)}
+          className={`bg-black/60 backdrop-blur px-3 py-3 rounded-full text-white border-0 cursor-pointer hover:bg-black/70 transition-colors flex items-center justify-center ${
+            hasCrop ? 'ring-2 ring-primary ring-offset-1 ring-offset-transparent' : ''
+          }`}
+          title="Crop recording"
+          aria-label="Crop recording"
+        >
+          <Crop className="w-5 h-5" />
+        </button>
+
+        <button
+          onClick={handleFullscreenPreview}
+          className="bg-black/60 backdrop-blur px-3 py-3 rounded-full text-white border-0 cursor-pointer hover:bg-black/70 transition-colors flex items-center justify-center"
+          title={
+            isExportPreviewFullscreen
+              ? 'Exit fullscreen export preview'
+              : 'Fullscreen export preview'
+          }
+          aria-label={
+            isExportPreviewFullscreen
+              ? 'Exit fullscreen export preview'
+              : 'Open fullscreen export preview'
+          }
+        >
+          {isExportPreviewFullscreen ? (
+            <Minimize2 className="w-5 h-5" />
+          ) : (
+            <Maximize2 className="w-5 h-5" />
+          )}
+        </button>
+      </div>
 
       {!isExportPreviewFullscreen && <VerticalTabs />}
+
+      <CropDialog open={isCropDialogOpen} onOpenChange={setIsCropDialogOpen} />
     </div>
   );
 }

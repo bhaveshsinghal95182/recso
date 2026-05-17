@@ -3,6 +3,7 @@ import { create } from 'zustand';
 import type { BackgroundPatternConfig } from '../../shared/patterns';
 import { debounce } from '../lib/utils';
 import type {
+  CropConfig,
   CursorConfig,
   CursorRegionOverride,
   Project,
@@ -33,6 +34,7 @@ interface ProjectState {
   updateBackgroundPattern: (pattern: BackgroundPatternConfig | null) => void;
   updateCanvasBackgroundEnabled: (enabled: boolean) => Promise<void>;
   updateWebcamOverlay: (config: Partial<WebcamOverlayConfig>) => Promise<void>;
+  updateCropConfig: (config: CropConfig | null) => Promise<void>;
   updateDuration: (durationMs: number) => Promise<void>;
 
   // Setters for syncing from other stores (if needed) or internal updates
@@ -321,6 +323,27 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }));
     } catch (err) {
       console.error('[ProjectStore] updateWebcamOverlay error:', err);
+    }
+  },
+
+  updateCropConfig: async (config: CropConfig | null) => {
+    const { project } = get();
+    if (!project) return;
+
+    // Optimistic update
+    set((state) => ({
+      project: state.project
+        ? {
+            ...state.project,
+            cropConfig: config,
+          }
+        : null,
+    }));
+
+    try {
+      await window.electron.editor.updateCropConfig(config);
+    } catch (err) {
+      console.error('[ProjectStore] updateCropConfig error:', err);
     }
   },
 

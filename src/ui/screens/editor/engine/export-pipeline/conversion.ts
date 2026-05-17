@@ -2,9 +2,14 @@ import type { AudioSample, Input as MediabunnyInput, VideoSample } from 'mediabu
 
 import type { ExportConfig } from '@/types';
 
-import { CanvasFrameContext, createFrameCanvas, MediabunnySampleSource } from '../adapters';
+import {
+  CanvasFrameContext,
+  createFrameCanvas,
+  createMediabunnySampleFrameSource,
+} from '../adapters';
 import { CompositionEngine } from '../engine';
 import { isInCutRegion, mapSourceTimeToCompositionTimeMs } from '../functions';
+import type { SourceCropConfig } from '../source-crop';
 import type { CompositionConfig } from '../types';
 import { resolveVideoBitrate } from './settings';
 import type { BackgroundLayerCanvas, OutputDimensions, PreparedWebcamSource } from './types';
@@ -19,6 +24,7 @@ export interface RunConversionOptions {
   outputDimensions: OutputDimensions;
   compositionDurationMs: number;
   compositionConfig: CompositionConfig;
+  sourceCrop?: SourceCropConfig | null;
   backgroundLayer: BackgroundLayerCanvas | null;
   preparedWebcamSource: PreparedWebcamSource | null;
   cancelRequestedRef: { current: boolean };
@@ -32,6 +38,7 @@ export async function runCanvasConversion({
   outputDimensions,
   compositionDurationMs,
   compositionConfig,
+  sourceCrop,
   backgroundLayer,
   preparedWebcamSource,
   cancelRequestedRef,
@@ -158,7 +165,7 @@ export async function runCanvasConversion({
         engine.renderFrameAt(
           compositionTimeSeconds,
           context,
-          new MediabunnySampleSource(sample),
+          createMediabunnySampleFrameSource(sample, sourceCrop),
           preparedWebcamSource?.frameSource ?? null,
         );
 

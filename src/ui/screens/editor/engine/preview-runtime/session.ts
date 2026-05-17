@@ -3,7 +3,11 @@ import type { MutableRefObject, RefObject } from 'react';
 import { usePlaybackStore } from '@/store/playback-store';
 import type { Project } from '@/types';
 
-import { CanvasFrameContext, HtmlVideoCoverFrameSource, HtmlVideoFrameSource } from '../adapters';
+import {
+  CanvasFrameContext,
+  createHtmlVideoFrameSource,
+  HtmlVideoCoverFrameSource,
+} from '../adapters';
 import type { CompositionEngine } from '../engine';
 import { mapCompositionToSourceTimeMs } from '../functions';
 import type { CanvasSize } from '../preview-config/types';
@@ -247,7 +251,7 @@ export function attachPreviewSession(options: AttachPreviewSessionOptions): () =
       engineRef.current.setDuration(
         Math.max(0, (usePlaybackStore.getState().duration || durationMs) / 1000),
       );
-      engineRef.current.setVideoSource(new HtmlVideoFrameSource(video));
+      engineRef.current.setVideoSource(createHtmlVideoFrameSource(video, project.cropConfig));
 
       const webcamVideo = webcamVideoRef.current;
       if (webcamVideo && webcamSrc) {

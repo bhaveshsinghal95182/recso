@@ -8,6 +8,7 @@ import {
   DEFAULT_ZOOM_EPSILON,
 } from '../export-pipeline/defaults';
 import { defaultConfig } from '../functions';
+import { resolveCropLocalCursorPosition, resolveCroppedSourceDimensions } from '../source-crop';
 import type { CompositionConfig, CompositionLayout, ZoomKeyframe } from '../types';
 
 function cutTargetsScreen(cut: CutRegion): boolean {
@@ -152,8 +153,16 @@ export function buildPreviewCompositionConfig({
   webcamSourcePath,
   webcamZoomRegions,
 }: BuildPreviewCompositionConfigOptions): CompositionConfig {
-  const sourceWidth = project?.videoDimensions?.width ?? 0;
-  const sourceHeight = project?.videoDimensions?.height ?? 0;
+  const originalSourceDimensions = {
+    width: project?.videoDimensions?.width ?? 0,
+    height: project?.videoDimensions?.height ?? 0,
+  };
+  const sourceDimensions = resolveCroppedSourceDimensions(
+    originalSourceDimensions,
+    project?.cropConfig,
+  );
+  const sourceWidth = sourceDimensions.width;
+  const sourceHeight = sourceDimensions.height;
   const rawCursor = project?.cursorConfig;
   const rawWebcam = project?.webcamOverlay;
   const webcamEnabled = Boolean(rawWebcam?.enabled && webcamSourcePath);
@@ -285,19 +294,27 @@ export function buildPreviewCompositionConfig({
       events: [...mouseEvents]
         .filter((event) => Number.isFinite(event.timestampMs))
         .sort((a, b) => a.timestampMs - b.timestampMs)
-        .map((event) => ({
-          timestampMs: event.timestampMs,
-          x: event.x,
-          y: event.y,
-          normalizedX: event.normalizedX,
-          normalizedY: event.normalizedY,
-          cursorDataUrl: event.cursorDataUrl,
-          cursorHotspotX: event.cursorHotspotX,
-          cursorHotspotY: event.cursorHotspotY,
-          cursorHandleHex: event.cursorHandleHex,
-          eventType: event.eventType,
-          button: event.button,
-        })),
+        .map((event) => {
+          const cursorPosition = resolveCropLocalCursorPosition(
+            event,
+            originalSourceDimensions,
+            project?.cropConfig,
+          );
+
+          return {
+            timestampMs: event.timestampMs,
+            x: cursorPosition.x,
+            y: cursorPosition.y,
+            normalizedX: cursorPosition.normalizedX,
+            normalizedY: cursorPosition.normalizedY,
+            cursorDataUrl: event.cursorDataUrl,
+            cursorHotspotX: event.cursorHotspotX,
+            cursorHotspotY: event.cursorHotspotY,
+            cursorHandleHex: event.cursorHandleHex,
+            eventType: event.eventType,
+            button: event.button,
+          };
+        }),
     },
   };
 }

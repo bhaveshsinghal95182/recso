@@ -102,6 +102,18 @@ export interface WebcamOverlayConfig {
   shadows?: WebcamShadowLayer[];
 }
 
+/** Crop configuration — normalised 0–1 insets from each edge of the source video. */
+export interface CropConfig {
+  /** Fraction cropped from the top (0 = no crop, 0.25 = crop 25 % from top) */
+  top: number;
+  /** Fraction cropped from the left */
+  left: number;
+  /** Fraction cropped from the bottom */
+  bottom: number;
+  /** Fraction cropped from the right */
+  right: number;
+}
+
 /**
  * A single clip on the timeline
  */
@@ -174,6 +186,8 @@ export interface Project {
   backgroundPattern?: BackgroundPatternConfig | null;
   /** Whether canvas background is enabled (defaults to true for backward compatibility) */
   canvasBackgroundEnabled?: boolean;
+  /** Optional crop configuration for the source recording */
+  cropConfig?: CropConfig | null;
   /** Optional webcam overlay settings */
   webcamOverlay?: WebcamOverlayConfig | null;
   /** Cut regions to exclude from export */

@@ -16,6 +16,7 @@ import path from 'path';
 import type { BackgroundPatternConfig } from '../types/background.types.js';
 import type { CutRegion } from '../types/cut.types.js';
 import type {
+  CropConfig,
   CursorConfig,
   CursorRegionOverride,
   FrameState,
@@ -572,6 +573,44 @@ export function updateZoomConfig(config: Partial<ZoomConfig>): void {
 
   activeProject.zoomConfig = { ...activeProject.zoomConfig, ...config };
   activeProject.modifiedAt = Date.now();
+}
+
+/**
+ * Update crop configuration for the source recording.
+ * Values are normalised 0–1 insets from each edge.
+ * Passing null removes the crop entirely.
+ */
+export function updateCropConfig(config: CropConfig | null): CropConfig | null {
+  if (!activeProject) return null;
+
+  if (!config) {
+    activeProject.cropConfig = null;
+    persistProjectMutation();
+    return null;
+  }
+
+  // Normalise & clamp
+  const top = Math.max(0, Math.min(0.95, Number(config.top) || 0));
+  const left = Math.max(0, Math.min(0.95, Number(config.left) || 0));
+  const bottom = Math.max(0, Math.min(0.95, Number(config.bottom) || 0));
+  const right = Math.max(0, Math.min(0.95, Number(config.right) || 0));
+
+  // Ensure the remaining area is at least 5 % in each dimension
+  if (1 - top - bottom < 0.05 || 1 - left - right < 0.05) {
+    console.warn('[EditorService] Crop values too extreme, ignoring');
+    return activeProject.cropConfig ?? null;
+  }
+
+  // If effectively no crop, clear it
+  if (top === 0 && left === 0 && bottom === 0 && right === 0) {
+    activeProject.cropConfig = null;
+    persistProjectMutation();
+    return null;
+  }
+
+  activeProject.cropConfig = { top, left, bottom, right };
+  persistProjectMutation();
+  return activeProject.cropConfig;
 }
 
 /**
