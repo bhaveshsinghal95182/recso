@@ -256,12 +256,12 @@ export function EnginePreview() {
     return null;
   }
 
-  const hasCrop =
-    project.cropConfig &&
-    (project.cropConfig.top > 0 ||
-      project.cropConfig.left > 0 ||
-      project.cropConfig.bottom > 0 ||
-      project.cropConfig.right > 0);
+  // const hasCrop =
+  //   project.cropConfig &&
+  //   (project.cropConfig.top > 0 ||
+  //     project.cropConfig.left > 0 ||
+  //     project.cropConfig.bottom > 0 ||
+  //     project.cropConfig.right > 0);
 
   return (
     <div
