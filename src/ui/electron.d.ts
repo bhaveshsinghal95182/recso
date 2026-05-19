@@ -328,6 +328,11 @@ interface ElectronAPI {
       pattern: BackgroundPatternConfig | null,
     ) => Promise<{ success: boolean; pattern: BackgroundPatternConfig | null }>;
 
+    /** Update active background mode for the project */
+    updateMode: (
+      mode: 'color' | 'pattern' | 'image',
+    ) => Promise<{ success: boolean; mode: 'color' | 'pattern' | 'image' }>;
+
     /** Update whether canvas background is enabled */
     updateCanvasBackgroundEnabled: (
       enabled: boolean,
@@ -338,6 +343,7 @@ interface ElectronAPI {
       backgroundPath: string | null;
       backgroundColor: string;
       backgroundPattern: BackgroundPatternConfig | null;
+      backgroundMode: 'color' | 'pattern' | 'image';
       canvasBackgroundEnabled: boolean;
     }>;
   };

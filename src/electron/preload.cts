@@ -260,8 +260,9 @@ electron.contextBridge.exposeInMainWorld('electron', {
     updateZoomConfig: (config: Record<string, unknown>) =>
       electron.ipcRenderer.invoke('editor:update-zoom-config', config),
 
-    updateCropConfig: (config: { top: number; left: number; bottom: number; right: number } | null) =>
-      electron.ipcRenderer.invoke('editor:update-crop-config', config),
+    updateCropConfig: (
+      config: { top: number; left: number; bottom: number; right: number } | null,
+    ) => electron.ipcRenderer.invoke('editor:update-crop-config', config),
 
     updateWebcamOverlay: (config: Record<string, unknown>) =>
       electron.ipcRenderer.invoke('editor:update-webcam-overlay', config),
@@ -459,6 +460,10 @@ electron.contextBridge.exposeInMainWorld('electron', {
     /** Update background pattern for the active project */
     updatePattern: (pattern: Record<string, unknown> | null) =>
       electron.ipcRenderer.invoke('background:update-pattern', pattern),
+
+    /** Update active background mode for the project */
+    updateMode: (mode: 'color' | 'pattern' | 'image') =>
+      electron.ipcRenderer.invoke('background:update-mode', mode),
 
     /** Update whether canvas background is enabled for the active project */
     updateCanvasBackgroundEnabled: (enabled: boolean) =>

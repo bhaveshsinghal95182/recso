@@ -41,7 +41,6 @@ export function VerticalTabs() {
       { id: 'general', label: 'General', Icon: Settings },
       { id: 'webcam', label: 'Webcam', Icon: Camera },
       { id: 'cursor', label: 'Cursor', Icon: MousePointer2 },
-      { id: 'pattern', label: 'Pattern', Icon: Code },
       { id: 'zoom', label: 'Zoom', Icon: ZoomIn },
     ],
     [],

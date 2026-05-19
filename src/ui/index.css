@@ -177,3 +177,7 @@
   border-radius: 999px;
   corner-shape: superellipse;
 }
+
+.corner-shape-superellipse {
+  corner-shape: superellipse;
+}

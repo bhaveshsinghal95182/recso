@@ -1,9 +1,26 @@
-import type { Project } from '@/types';
+import type { BackgroundMode, Project } from '@/types';
 
 import { createFrameCanvas } from '../adapters';
 import { MAX_BACKGROUND_SNAPSHOT_PIXELS, MAX_BACKGROUND_SNAPSHOT_SCALE } from './defaults';
 import { toFileUrl } from './source-paths';
 import type { BackgroundLayerCanvas } from './types';
+
+function resolveBackgroundMode(project: Project): BackgroundMode {
+  if (project.backgroundMode === 'color') return 'color';
+  if (project.backgroundMode === 'pattern') return 'pattern';
+  if (project.backgroundMode === 'image') return 'image';
+
+  if (project.backgroundPath) {
+    return 'image';
+  }
+
+  const hasPattern = Boolean(project.backgroundPattern && project.backgroundPattern.id !== 'none');
+  if (hasPattern) {
+    return 'pattern';
+  }
+
+  return 'color';
+}
 
 function resolveBackgroundSnapshotDimensions(
   width: number,
@@ -149,16 +166,18 @@ export async function buildStaticBackgroundLayer(
   height: number,
 ): Promise<BackgroundLayerCanvas | null> {
   const canvasBackgroundEnabled = project.canvasBackgroundEnabled !== false;
+  const backgroundMode = resolveBackgroundMode(project);
 
   // Skip background layer entirely in full-bleed mode
   if (!canvasBackgroundEnabled) {
     return null;
   }
 
-  const selectedPattern = project.backgroundPattern;
-  const hasPattern = Boolean(selectedPattern && selectedPattern.id !== 'none');
-  const backgroundImageUrl = toFileUrl(project.backgroundPath);
-  const hasBackgroundImage = backgroundImageUrl.length > 0;
+  const selectedPattern = backgroundMode === 'pattern' ? project.backgroundPattern : null;
+  const hasPattern =
+    backgroundMode === 'pattern' && Boolean(selectedPattern && selectedPattern.id !== 'none');
+  const backgroundImageUrl = backgroundMode === 'image' ? toFileUrl(project.backgroundPath) : '';
+  const hasBackgroundImage = backgroundMode === 'image' && backgroundImageUrl.length > 0;
 
   if (!hasBackgroundImage && !hasPattern) {
     return null;
@@ -178,7 +197,7 @@ export async function buildStaticBackgroundLayer(
 
   const containerStyle: Record<string, unknown> = {
     backgroundColor: project.backgroundColor || '#000000',
-    ...(selectedPattern?.containerStyle || {}),
+    ...(backgroundMode === 'pattern' ? selectedPattern?.containerStyle || {} : {}),
   };
 
   await drawStyleLayer(layerContext, snapshot.width, snapshot.height, containerStyle);

@@ -1,7 +1,9 @@
+import { Info } from 'lucide-react';
 import React, { useMemo, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useProjectStore } from '@/store/project-store';
 
 import type { BackgroundPatternConfig } from '../../../../shared/patterns';
@@ -372,7 +374,8 @@ function normalizeStyleKey(rawKey: string): BackgroundStyleKey | null {
 }
 
 export function PatternImportPanel() {
-  const { project, updateBackgroundColor, updateBackgroundPattern } = useProjectStore();
+  const { project, updateBackgroundColor, updateBackgroundPattern, updateBackgroundMode } =
+    useProjectStore();
   const [snippet, setSnippet] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [detectedColor, setDetectedColor] = useState<string | null>(null);
@@ -403,6 +406,7 @@ export function PatternImportPanel() {
     };
 
     updateBackgroundPattern(pattern);
+    updateBackgroundMode('pattern');
 
     if (parsed.backgroundColor) {
       updateBackgroundColor(parsed.backgroundColor);
@@ -434,7 +438,6 @@ export function PatternImportPanel() {
   return (
     <div className="space-y-4">
       <div className="space-y-2">
-        <Label htmlFor="pattern-snippet">Paste JSX/HTML background style snippet</Label>
         <textarea
           id="pattern-snippet"
           value={snippet}
@@ -448,9 +451,40 @@ export function PatternImportPanel() {
         <Button onClick={handleApply} disabled={!canApply}>
           Apply Pattern
         </Button>
+
         <Button variant="outline" onClick={handleTryExample}>
           Try example
         </Button>
+
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition hover:text-foreground"
+                aria-label="Pattern attribution info"
+              >
+                <Info className="h-4 w-4" />
+              </button>
+            </TooltipTrigger>
+
+            <TooltipContent className="max-w-xs">
+              <p>
+                Patterns can be discovered via{' '}
+                <a
+                  href="https://patterncraft.fun"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline underline-offset-2"
+                >
+                  patterncraft.fun
+                </a>
+                . This is an independent project and not affiliated with Recso. If you find it
+                useful, consider supporting the creator.
+              </p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </div>
 
       {exampleIndex >= 0 && (
@@ -474,11 +508,6 @@ export function PatternImportPanel() {
           Detected background color: <span className="font-mono">{detectedColor}</span>
         </div>
       )}
-
-      <div className="text-xs text-muted-foreground">
-        Note: if the pasted CSS uses var(...) tokens, those variables must exist in this preview
-        context.
-      </div>
 
       {error && <div className="text-xs text-destructive">{error}</div>}
     </div>

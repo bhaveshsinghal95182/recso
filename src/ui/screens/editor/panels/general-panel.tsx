@@ -8,11 +8,13 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { useProjectStore } from '@/store/project-store';
+import type { BackgroundMode } from '@/types';
 
 import {
   type BackgroundPatternConfig,
   patternPresets as patterns,
 } from '../../../../shared/patterns';
+import { PatternImportPanel } from './pattern-import-panel';
 
 const PASTEL_COLORS = [
   '#FFADAD',
@@ -38,22 +40,57 @@ function hslToHex(h: number, s: number, l: number) {
   return `#${f(0)}${f(8)}${f(4)}`;
 }
 
+function resolveBackgroundMode(
+  backgroundMode: BackgroundMode | undefined,
+  backgroundPath: string | undefined,
+  backgroundPattern: BackgroundPatternConfig | null | undefined,
+): BackgroundMode {
+  if (backgroundMode === 'color' || backgroundMode === 'pattern' || backgroundMode === 'image') {
+    return backgroundMode;
+  }
+
+  if (backgroundPath) {
+    return 'image';
+  }
+
+  const hasPattern = Boolean(backgroundPattern && backgroundPattern.id !== 'none');
+  if (hasPattern) {
+    return 'pattern';
+  }
+
+  return 'color';
+}
+
 export function GeneralPanel() {
   const {
     project,
     updateBackgroundColor,
     updateBackgroundPattern,
     updateBackgroundPath,
+    updateBackgroundMode,
     updateCanvasBackgroundEnabled,
   } = useProjectStore();
   const [presetColors, setPresetColors] = useState<string[]>(PASTEL_COLORS);
-
+  const hasCrop = useProjectStore((state) => {
+    const c = state.project?.cropConfig;
+    if (!c) return false;
+    return c.top > 0 || c.left > 0 || c.bottom > 0 || c.right > 0;
+  });
   if (!project) return null;
 
   const isBackgroundEnabled = project.canvasBackgroundEnabled !== false;
+  const backgroundMode = resolveBackgroundMode(
+    project.backgroundMode,
+    project.backgroundPath,
+    project.backgroundPattern,
+  );
 
   const handleBackgroundToggle = (checked: boolean) => {
     updateCanvasBackgroundEnabled(checked);
+  };
+
+  const handleBackgroundModeChange = (mode: BackgroundMode) => {
+    updateBackgroundMode(mode);
   };
 
   const handleRefreshColors = () => {
@@ -83,6 +120,8 @@ export function GeneralPanel() {
     setPresetColors(newColors);
   };
 
+  const BACKGROUND_MODES: BackgroundMode[] = ['color', 'pattern', 'image'];
+
   const patternItems = Object.entries(patterns).map(([, config]) => ({
     ...config,
   }));
@@ -94,7 +133,11 @@ export function GeneralPanel() {
           <label htmlFor="bg-color" className="text-sm font-medium">
             Canvas Background
           </label>
-          <Switch checked={isBackgroundEnabled} onCheckedChange={handleBackgroundToggle} />
+          <Switch
+            checked={isBackgroundEnabled}
+            onCheckedChange={handleBackgroundToggle}
+            disabled={!!hasCrop}
+          />
         </div>
 
         <AnimatePresence initial={false}>
@@ -107,137 +150,174 @@ export function GeneralPanel() {
             >
               <div className="space-y-6 pt-2">
                 <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label>Base Color</Label>
-                    <div className="flex items-center gap-2">
-                      <Input
-                        value={project.backgroundColor || '#000000'}
-                        onChange={(e) => updateBackgroundColor(e.target.value)}
-                        className="font-mono text-xs h-6 w-20"
-                        placeholder="#000000"
-                      />
-                      <Input
-                        type="color"
-                        value={project.backgroundColor || '#000000'}
-                        onChange={(e) => updateBackgroundColor(e.target.value)}
-                        className="h-6 w-8 p-0 border-0"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between mt-2">
-                    <Label className="text-xs text-muted-foreground">Presets</Label>
-                    <Button
-                      size="icon"
-                      variant={'ghost'}
-                      className="h-6 w-6"
-                      onClick={handleRefreshColors}
-                    >
-                      <RefreshCcw className="size-3" />
-                    </Button>
-                  </div>
-
-                  <motion.div layout className="grid grid-cols-4 gap-2 w-fit mx-auto">
-                    {presetColors.map((color) => (
-                      <motion.div
-                        key={color}
-                        whileHover={{ scale: 1.1 }}
-                        whileTap={{ scale: 0.9 }}
-                        className="h-8 w-8 rounded-sm border border-black/20 cursor-pointer shadow-sm"
-                        style={{ backgroundColor: color }}
-                        onClick={() => updateBackgroundColor(color)}
-                      />
-                    ))}
-                  </motion.div>
-                </div>
-
-                {/* 2.5. Custom Image */}
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label>Custom Image</Label>
-                    {project.backgroundPath && (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-6 px-2 text-[10px] text-destructive hover:text-destructive hover:bg-destructive/10"
-                        onClick={() => updateBackgroundPath(null)}
-                      >
-                        Remove
-                      </Button>
-                    )}
-                  </div>
-
-                  {project.backgroundPath ? (
-                    <div
-                      className="relative w-full aspect-video rounded-md border border-border/50 overflow-hidden group cursor-pointer transition-all hover:border-primary/50"
-                      onClick={async () => {
-                        const path = await window.electron.compositor.showBackgroundPicker();
-                        if (path) updateBackgroundPath(path);
-                      }}
-                    >
-                      <img
-                        src={`file://${project.backgroundPath}`}
-                        alt="Custom background"
-                        className="w-full h-full object-cover"
-                      />
-                      <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-all duration-200">
-                        <span className="text-white text-xs font-medium">Change Image</span>
-                      </div>
-                    </div>
-                  ) : (
-                    <div
-                      className="w-full h-24 rounded-md border border-dashed border-border/60 hover:border-primary/50 flex flex-col items-center justify-center gap-2 cursor-pointer transition-colors bg-muted/10 hover:bg-muted/30"
-                      onClick={async () => {
-                        const path = await window.electron.compositor.showBackgroundPicker();
-                        if (path) updateBackgroundPath(path);
-                      }}
-                    >
-                      <ImagePlus className="w-5 h-5 text-muted-foreground/70" />
-                      <span className="text-[11px] text-muted-foreground font-medium">
-                        Click to upload image
-                      </span>
-                    </div>
-                  )}
-                </div>
-
-                {/* 3. Paginated Background Patterns */}
-                <div className="space-y-2">
-                  <Label>Patterns</Label>
-                  <PaginatedGrid<BackgroundPatternConfig>
-                    items={patternItems}
-                    itemsPerPage={8}
-                    gridClassName="grid-cols-4"
-                    className="w-full max-w-44 mx-auto"
-                    disableAnimation
-                    renderItem={(pattern) => (
-                      <div
-                        className={`
-                          cursor-pointer rounded-md border-2 overflow-hidden relative aspect-square
-                          ${project.backgroundPattern?.id === pattern.id ? 'border-primary' : 'border-border hover:border-primary/50'}
-                        `}
-                        onClick={() => updateBackgroundPattern(pattern)}
-                        title={pattern.label}
-                      >
+                  <div className="flex justify-between corner-shape-superellipse border rounded-lg overflow-hidden w-full gap-2">
+                    {BACKGROUND_MODES.map((item, index) => {
+                      const isFirst = index === 0;
+                      const isLast = index === BACKGROUND_MODES.length - 1;
+                      return (
                         <div
-                          className="absolute inset-0"
+                          key={index}
+                          onClick={() => handleBackgroundModeChange(item)}
+                          className={`first-letter:uppercase hover:bg-accent w-full text-center p-2 cursor-pointer 
+                             ${backgroundMode === item ? 'bg-accent' : 'bg-none'}`}
                           style={{
-                            backgroundColor: project.backgroundColor || '#ffffff',
-                            ...pattern.containerStyle,
+                            clipPath: isFirst
+                              ? 'polygon(0 0, 100% 0, 90% 100%, 0 100%)'
+                              : isLast
+                                ? 'polygon(10% 0, 100% 0, 100% 100%, 0 100%)'
+                                : 'polygon(10% 0, 100% 0, 90% 100%, 0 100%)',
+                            marginLeft: isFirst ? '-8px' : '-8%',
+                            marginRight: isLast ? '-8px' : 0,
                           }}
                         >
-                          {pattern.id !== 'none' && (
-                            <div className="absolute inset-0" style={pattern.style} />
-                          )}
-                          {pattern.id === 'none' && (
-                            <div className="absolute inset-0 flex items-center justify-center">
-                              <div className="w-full h-px bg-red-500 rotate-45 transform absolute" />
-                            </div>
-                          )}
+                          {item}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+                {backgroundMode === 'color' && (
+                  <div className="space-y-2">
+                    {/* Base Color + Presets */}
+                    <div className="flex items-center justify-between">
+                      <Label>Base Color</Label>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          value={project.backgroundColor || '#000000'}
+                          onChange={(e) => updateBackgroundColor(e.target.value)}
+                          className="font-mono text-xs h-6 w-20"
+                          placeholder="#000000"
+                        />
+                        <Input
+                          type="color"
+                          value={project.backgroundColor || '#000000'}
+                          onChange={(e) => updateBackgroundColor(e.target.value)}
+                          className="h-6 w-8 p-0 border-0"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between mt-2">
+                      <Label className="text-xs text-muted-foreground">Presets</Label>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-6 w-6"
+                        onClick={handleRefreshColors}
+                      >
+                        <RefreshCcw className="size-3" />
+                      </Button>
+                    </div>
+                    <motion.div layout className="grid grid-cols-4 gap-2 w-fit mx-auto">
+                      {presetColors.map((color) => (
+                        <motion.div
+                          key={color}
+                          whileHover={{ scale: 1.1 }}
+                          whileTap={{ scale: 0.9 }}
+                          className="h-8 w-8 rounded-sm border border-black/20 cursor-pointer shadow-sm"
+                          style={{ backgroundColor: color }}
+                          onClick={() => updateBackgroundColor(color)}
+                        />
+                      ))}
+                    </motion.div>
+                  </div>
+                )}
+
+                {backgroundMode === 'pattern' && (
+                  <div className="space-y-2">
+                    <Label>Patterns</Label>
+                    <PaginatedGrid<BackgroundPatternConfig>
+                      items={patternItems}
+                      itemsPerPage={8}
+                      gridClassName="grid-cols-4"
+                      className="w-full max-w-44 mx-auto"
+                      disableAnimation
+                      renderItem={(pattern) => (
+                        <div
+                          className={`cursor-pointer rounded-md border-2 overflow-hidden relative aspect-square
+            ${project.backgroundPattern?.id === pattern.id ? 'border-primary' : 'border-border hover:border-primary/50'}`}
+                          onClick={() => {
+                            updateBackgroundPattern(pattern);
+                            updateBackgroundMode('pattern');
+                          }}
+                          title={pattern.label}
+                        >
+                          <div
+                            className="absolute inset-0"
+                            style={{
+                              backgroundColor: project.backgroundColor || '#ffffff',
+                              ...pattern.containerStyle,
+                            }}
+                          >
+                            {pattern.id !== 'none' && (
+                              <div className="absolute inset-0" style={pattern.style} />
+                            )}
+                            {pattern.id === 'none' && (
+                              <div className="absolute inset-0 flex items-center justify-center">
+                                <div className="w-full h-px bg-red-500 rotate-45 transform absolute" />
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    />
+                    <PatternImportPanel />
+                  </div>
+                )}
+                {backgroundMode === 'image' && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label>Custom Image</Label>
+                      {project.backgroundPath && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-6 px-2 text-[10px] text-destructive hover:text-destructive hover:bg-destructive/10"
+                          onClick={() => updateBackgroundPath(null)}
+                        >
+                          Remove
+                        </Button>
+                      )}
+                    </div>
+
+                    {project.backgroundPath ? (
+                      <div
+                        className="relative w-full aspect-video rounded-md border border-border/50 overflow-hidden group cursor-pointer transition-all hover:border-primary/50"
+                        onClick={async () => {
+                          const path = await window.electron.compositor.showBackgroundPicker();
+                          if (path) {
+                            updateBackgroundPath(path);
+                            updateBackgroundMode('image');
+                          }
+                        }}
+                      >
+                        <img
+                          src={`file://${project.backgroundPath}`}
+                          alt="Custom background"
+                          className="w-full h-full object-cover"
+                        />
+                        <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-all duration-200">
+                          <span className="text-white text-xs font-medium">Change Image</span>
                         </div>
                       </div>
+                    ) : (
+                      <div
+                        className="w-full h-24 rounded-md border border-dashed border-border/60 hover:border-primary/50 flex flex-col items-center justify-center gap-2 cursor-pointer transition-colors bg-muted/10 hover:bg-muted/30"
+                        onClick={async () => {
+                          const path = await window.electron.compositor.showBackgroundPicker();
+                          if (path) {
+                            updateBackgroundPath(path);
+                            updateBackgroundMode('image');
+                          }
+                        }}
+                      >
+                        <ImagePlus className="w-5 h-5 text-muted-foreground/70" />
+                        <span className="text-[11px] text-muted-foreground font-medium">
+                          Click to upload image
+                        </span>
+                      </div>
                     )}
-                  />
-                </div>
+                  </div>
+                )}
               </div>
             </motion.div>
           )}

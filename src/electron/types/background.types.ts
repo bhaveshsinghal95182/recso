@@ -11,3 +11,5 @@ export interface BackgroundPatternConfig {
   style: Record<string, string | number>;
   containerStyle?: Record<string, string | number>;
 }
+
+export type BackgroundMode = 'color' | 'pattern' | 'image';

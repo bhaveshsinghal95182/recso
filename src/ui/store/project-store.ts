@@ -3,6 +3,7 @@ import { create } from 'zustand';
 import type { BackgroundPatternConfig } from '../../shared/patterns';
 import { debounce } from '../lib/utils';
 import type {
+  BackgroundMode,
   CropConfig,
   CursorConfig,
   CursorRegionOverride,
@@ -32,6 +33,7 @@ interface ProjectState {
   updateBackgroundColor: (color: string) => void;
   updateBackgroundPath: (path: string | null) => void;
   updateBackgroundPattern: (pattern: BackgroundPatternConfig | null) => void;
+  updateBackgroundMode: (mode: BackgroundMode) => void;
   updateCanvasBackgroundEnabled: (enabled: boolean) => Promise<void>;
   updateWebcamOverlay: (config: Partial<WebcamOverlayConfig>) => Promise<void>;
   updateCropConfig: (config: CropConfig | null) => Promise<void>;
@@ -257,6 +259,19 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
     window.electron.background.updatePattern(pattern).catch((err) => {
       console.error('[ProjectStore] updateBackgroundPattern error:', err);
+    });
+  },
+
+  updateBackgroundMode: (mode: BackgroundMode) => {
+    const { project } = get();
+    if (!project) return;
+
+    set((state) => ({
+      project: state.project ? { ...state.project, backgroundMode: mode } : null,
+    }));
+
+    window.electron.background.updateMode(mode).catch((err) => {
+      console.error('[ProjectStore] updateBackgroundMode error:', err);
     });
   },
 

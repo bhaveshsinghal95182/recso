@@ -13,7 +13,7 @@ import { randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
-import type { BackgroundPatternConfig } from '../types/background.types.js';
+import type { BackgroundMode, BackgroundPatternConfig } from '../types/background.types.js';
 import type { CutRegion } from '../types/cut.types.js';
 import type {
   CropConfig,
@@ -247,9 +247,27 @@ function normalizeCursorRegionOverrides(
   });
 }
 
+function resolveBackgroundMode(project: Project): BackgroundMode {
+  if (project.backgroundMode === 'color') return 'color';
+  if (project.backgroundMode === 'pattern') return 'pattern';
+  if (project.backgroundMode === 'image') return 'image';
+
+  if (project.backgroundPath) {
+    return 'image';
+  }
+
+  const hasPattern = Boolean(project.backgroundPattern && project.backgroundPattern.id !== 'none');
+  if (hasPattern) {
+    return 'pattern';
+  }
+
+  return 'color';
+}
+
 function normalizeProjectData(project: Project): Project {
   project.cuts = normalizeCuts(project.cuts);
   project.cursorRegionOverrides = normalizeCursorRegionOverrides(project.cursorRegionOverrides);
+  project.backgroundMode = resolveBackgroundMode(project);
   project.canvasBackgroundEnabled = project.canvasBackgroundEnabled !== false;
 
   const zoomRegionsBySource = normalizeZoomRegionsBySource(project);
@@ -371,6 +389,7 @@ export async function createProject(recordingId: string): Promise<Project | null
     spritesheetMeta,
     backgroundColor: '#000000',
     backgroundPattern: null,
+    backgroundMode: 'color',
     canvasBackgroundEnabled: true,
     webcamOverlay: createDefaultWebcamOverlay(recording.finalPath),
     cuts: [],
@@ -450,7 +469,9 @@ export function loadProject(recordingDir: string): Project | null {
     // Sync compositor state
     try {
       CompositorService.setBackgroundColor(project.backgroundColor);
-      CompositorService.setBackground(project.backgroundPath || null);
+      const backgroundImagePath =
+        project.backgroundMode === 'image' ? project.backgroundPath || null : null;
+      CompositorService.setBackground(backgroundImagePath);
       CompositorService.updateConfig({
         canvasBackgroundEnabled: project.canvasBackgroundEnabled !== false,
       });
@@ -689,6 +710,26 @@ export function updateBackgroundPattern(pattern: BackgroundPatternConfig | null)
 }
 
 /**
+ * Update project background mode
+ */
+export function updateBackgroundMode(mode: BackgroundMode): boolean {
+  if (!activeProject) return false;
+
+  activeProject.backgroundMode = mode;
+
+  try {
+    const imagePath = mode === 'image' ? activeProject.backgroundPath || null : null;
+    CompositorService.setBackground(imagePath);
+  } catch (err) {
+    console.warn('[EditorService] Failed to update compositor background mode:', err);
+  }
+
+  // Auto-save metadata
+  persistProjectMutation();
+  return true;
+}
+
+/**
  * Update project background image path
  */
 export function updateBackgroundPath(imagePath: string | null): boolean {
@@ -697,7 +738,8 @@ export function updateBackgroundPath(imagePath: string | null): boolean {
   activeProject.backgroundPath = imagePath ?? undefined;
 
   try {
-    CompositorService.setBackground(imagePath);
+    const shouldUseImage = activeProject.backgroundMode === 'image';
+    CompositorService.setBackground(shouldUseImage ? imagePath : null);
   } catch (err) {
     console.warn('[EditorService] Failed to update compositor background path:', err);
   }

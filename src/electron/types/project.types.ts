@@ -7,7 +7,7 @@
 /**
  * Cursor style options for rendering
  */
-import type { BackgroundPatternConfig } from './background.types.js';
+import type { BackgroundMode, BackgroundPatternConfig } from './background.types.js';
 import type { CutRegion } from './cut.types.js';
 import type { SpritesheetMeta } from './spritesheet.types.js';
 import type { ZoomRegion } from './zoom.types.js';
@@ -184,6 +184,8 @@ export interface Project {
   backgroundColor: string;
   /** Optional background pattern */
   backgroundPattern?: BackgroundPatternConfig | null;
+  /** Active background mode (color, pattern, or image) */
+  backgroundMode?: BackgroundMode;
   /** Whether canvas background is enabled (defaults to true for backward compatibility) */
   canvasBackgroundEnabled?: boolean;
   /** Optional crop configuration for the source recording */

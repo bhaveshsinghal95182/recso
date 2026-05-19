@@ -56,7 +56,7 @@ export interface UseScreenRecorderOptions {
   audio?: boolean;
 }
 // --- UI Types ---
-export type PropertiesTab = 'general' | 'webcam' | 'cursor' | 'zoom' | 'pattern' | 'export';
+export type PropertiesTab = 'general' | 'webcam' | 'cursor' | 'zoom' | 'export';
 
 // --- Types mirrored from Backend ---
 
@@ -285,6 +285,8 @@ export interface CropConfig {
 
 import type { BackgroundPatternConfig } from '../shared/patterns';
 
+export type BackgroundMode = 'color' | 'pattern' | 'image';
+
 export interface Project {
   id: string;
   name: string;
@@ -303,6 +305,7 @@ export interface Project {
   backgroundPath?: string;
   backgroundColor: string;
   backgroundPattern?: BackgroundPatternConfig | null;
+  backgroundMode?: BackgroundMode;
   canvasBackgroundEnabled?: boolean;
   /** Optional crop configuration for the source recording */
   cropConfig?: CropConfig | null;
