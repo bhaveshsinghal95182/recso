@@ -46,11 +46,11 @@ export const WindowTitlebar = () => {
       <div className="flex items-center gap-2 px-4 py-2">
         <h1 className="text-md font-semibold tracking-wide text-white/70 font-inter">Recso</h1>
       </div>
-      <div className="nav-buttons flex items-center app-region-no-drag h-full">
+      <div className="flex h-full items-center [-webkit-app-region:no-drag]">
         <Button
           variant="ghost"
           size="icon-lg"
-          className="tray-btn cursor-pointer text-gray-400 hover:text-white hover:bg-white/10 group h-full w-12"
+          className="cursor-pointer text-gray-400 hover:text-white hover:bg-white/10 group h-full w-12"
           onClick={handleHideToTray}
           title="Hide to Tray"
         >
@@ -62,7 +62,7 @@ export const WindowTitlebar = () => {
         <Button
           variant="ghost"
           size="icon-lg"
-          className="max-btn cursor-pointer text-gray-400 hover:text-white hover:bg-white/10 group h-full w-12"
+          className="cursor-pointer text-gray-400 hover:text-white hover:bg-white/10 group h-full w-12"
           onClick={handleMaximizeToggle}
           title={isMaximized ? 'Restore' : 'Maximize'}
         >
@@ -75,7 +75,7 @@ export const WindowTitlebar = () => {
         <Button
           variant="ghost"
           size="icon-lg"
-          className="close-btn cursor-pointer text-gray-400 hover:text-red-500 hover:bg-red-500/80 group h-full w-12"
+          className="cursor-pointer text-gray-400 hover:text-red-500 hover:bg-red-500/80 group h-full w-12"
           onClick={handleClose}
           title="Close"
         >

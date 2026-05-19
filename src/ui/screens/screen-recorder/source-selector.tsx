@@ -89,7 +89,7 @@ export function SourceSelector({
         </Tooltip>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 z-10 custom-scrollbar bg-bg-dark shadow-dig-l">
+      <div className="flex-1 overflow-y-auto p-4 z-10 bg-bg-dark shadow-dig-l">
         {isLoading ? (
           <div className="h-full flex flex-col items-center justify-center text-muted-foreground gap-3">
             <RefreshCw className="animate-spin text-primary" size={32} />
