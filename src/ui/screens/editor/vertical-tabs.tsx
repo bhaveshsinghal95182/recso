@@ -1,4 +1,4 @@
-import { Camera, Code, MousePointer2, Settings, ZoomIn } from 'lucide-react';
+import { Camera, MousePointer2, Settings, ZoomIn } from 'lucide-react';
 import { useMemo } from 'react';
 
 import { useUIStore } from '@/store/ui-store';
