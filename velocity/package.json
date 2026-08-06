@@ -70,8 +70,8 @@
     "typescript": "^5.9.2"
   },
   "lint-staged": {
-    "*.@(js|ts|tsx)": [
-      "pnpm dlx oxlint --fix"
+    "{__test__,cli,scripts,benchmark}/**/*.@(js|mjs|ts|tsx)": [
+      "pnpm exec oxlint --fix"
     ],
     "*.@(js|ts|tsx|yml|yaml|md|json)": [
       "pnpm exec prettier --write"
