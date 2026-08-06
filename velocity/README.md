@@ -122,14 +122,27 @@ pnpm cli record monitor --duration 2500 --audio --json
 
 - Install the latest `Rust`
 - Install `Node.js@10+` which fully supported `Node-API`
-- Install `yarn@1.x`
+- Install `pnpm`
+
+`velocity` is a member of the `recso` pnpm workspace (declared in the repo-root
+`pnpm-workspace.yaml`), so dependencies are installed from the repo root:
+
+```bash
+pnpm install
+```
 
 ## Test in local
 
+From this directory:
+
 ```bash
-yarn
-yarn build
-yarn test:all
+pnpm build && pnpm test:all
+```
+
+Or from the repo root, without changing directory:
+
+```bash
+pnpm --filter velocity test:all
 ```
 
 ## Distribution

@@ -15,6 +15,10 @@ export default [
       'dist-electron',
       'dist-react',
       'dist-remotion',
+      // velocity is a self-contained workspace package with its own linter (oxlint)
+      // and prettier config; running the app's eslint over it double-lints with
+      // conflicting rules.
+      'velocity',
     ],
   },
   {
