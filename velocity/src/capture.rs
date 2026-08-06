@@ -100,3 +100,37 @@ pub fn start_window_recording_v2(options: NativeWindowRecordingOptions) -> napi:
 
   Ok(stopper)
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use std::sync::mpsc::channel;
+
+  fn dummy_stopper() -> Stopper {
+    let (stop_tx, _stop_rx) = channel::<()>();
+    let (_done_tx, done_rx) = channel::<()>();
+    Stopper::from_channels(stop_tx, done_rx)
+  }
+
+  #[test]
+  fn attach_webcam_stopper_is_a_noop_when_enable_webcam_is_false() {
+    let mut stopper = dummy_stopper();
+    let result = attach_webcam_stopper_if_requested(
+      &mut stopper,
+      "out.mp4",
+      Some(false),
+      None,
+      None,
+      "test",
+    );
+    assert!(result.is_ok());
+  }
+
+  #[test]
+  fn attach_webcam_stopper_is_a_noop_when_enable_webcam_is_omitted() {
+    let mut stopper = dummy_stopper();
+    let result =
+      attach_webcam_stopper_if_requested(&mut stopper, "out.mp4", None, None, None, "test");
+    assert!(result.is_ok());
+  }
+}

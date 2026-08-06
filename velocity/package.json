@@ -47,7 +47,12 @@
     "lint": "oxlint .",
     "prepublishOnly": "napi prepublish -t npm",
     "test": "ava",
-    "dev": "pnpm build && node tests/test-runner.js",
+    "test:rust": "cargo test --lib",
+    "test:recording": "node scripts/run-recording-tests.mjs",
+    "test:all": "run-s test:rust test",
+    "cli": "node cli/velocity-cli.mjs",
+    "smoke": "node cli/smoke.mjs",
+    "dev": "pnpm build && node cli/velocity-cli.mjs interactive",
     "preversion": "napi build --platform && git add .",
     "version": "napi version",
     "prepare": "husky"

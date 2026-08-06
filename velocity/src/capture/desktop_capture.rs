@@ -533,3 +533,96 @@ pub(crate) fn start_window_recording_with_target_fps(
     minimum_update_interval_for_target_fps(target_fps, "start_window_recording_v2"),
   )
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn custom_interval_for_fps(fps: u64) -> MinimumUpdateIntervalSettings {
+    let interval_nanos = (1_000_000_000u64 / fps).max(1);
+    MinimumUpdateIntervalSettings::Custom(Duration::from_nanos(interval_nanos))
+  }
+
+  #[test]
+  fn minimum_update_interval_defaults_to_60fps_when_none() {
+    let settings = minimum_update_interval_for_target_fps(None, "test");
+    assert_eq!(settings, custom_interval_for_fps(60));
+  }
+
+  #[test]
+  fn minimum_update_interval_supports_30_and_60fps() {
+    assert_eq!(
+      minimum_update_interval_for_target_fps(Some(30), "test"),
+      custom_interval_for_fps(30)
+    );
+    assert_eq!(
+      minimum_update_interval_for_target_fps(Some(60), "test"),
+      custom_interval_for_fps(60)
+    );
+  }
+
+  #[test]
+  fn minimum_update_interval_falls_back_to_60fps_for_unsupported_values() {
+    assert_eq!(
+      minimum_update_interval_for_target_fps(Some(24), "test"),
+      custom_interval_for_fps(60)
+    );
+    assert_eq!(
+      minimum_update_interval_for_target_fps(Some(0), "test"),
+      custom_interval_for_fps(60)
+    );
+    assert_eq!(
+      minimum_update_interval_for_target_fps(Some(144), "test"),
+      custom_interval_for_fps(60)
+    );
+  }
+
+  #[test]
+  fn stopper_append_merges_channel_vectors_from_both_sides() {
+    let (stop_tx_a, _stop_rx_a) = channel::<()>();
+    let (_done_tx_a, done_rx_a) = channel::<()>();
+    let (stop_tx_b, _stop_rx_b) = channel::<()>();
+    let (_done_tx_b, done_rx_b) = channel::<()>();
+
+    let mut stopper = Stopper::from_channels(stop_tx_a, done_rx_a);
+    let other = Stopper::from_channels(stop_tx_b, done_rx_b);
+    stopper.append(other);
+
+    assert_eq!(stopper.stop_txs.len(), 2);
+    assert_eq!(stopper.done_rxs.len(), 2);
+  }
+
+  #[test]
+  fn stopper_stop_signals_every_registered_channel_and_waits_for_done() {
+    let (stop_tx, stop_rx) = channel::<()>();
+    let (done_tx, done_rx) = channel::<()>();
+    let mut stopper = Stopper::from_channels(stop_tx, done_rx);
+
+    let worker = thread::spawn(move || {
+      // Mirrors how a real capture thread behaves: block until told to stop,
+      // then report completion on the done channel.
+      let _ = stop_rx.recv();
+      let _ = done_tx.send(());
+    });
+
+    stopper.stop();
+    worker.join().expect("worker thread should not panic");
+
+    // stop() drains both vectors after signalling/joining every channel pair.
+    assert!(stopper.stop_txs.is_empty());
+    assert!(stopper.done_rxs.is_empty());
+  }
+
+  #[test]
+  fn stopper_stop_does_not_hang_when_worker_never_reports_done() {
+    // Regression guard: stop() must bound its wait per channel instead of blocking forever
+    // if a capture thread dies without sending on `done_tx`.
+    let (stop_tx, _stop_rx) = channel::<()>();
+    let (_done_tx, done_rx) = channel::<()>();
+    let mut stopper = Stopper::from_channels(stop_tx, done_rx);
+
+    let started_at = std::time::Instant::now();
+    stopper.stop();
+    assert!(started_at.elapsed() < Duration::from_secs(10));
+  }
+}
