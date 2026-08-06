@@ -340,7 +340,7 @@ impl GraphicsCaptureApiHandler for Capture {
 
     if self.native_audio_active {
       self.drain_audio_channel();
-      let audio_buffer = self.build_audio_buffer_for_frame(frame.timestamp().Duration);
+      let audio_buffer = self.build_audio_buffer_for_frame(frame.timestamp()?.Duration);
       if let Some(encoder) = self.encoder.as_mut() {
         let _ = encoder.send_frame_with_audio(frame, &audio_buffer);
       }

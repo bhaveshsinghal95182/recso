@@ -102,22 +102,6 @@ pnpm cli interactive          # prompt-driven picker
 `record` accepts `--assert-non-empty`, which exits 1 if the output file ends up
 missing or empty — useful for scripting a capture check without the full smoke test.
 
-## Known issues
-
-**System audio recording is broken.** Passing `includeSystemAudio: true` (or `--audio`
-from the CLI) produces an 80-byte header-only mp4, and `Stopper.stop()` blocks for its
-full 8s timeout because the capture thread never signals completion. This reproduces on
-both `startMonitorRecording` (v1) and `startMonitorRecordingV2`, at both 30 and 60 fps,
-so it is in the shared audio path in `src/capture/desktop_capture.rs`
-(`Capture::initialize_encoder` / `send_frame_with_audio`) rather than in the v2 options
-plumbing. Video-only recording and the webcam sidecar are unaffected.
-
-Reproduce with:
-
-```bash
-pnpm cli record monitor --duration 2500 --audio --json
-```
-
 ## Develop requirements
 
 - Install the latest `Rust`

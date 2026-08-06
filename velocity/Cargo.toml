@@ -26,7 +26,7 @@ windows = { version = "0.62.2", features = [
   "Win32_UI_WindowsAndMessaging",
   "Win32_Graphics_Dwm",
 ] }
-windows-capture = "1.5.0"
+windows-capture = "2.0.0"
 
 [build-dependencies]
 napi-build = "2"

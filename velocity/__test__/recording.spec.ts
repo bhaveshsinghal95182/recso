@@ -67,12 +67,11 @@ recordingTest('startMonitorRecordingV2 writes a non-empty mp4 at targetFps 30', 
   }
 })
 
-// KNOWN FAILING: enabling system audio currently produces an 80-byte (header-only)
-// mp4, and Stopper.stop() blocks for its full 8s timeout because the capture thread
-// never signals completion. Reproduces on both the v1 and v2 entry points and at both
-// 30 and 60 fps, so it's in the shared audio path (Capture::initialize_encoder /
-// send_frame_with_audio in desktop_capture.rs), not in the v2 options plumbing.
-// This test is written to assert the *correct* behavior so it goes green once fixed.
+// Regression guard for the windows-capture 1.5.0 audio deadlock: send_frame_with_audio
+// waited on a condvar that the MediaStreamSource sample-requested handler could not
+// signal, because that handler blocks in recv() on whichever stream is asked for first.
+// The result was a header-only mp4 and a stop() that hung for its full 8s timeout, so
+// this asserts both that real bytes land and that stop() returns promptly.
 recordingTest('startMonitorRecordingV2 writes a non-empty mp4 with system audio enabled', async (t) => {
   const dir = await makeTmpDir('velocity-monitor-audio-')
   const outputPath = path.join(dir, 'monitor.mp4')

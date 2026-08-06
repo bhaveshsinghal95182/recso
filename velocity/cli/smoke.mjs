@@ -187,11 +187,11 @@ async function main() {
       return `${formatBytes(size)} in ${formatMs(elapsedMs)}`
     })
 
-    // Split out from the video-only check because the audio path is currently broken:
-    // it yields a header-only mp4 and stop() blocks for its full 8s timeout. Keeping it
-    // as its own check means a red smoke run points at the audio path specifically
-    // instead of making all of v2 look broken. Skippable with --no-audio for a green
-    // run while the underlying bug is outstanding.
+    // Kept as its own check (rather than folded into the video-only one) so a failure
+    // points at the audio path specifically instead of making all of v2 look broken.
+    // This is the regression guard for the windows-capture 1.5.0 deadlock, where
+    // send_frame_with_audio waited on a condvar the sample-requested handler could not
+    // signal. --no-audio skips it on machines with no usable render endpoint.
     if (flagAsBool(flags, 'no-audio')) {
       record('startMonitorRecordingV2 writes a non-empty mp4 with system audio', 'skip', '--no-audio passed')
     } else {
