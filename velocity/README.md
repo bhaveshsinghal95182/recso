@@ -1,87 +1,138 @@
-# `@napi-rs/package-template`
+# velocity
 
-![https://github.com/napi-rs/package-template/actions](https://github.com/napi-rs/package-template/workflows/CI/badge.svg)
+Native Windows screen, window, cursor and webcam capture for `recso`, built with
+[napi-rs](https://napi.rs). Exposes a Node addon (`index.js` + a platform `.node`
+binary) that the Electron main process loads by path — see `electron-builder.json`,
+which bundles `velocity/index.js` and `velocity/*.node` into the packaged app.
 
-> Template project for writing node packages with napi-rs.
+The Rust side lives in [src/](./src):
 
-# Usage
+| Module                                                           | Responsibility                                                                      |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| [`capture/desktop_capture.rs`](./src/capture/desktop_capture.rs) | Monitor & window recording via Windows Graphics Capture, plus WASAPI loopback audio |
+| [`capture/webcam_capture.rs`](./src/capture/webcam_capture.rs)   | Webcam enumeration and the `_camera.mp4` sidecar recording                          |
+| [`cursor.rs`](./src/cursor.rs)                                   | Cursor position/shape snapshots and timed sampling, serialized as JSON              |
+| [`window.rs`](./src/window.rs)                                   | Capturable-window enumeration with JPEG thumbnails                                  |
+| [`singular_clock.rs`](./src/singular_clock.rs)                   | Pure timing/geometry helpers shared by the capture paths                            |
 
-1. Click **Use this template**.
-2. **Clone** your project.
-3. Run `yarn install` to install dependencies.
-4. Run `yarn napi rename -n [@your-scope/package-name] -b [binary-name]` command under the project folder to rename your package.
-
-## Install this test package
+## Build
 
 ```bash
-yarn add @napi-rs/package-template
+pnpm build          # release build
+pnpm build:debug    # debug build
 ```
 
-## Ability
+This produces `velocity.win32-x64-msvc.node` in the package root, loaded by
+[index.js](./index.js). Rebuild after any Rust change — the JS tests and CLI run
+against the compiled binary, not the source.
 
-### Build
+## Testing
 
-After `yarn build/npm run build` command, you can see `package-template.[darwin|win32|linux].node` file in project root. This is the native addon built from [lib.rs](./src/lib.rs).
+There are four layers, cheapest first. The first two need no hardware and no build;
+the last two drive real capture on the current machine.
 
-### Test
+| Layer               | Command               | What it covers                                                                                                                                                 | Needs a build?          |
+| ------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| Rust unit tests     | `pnpm test:rust`      | Pure logic: clock/tick math, overlay & crop geometry, audio byte pacing, sidecar path derivation, RGB→BGRA conversion, fps clamping, `Stopper` channel fan-out | No (`cargo test --lib`) |
+| ava suite           | `pnpm test`           | API surface, enumeration shape, cursor JSON contract & clamping                                                                                                | Yes                     |
+| ava recording tests | `pnpm test:recording` | Real capture end-to-end (opt-in, see below)                                                                                                                    | Yes                     |
+| Smoke test          | `pnpm smoke`          | Real capture end-to-end with pass/fail summary and a non-zero exit code                                                                                        | Yes                     |
 
-With [ava](https://github.com/avajs/ava), run `yarn test/npm run test` to testing native addon. You can also switch to another testing framework if you want.
+### Rust unit tests
 
-### CI
+```bash
+pnpm test:rust
+```
 
-With GitHub Actions, each commit and pull request will be built and tested automatically in [`node@20`, `@node22`] x [`macOS`, `Linux`, `Windows`] matrix. You will never be afraid of the native addon broken in these platforms.
+These are the only tests that run anywhere, including CI without a display or camera.
+Everything testable as a pure function lives here — if you're adding logic to the
+capture path, prefer extracting it into a free function so it can be covered here
+rather than only through a real recording.
 
-### Release
+### ava suite
 
-Release native package is very difficult in old days. Native packages may ask developers who use it to install `build toolchain` like `gcc/llvm`, `node-gyp` or something more.
+```bash
+pnpm test
+```
 
-With `GitHub actions`, we can easily prebuild a `binary` for major platforms. And with `N-API`, we should never be afraid of **ABI Compatible**.
+Recording tests are **skipped by default** so this stays fast and side-effect-free —
+the recording specs write real video files and window recording steals foreground
+focus. Opt in with:
 
-The other problem is how to deliver prebuild `binary` to users. Downloading it in `postinstall` script is a common way that most packages do it right now. The problem with this solution is it introduced many other packages to download binary that has not been used by `runtime codes`. The other problem is some users may not easily download the binary from `GitHub/CDN` if they are behind a private network (But in most cases, they have a private NPM mirror).
+```bash
+pnpm test:recording
+```
 
-In this package, we choose a better way to solve this problem. We release different `npm packages` for different platforms. And add it to `optionalDependencies` before releasing the `Major` package to npm.
+(That sets `VELOCITY_RUN_RECORDING_TESTS=1`; see `__test__/helpers/env.ts`.)
 
-`NPM` will choose which native package should download from `registry` automatically. You can see [npm](./npm) dir for details. And you can also run `yarn add @napi-rs/package-template` to see how it works.
+### Smoke test
+
+The fastest way to answer "does capture still work on this machine?" after a Rust
+change. Runs in ~7s, prints a PASS/FAIL/SKIP table, and exits non-zero on failure so
+it can gate CI.
+
+```bash
+pnpm smoke              # core checks + monitor recording
+pnpm smoke --webcam     # also exercise the webcam sidecar (needs a camera)
+pnpm smoke --window     # also record a real window (steals focus)
+pnpm smoke --no-audio   # skip the system-audio check
+pnpm smoke --json       # machine-readable results
+pnpm smoke --keep       # keep the recordings it produces for inspection
+```
+
+### CLI
+
+`cli/velocity-cli.mjs` is the manual-testing surface: every native API is reachable
+from it without writing a script, and every command takes `--json` so it can also be
+driven from one.
+
+```bash
+pnpm cli help
+pnpm cli check                # environment diagnostics
+pnpm cli list-windows --json
+pnpm cli list-webcams
+pnpm cli cursor snapshot
+pnpm cli cursor samples --duration 3000 --out samples.json
+pnpm cli record monitor --duration 4000 --audio --output out.mp4
+pnpm cli record monitor --webcam --cursor --fps 30
+pnpm cli record window --title "Visual Studio Code" --duration 5000
+pnpm cli interactive          # prompt-driven picker
+```
+
+`record` accepts `--assert-non-empty`, which exits 1 if the output file ends up
+missing or empty — useful for scripting a capture check without the full smoke test.
 
 ## Develop requirements
 
 - Install the latest `Rust`
 - Install `Node.js@10+` which fully supported `Node-API`
-- Install `yarn@1.x`
+- Install `pnpm`
+
+`velocity` is a member of the `recso` pnpm workspace (declared in the repo-root
+`pnpm-workspace.yaml`), so dependencies are installed from the repo root:
+
+```bash
+pnpm install
+```
 
 ## Test in local
 
-- yarn
-- yarn build
-- yarn test
-
-And you will see:
+From this directory:
 
 ```bash
-$ ava --verbose
-
-  ✔ sync function from native code
-  ✔ sleep function from native code (201ms)
-  ─
-
-  2 tests passed
-✨  Done in 1.12s.
+pnpm build && pnpm test:all
 ```
 
-## Release package
-
-Ensure you have set your **NPM_TOKEN** in the `GitHub` project setting.
-
-In `Settings -> Secrets`, add **NPM_TOKEN** into it.
-
-When you want to release the package:
+Or from the repo root, without changing directory:
 
 ```bash
-npm version [<newversion> | major | minor | patch | premajor | preminor | prepatch | prerelease [--preid=<prerelease-id>] | from-git]
-
-git push
+pnpm --filter velocity test:all
 ```
 
-GitHub actions will do the rest job for you.
+## Distribution
 
-> WARN: Don't run `npm publish` manually.
+`velocity` is not published to npm. It ships inside the `recso` Electron app:
+`electron-builder.json` bundles `velocity/index.js` and `velocity/*.node`, and the main
+process resolves the addon by path (see `getVelocityCursorBindings` in
+`src/electron/services/mouse-tracker.service.ts`). The `.node` binary is gitignored, so
+run `pnpm build` before packaging a release.

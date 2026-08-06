@@ -54,14 +54,15 @@ impl GraphicsCaptureApiHandler for SnapshotCapture {
         if let Some(tx) = self.tx.take() {
             let snapshot: Result<SnapshotFrame, String> = (|| {
                 let color_format = frame.color_format();
-                let mut buffer = frame
+                let buffer = frame
                     .buffer()
                     .map_err(|err| format!("Failed to read frame buffer: {:?}", err))?;
                 let width = buffer.width();
                 let height = buffer.height();
-                let raw_pixels = buffer
-                    .as_nopadding_buffer()
-                    .map_err(|err| format!("Failed to extract frame buffer: {:?}", err))?;
+                // windows-capture 2.x unpads into a caller-supplied scratch buffer and
+                // borrows from it, so `scratch` must outlive `raw_pixels`.
+                let mut scratch = Vec::new();
+                let raw_pixels = buffer.as_nopadding_buffer(&mut scratch);
 
                 Ok(SnapshotFrame {
                     pixels: raw_pixels.to_vec(),

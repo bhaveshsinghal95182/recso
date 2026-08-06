@@ -117,16 +117,17 @@ dist
 #Added by cargo
 
 /target
-Cargo.lock
+
+# Cargo.lock is tracked on purpose. The napi template ignores it because it
+# assumes a published library, where downstreams resolve their own versions.
+# velocity is never published: it is compiled to a .node binary that is itself
+# gitignored, so every release build recompiles from source. Without the lock,
+# a caret range like windows-capture = "2.0.0" can silently resolve to an
+# untested 2.x. The negation is needed because the repo-root .gitignore also
+# matches */*.lock, and a deeper .gitignore overrides a shallower one.
+!Cargo.lock
 
 *.node
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/sdks
-!.yarn/versions
 /npm
 
 tests/*.mp4

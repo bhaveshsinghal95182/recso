@@ -113,33 +113,25 @@ fn create_camera(index: CameraIndex, target_fps: u32) -> Result<Camera, String> 
 }
 
 fn rgb_to_bgra_bottom_up(rgb: &[u8], width: usize, height: usize) -> Vec<u8> {
-  let mut output = vec![0u8; width.saturating_mul(height).saturating_mul(4)];
+    let mut output = vec![0u8; width * height * 4];
+    let row_bytes_rgb = width * 3;
+    let row_bytes_bgra = width * 4;
 
-  for y in 0..height {
-    let src_row_start = y.saturating_mul(width).saturating_mul(3);
-    let dst_y = height.saturating_sub(1).saturating_sub(y);
-    let dst_row_start = dst_y.saturating_mul(width).saturating_mul(4);
+    // Iterate over rows in reverse to flip the image bottom-up
+    for (y, rgb_row) in rgb.chunks_exact(row_bytes_rgb).enumerate() {
+        let dst_y = height - 1 - y;
+        let dst_row = &mut output[dst_y * row_bytes_bgra .. (dst_y + 1) * row_bytes_bgra];
 
-    for x in 0..width {
-      let src = src_row_start + x.saturating_mul(3);
-      let dst = dst_row_start + x.saturating_mul(4);
-
-      if src + 2 >= rgb.len() || dst + 3 >= output.len() {
-        continue;
-      }
-
-      let r = rgb[src];
-      let g = rgb[src + 1];
-      let b = rgb[src + 2];
-
-      output[dst] = b;
-      output[dst + 1] = g;
-      output[dst + 2] = r;
-      output[dst + 3] = 255;
+        // Zip the chunks together to eliminate bounds checking entirely
+        for (src_pixel, dst_pixel) in rgb_row.chunks_exact(3).zip(dst_row.chunks_exact_mut(4)) {
+            dst_pixel[0] = src_pixel[2]; // B
+            dst_pixel[1] = src_pixel[1]; // G
+            dst_pixel[2] = src_pixel[0]; // R
+            dst_pixel[3] = 255;          // A
+        }
     }
-  }
 
-  output
+    output
 }
 
 fn capture_next_bgra_frame(
@@ -373,5 +365,97 @@ pub(crate) fn start_webcam_sidecar_recording(
     Err(RecvTimeoutError::Disconnected) => Err(napi::Error::from_reason(
       "native webcam recording thread exited during startup".to_string(),
     )),
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn camera_sidecar_path_inserts_camera_suffix_before_extension() {
+    assert_eq!(camera_sidecar_path("recording.mp4"), "recording_camera.mp4");
+  }
+
+  #[test]
+  fn camera_sidecar_path_preserves_directory_and_extension() {
+    let sidecar = camera_sidecar_path("tests/recording_123.mkv");
+    let expected = Path::new("tests").join("recording_123_camera.mkv");
+    assert_eq!(Path::new(&sidecar), expected.as_path());
+  }
+
+  #[test]
+  fn camera_sidecar_path_defaults_extension_to_mp4_when_missing() {
+    let sidecar = camera_sidecar_path("tests/recording_noext");
+    assert_eq!(
+      Path::new(&sidecar).extension().and_then(|value| value.to_str()),
+      Some("mp4")
+    );
+    assert!(sidecar.contains("recording_noext_camera"));
+  }
+
+  #[test]
+  fn camera_sidecar_path_handles_bare_filename_without_directory() {
+    assert_eq!(camera_sidecar_path("output.mov"), "output_camera.mov");
+  }
+
+  #[test]
+  fn camera_sidecar_path_falls_back_to_recording_stem_when_path_has_no_file_name() {
+    // `Path::file_stem` returns None for inputs like "." or "..", exercising the fallback.
+    let sidecar = camera_sidecar_path(".");
+    assert!(sidecar.contains("recording_camera"));
+  }
+
+  #[test]
+  fn target_webcam_fps_defaults_to_60_when_none() {
+    assert_eq!(target_webcam_fps(None), 60);
+  }
+
+  #[test]
+  fn target_webcam_fps_accepts_30_and_60() {
+    assert_eq!(target_webcam_fps(Some(30)), 30);
+    assert_eq!(target_webcam_fps(Some(60)), 60);
+  }
+
+  #[test]
+  fn target_webcam_fps_falls_back_to_60_for_unsupported_values() {
+    assert_eq!(target_webcam_fps(Some(24)), 60);
+    assert_eq!(target_webcam_fps(Some(120)), 60);
+    assert_eq!(target_webcam_fps(Some(0)), 60);
+  }
+
+  #[test]
+  fn rgb_to_bgra_bottom_up_converts_channel_order_and_flips_rows() {
+    let width = 1;
+    let height = 2;
+    // Row 0 (top, decoded order): R=10,G=20,B=30. Row 1 (bottom): R=40,G=50,B=60.
+    let rgb = vec![10, 20, 30, 40, 50, 60];
+    let bgra = rgb_to_bgra_bottom_up(&rgb, width, height);
+
+    assert_eq!(bgra.len(), width * height * 4);
+    // Bottom-up output: row 0 of the output holds the *last* source row.
+    assert_eq!(&bgra[0..4], &[60, 50, 40, 255]);
+    assert_eq!(&bgra[4..8], &[30, 20, 10, 255]);
+  }
+
+  #[test]
+  fn rgb_to_bgra_bottom_up_sets_full_opacity_alpha_for_every_pixel() {
+    let width = 2;
+    let height = 1;
+    let rgb = vec![1, 2, 3, 4, 5, 6];
+    let bgra = rgb_to_bgra_bottom_up(&rgb, width, height);
+    assert_eq!(bgra[3], 255);
+    assert_eq!(bgra[7], 255);
+  }
+
+  #[test]
+  fn rgb_to_bgra_bottom_up_produces_identity_flip_for_single_row() {
+    let width = 2;
+    let height = 1;
+    let rgb = vec![9, 8, 7, 6, 5, 4];
+    let bgra = rgb_to_bgra_bottom_up(&rgb, width, height);
+    // A single-row image is its own vertical flip.
+    assert_eq!(&bgra[0..4], &[7, 8, 9, 255]);
+    assert_eq!(&bgra[4..8], &[4, 5, 6, 255]);
   }
 }
