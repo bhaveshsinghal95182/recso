@@ -171,6 +171,17 @@ function shapeFromAspectRatio(aspectRatio: number): WebcamOverlayShape {
   return aspectRatio > 1.05 ? 'rectangle-landscape' : 'rectangle-portrait';
 }
 
+/**
+ * The phone-as-webcam flow is UI-only for now: there is no signalling service, no
+ * WebRTC transport and no IPC behind it (see
+ * implementation-plans/remote-camera-integration.md for what still has to be built),
+ * so pairing would hand the user a QR code and link that never connect and then sit
+ * on "Pairing" forever. The state and handlers stay wired up so the feature can be
+ * finished without re-plumbing it — only the entry points are hidden. Flip this to
+ * true once the transport lands.
+ */
+const SHOW_REMOTE_CAMERA = false;
+
 type RemoteCameraTone = 'neutral' | 'active' | 'error';
 
 function resolveRemoteCameraStatusLabel(state: RemoteCameraState): string {
@@ -462,127 +473,131 @@ export function WebcamPanel() {
 
   return (
     <div className="space-y-4">
-      <div className="rounded-xl border border-border/70 bg-background px-3 py-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-2.5">
-            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-primary/15 text-primary">
-              <Smartphone className="h-4 w-4" />
-            </span>
-            <div>
-              <label className="text-sm font-medium">Phone as Webcam</label>
-              <p className="text-xs text-muted-foreground">
-                Use your phone camera as a webcam overlay.
-              </p>
+      {SHOW_REMOTE_CAMERA && (
+        <div className="rounded-xl border border-border/70 bg-background px-3 py-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-primary/15 text-primary">
+                <Smartphone className="h-4 w-4" />
+              </span>
+              <div>
+                <label className="text-sm font-medium">Phone as Webcam</label>
+                <p className="text-xs text-muted-foreground">
+                  Use your phone camera as a webcam overlay.
+                </p>
+              </div>
             </div>
+
+            <span
+              className={`inline-flex items-center rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${remoteToneClasses}`}
+            >
+              {remoteStatusLabel}
+            </span>
           </div>
 
-          <span
-            className={`inline-flex items-center rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${remoteToneClasses}`}
-          >
-            {remoteStatusLabel}
-          </span>
-        </div>
-
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <Button size="sm" onClick={handleStartPairing} disabled={isPairing || isConnected}>
-            {isConnected ? 'Connected' : 'Use phone'}
-          </Button>
-
-          {isPairing && (
-            <Button size="sm" variant="outline" onClick={handleCancelPairing}>
-              Cancel
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Button size="sm" onClick={handleStartPairing} disabled={isPairing || isConnected}>
+              {isConnected ? 'Connected' : 'Use phone'}
             </Button>
-          )}
 
-          {isConnected && (
-            <Button size="sm" variant="outline" onClick={handleCancelPairing}>
-              Disconnect
-            </Button>
+            {isPairing && (
+              <Button size="sm" variant="outline" onClick={handleCancelPairing}>
+                Cancel
+              </Button>
+            )}
+
+            {isConnected && (
+              <Button size="sm" variant="outline" onClick={handleCancelPairing}>
+                Disconnect
+              </Button>
+            )}
+          </div>
+
+          {remoteCamera.error && (
+            <p className="mt-2 text-xs text-destructive">{remoteCamera.error}</p>
           )}
         </div>
+      )}
 
-        {remoteCamera.error && (
-          <p className="mt-2 text-xs text-destructive">{remoteCamera.error}</p>
-        )}
-      </div>
-
-      <Dialog.Root open={pairingOpen} onOpenChange={handlePairingOpenChange}>
-        <Dialog.Portal>
-          <Dialog.Backdrop className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-starting-style:opacity-0 data-ending-style:opacity-0 transition-opacity duration-200" />
-          <Dialog.Popup className="fixed left-1/2 top-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-card p-6 shadow-xl data-starting-style:opacity-0 data-starting-style:scale-95 data-ending-style:opacity-0 data-ending-style:scale-95 transition-all duration-200">
-            <div className="mb-4 flex items-center justify-between">
-              <Dialog.Title className="text-lg font-semibold">Connect phone camera</Dialog.Title>
-              <Dialog.Close className="text-muted-foreground transition-colors hover:text-foreground">
-                <X className="h-5 w-5" />
-              </Dialog.Close>
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-[200px_1fr]">
-              <div className="flex flex-col items-center gap-3">
-                <div className="flex h-44 w-44 items-center justify-center rounded-lg border border-dashed border-border bg-muted/40 text-muted-foreground">
-                  {remoteCamera.qrDataUrl ? (
-                    <img
-                      src={remoteCamera.qrDataUrl}
-                      alt="Pairing QR code"
-                      className="h-40 w-40 rounded-md"
-                    />
-                  ) : (
-                    <div className="flex flex-col items-center gap-2 text-xs">
-                      <QrCode className="h-5 w-5" />
-                      QR code
-                    </div>
-                  )}
-                </div>
-                <span className="text-xs text-muted-foreground">Scan with your phone</span>
+      {SHOW_REMOTE_CAMERA && (
+        <Dialog.Root open={pairingOpen} onOpenChange={handlePairingOpenChange}>
+          <Dialog.Portal>
+            <Dialog.Backdrop className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-starting-style:opacity-0 data-ending-style:opacity-0 transition-opacity duration-200" />
+            <Dialog.Popup className="fixed left-1/2 top-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-card p-6 shadow-xl data-starting-style:opacity-0 data-starting-style:scale-95 data-ending-style:opacity-0 data-ending-style:scale-95 transition-all duration-200">
+              <div className="mb-4 flex items-center justify-between">
+                <Dialog.Title className="text-lg font-semibold">Connect phone camera</Dialog.Title>
+                <Dialog.Close className="text-muted-foreground transition-colors hover:text-foreground">
+                  <X className="h-5 w-5" />
+                </Dialog.Close>
               </div>
 
-              <div className="space-y-3">
-                <div className="space-y-1">
-                  <Label className="text-xs text-muted-foreground">Pairing link</Label>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      readOnly
-                      value={remoteCamera.pairingUrl ?? 'Generating pairing link...'}
-                      className="h-9 text-xs"
-                    />
-                    <Button size="sm" variant="outline" onClick={handleCopyPairingUrl}>
-                      <Copy className="h-3.5 w-3.5" />
-                      {copyLabel}
+              <div className="grid gap-4 md:grid-cols-[200px_1fr]">
+                <div className="flex flex-col items-center gap-3">
+                  <div className="flex h-44 w-44 items-center justify-center rounded-lg border border-dashed border-border bg-muted/40 text-muted-foreground">
+                    {remoteCamera.qrDataUrl ? (
+                      <img
+                        src={remoteCamera.qrDataUrl}
+                        alt="Pairing QR code"
+                        className="h-40 w-40 rounded-md"
+                      />
+                    ) : (
+                      <div className="flex flex-col items-center gap-2 text-xs">
+                        <QrCode className="h-5 w-5" />
+                        QR code
+                      </div>
+                    )}
+                  </div>
+                  <span className="text-xs text-muted-foreground">Scan with your phone</span>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">Pairing link</Label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        readOnly
+                        value={remoteCamera.pairingUrl ?? 'Generating pairing link...'}
+                        className="h-9 text-xs"
+                      />
+                      <Button size="sm" variant="outline" onClick={handleCopyPairingUrl}>
+                        <Copy className="h-3.5 w-3.5" />
+                        {copyLabel}
+                      </Button>
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-muted-foreground">
+                    Open the link on your phone, allow camera access, and keep this window open.
+                  </p>
+
+                  <div className="flex items-center justify-between rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-xs">
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      {isPairing ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Camera className="h-3.5 w-3.5" />
+                      )}
+                      <span>{remoteStatusLabel}</span>
+                    </div>
+                    {remoteExpiryLabel && (
+                      <span className="text-muted-foreground">{remoteExpiryLabel}</span>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" onClick={handleStartPairing} disabled={isPairing}>
+                      Regenerate link
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={handleCancelPairing}>
+                      Cancel
                     </Button>
                   </div>
                 </div>
-
-                <p className="text-xs text-muted-foreground">
-                  Open the link on your phone, allow camera access, and keep this window open.
-                </p>
-
-                <div className="flex items-center justify-between rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-xs">
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    {isPairing ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Camera className="h-3.5 w-3.5" />
-                    )}
-                    <span>{remoteStatusLabel}</span>
-                  </div>
-                  {remoteExpiryLabel && (
-                    <span className="text-muted-foreground">{remoteExpiryLabel}</span>
-                  )}
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  <Button size="sm" onClick={handleStartPairing} disabled={isPairing}>
-                    Regenerate link
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={handleCancelPairing}>
-                    Cancel
-                  </Button>
-                </div>
               </div>
-            </div>
-          </Dialog.Popup>
-        </Dialog.Portal>
-      </Dialog.Root>
+            </Dialog.Popup>
+          </Dialog.Portal>
+        </Dialog.Root>
+      )}
 
       <div className="rounded-xl border border-border/70 bg-background px-3 py-2.5">
         <div className="flex items-center justify-between gap-3">
