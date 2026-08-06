@@ -1,12 +1,18 @@
+import { Dialog } from '@base-ui/react/dialog';
 import {
   Camera,
   Circle,
+  Copy,
+  Loader2,
   Maximize2,
   Minimize2,
+  QrCode,
   RectangleHorizontal,
   RectangleVertical,
   SlidersHorizontal,
+  Smartphone,
   Square,
+  X,
 } from 'lucide-react';
 import { type ComponentType, useEffect, useMemo, useState } from 'react';
 
@@ -15,7 +21,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { useProjectStore } from '@/store/project-store';
-import type { WebcamOverlayShape, WebcamOverlaySize } from '@/types';
+import type { RemoteCameraState, WebcamOverlayShape, WebcamOverlaySize } from '@/types';
 
 const DEFAULT_WEBCAM_SIZE: WebcamOverlaySize = 'medium';
 const DEFAULT_WEBCAM_ASPECT_RATIO = 3 / 4;
@@ -165,6 +171,48 @@ function shapeFromAspectRatio(aspectRatio: number): WebcamOverlayShape {
   return aspectRatio > 1.05 ? 'rectangle-landscape' : 'rectangle-portrait';
 }
 
+type RemoteCameraTone = 'neutral' | 'active' | 'error';
+
+function resolveRemoteCameraStatusLabel(state: RemoteCameraState): string {
+  switch (state.status) {
+    case 'pairing':
+      return 'Pairing';
+    case 'connecting':
+      return 'Connecting';
+    case 'connected':
+      return 'Connected';
+    case 'error':
+      return 'Error';
+    default:
+      return 'Idle';
+  }
+}
+
+function resolveRemoteCameraTone(state: RemoteCameraState): RemoteCameraTone {
+  switch (state.status) {
+    case 'connected':
+    case 'pairing':
+    case 'connecting':
+      return 'active';
+    case 'error':
+      return 'error';
+    default:
+      return 'neutral';
+  }
+}
+
+function formatExpiryLabel(expiresAt?: number): string | null {
+  if (!Number.isFinite(expiresAt)) {
+    return null;
+  }
+
+  const deltaMs = Math.max(0, (expiresAt as number) - Date.now());
+  const totalSeconds = Math.round(deltaMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `Expires in ${minutes}:${seconds.toString().padStart(2, '0')}`;
+}
+
 function IconPillOption({
   label,
   Icon,
@@ -204,13 +252,21 @@ function IconPillOption({
 }
 
 export function WebcamPanel() {
-  const { project, updateWebcamOverlay } = useProjectStore();
+  const {
+    project,
+    updateWebcamOverlay,
+    remoteCamera,
+    startRemoteCameraPairing,
+    cancelRemoteCameraPairing,
+  } = useProjectStore();
 
   const [ratioWidthInput, setRatioWidthInput] = useState('3');
   const [ratioHeightInput, setRatioHeightInput] = useState('4');
   const [sizePercentInput, setSizePercentInput] = useState('34');
   const [showCustomSettings, setShowCustomSettings] = useState(false);
   const [validationMessage, setValidationMessage] = useState<string | null>(null);
+  const [pairingOpen, setPairingOpen] = useState(false);
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
 
   if (!project) {
     return null;
@@ -253,6 +309,17 @@ export function WebcamPanel() {
   useEffect(() => {
     setSizePercentInput((currentHeightRatio * 100).toFixed(1));
   }, [currentHeightRatio]);
+
+  useEffect(() => {
+    if (remoteCamera.status === 'pairing' || remoteCamera.status === 'connecting') {
+      setPairingOpen(true);
+      return;
+    }
+
+    if (remoteCamera.status === 'idle' || remoteCamera.status === 'connected') {
+      setPairingOpen(false);
+    }
+  }, [remoteCamera.status]);
 
   const handleWebcamToggle = (checked: boolean) => {
     if (!canEditWebcam) {
@@ -345,8 +412,178 @@ export function WebcamPanel() {
     });
   };
 
+  const isPairing = remoteCamera.status === 'pairing' || remoteCamera.status === 'connecting';
+  const isConnected = remoteCamera.status === 'connected';
+  const remoteTone = resolveRemoteCameraTone(remoteCamera);
+  const remoteStatusLabel = resolveRemoteCameraStatusLabel(remoteCamera);
+  const remoteExpiryLabel = formatExpiryLabel(remoteCamera.expiresAt);
+
+  const handleStartPairing = async () => {
+    await startRemoteCameraPairing();
+    setPairingOpen(true);
+  };
+
+  const handleCancelPairing = () => {
+    cancelRemoteCameraPairing();
+    setPairingOpen(false);
+  };
+
+  const handlePairingOpenChange = (open: boolean) => {
+    setPairingOpen(open);
+    if (!open && isPairing) {
+      cancelRemoteCameraPairing();
+    }
+  };
+
+  const handleCopyPairingUrl = async () => {
+    if (!remoteCamera.pairingUrl) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(remoteCamera.pairingUrl);
+      setCopyState('copied');
+      window.setTimeout(() => setCopyState('idle'), 2000);
+    } catch {
+      setCopyState('error');
+      window.setTimeout(() => setCopyState('idle'), 2000);
+    }
+  };
+
+  const copyLabel =
+    copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Copy failed' : 'Copy link';
+
+  const remoteToneClasses =
+    remoteTone === 'active'
+      ? 'text-emerald-500 bg-emerald-500/10'
+      : remoteTone === 'error'
+        ? 'text-destructive bg-destructive/10'
+        : 'text-muted-foreground bg-muted/60';
+
   return (
     <div className="space-y-4">
+      <div className="rounded-xl border border-border/70 bg-background px-3 py-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-primary/15 text-primary">
+              <Smartphone className="h-4 w-4" />
+            </span>
+            <div>
+              <label className="text-sm font-medium">Phone as Webcam</label>
+              <p className="text-xs text-muted-foreground">
+                Use your phone camera as a webcam overlay.
+              </p>
+            </div>
+          </div>
+
+          <span
+            className={`inline-flex items-center rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${remoteToneClasses}`}
+          >
+            {remoteStatusLabel}
+          </span>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Button size="sm" onClick={handleStartPairing} disabled={isPairing || isConnected}>
+            {isConnected ? 'Connected' : 'Use phone'}
+          </Button>
+
+          {isPairing && (
+            <Button size="sm" variant="outline" onClick={handleCancelPairing}>
+              Cancel
+            </Button>
+          )}
+
+          {isConnected && (
+            <Button size="sm" variant="outline" onClick={handleCancelPairing}>
+              Disconnect
+            </Button>
+          )}
+        </div>
+
+        {remoteCamera.error && (
+          <p className="mt-2 text-xs text-destructive">{remoteCamera.error}</p>
+        )}
+      </div>
+
+      <Dialog.Root open={pairingOpen} onOpenChange={handlePairingOpenChange}>
+        <Dialog.Portal>
+          <Dialog.Backdrop className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-starting-style:opacity-0 data-ending-style:opacity-0 transition-opacity duration-200" />
+          <Dialog.Popup className="fixed left-1/2 top-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-card p-6 shadow-xl data-starting-style:opacity-0 data-starting-style:scale-95 data-ending-style:opacity-0 data-ending-style:scale-95 transition-all duration-200">
+            <div className="mb-4 flex items-center justify-between">
+              <Dialog.Title className="text-lg font-semibold">Connect phone camera</Dialog.Title>
+              <Dialog.Close className="text-muted-foreground transition-colors hover:text-foreground">
+                <X className="h-5 w-5" />
+              </Dialog.Close>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-[200px_1fr]">
+              <div className="flex flex-col items-center gap-3">
+                <div className="flex h-44 w-44 items-center justify-center rounded-lg border border-dashed border-border bg-muted/40 text-muted-foreground">
+                  {remoteCamera.qrDataUrl ? (
+                    <img
+                      src={remoteCamera.qrDataUrl}
+                      alt="Pairing QR code"
+                      className="h-40 w-40 rounded-md"
+                    />
+                  ) : (
+                    <div className="flex flex-col items-center gap-2 text-xs">
+                      <QrCode className="h-5 w-5" />
+                      QR code
+                    </div>
+                  )}
+                </div>
+                <span className="text-xs text-muted-foreground">Scan with your phone</span>
+              </div>
+
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Pairing link</Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      readOnly
+                      value={remoteCamera.pairingUrl ?? 'Generating pairing link...'}
+                      className="h-9 text-xs"
+                    />
+                    <Button size="sm" variant="outline" onClick={handleCopyPairingUrl}>
+                      <Copy className="h-3.5 w-3.5" />
+                      {copyLabel}
+                    </Button>
+                  </div>
+                </div>
+
+                <p className="text-xs text-muted-foreground">
+                  Open the link on your phone, allow camera access, and keep this window open.
+                </p>
+
+                <div className="flex items-center justify-between rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-xs">
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    {isPairing ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Camera className="h-3.5 w-3.5" />
+                    )}
+                    <span>{remoteStatusLabel}</span>
+                  </div>
+                  {remoteExpiryLabel && (
+                    <span className="text-muted-foreground">{remoteExpiryLabel}</span>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" onClick={handleStartPairing} disabled={isPairing}>
+                    Regenerate link
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={handleCancelPairing}>
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </Dialog.Popup>
+        </Dialog.Portal>
+      </Dialog.Root>
+
       <div className="rounded-xl border border-border/70 bg-background px-3 py-2.5">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">

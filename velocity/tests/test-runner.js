@@ -1,12 +1,12 @@
 // test-runner.js
-// Interactive CLI to record from selected source for 5 seconds
+// Interactive CLI to record from selected source
 
 const velocity = require('../index.js')
 const fs = require('fs')
 const path = require('path')
 const readline = require('readline')
 
-const RECORD_DURATION = 5000 // 5 seconds
+const RECORD_DURATION = 1000 * 60 * 5 // 5 minutes
 const BITRATE = 50000000
 const CURSOR_SAMPLE_INTERVAL_MS = 16
 
@@ -24,15 +24,25 @@ function question(prompt) {
 async function listSources() {
   const sources = []
 
-  // Get monitors
+  // 1. Explicit option for Entire Screen using V2 (Supports Webcam & FPS limits)
+  if (typeof velocity.startMonitorRecordingV2 === 'function') {
+    sources.push({
+      index: sources.length,
+      type: 'monitor_v2',
+      name: 'Entire Screen (Monitor V2 API - Supports Webcam)',
+      data: { description: 'Full screen recording using V2 API options' },
+    })
+  }
+
+  // 2. Get monitors (Legacy/Fallback)
   if (typeof velocity.listAvailableMonitors === 'function') {
     try {
       const monitors = velocity.listAvailableMonitors()
       monitors.forEach((m, i) => {
         sources.push({
-          index: i,
+          index: sources.length,
           type: 'monitor',
-          name: `Monitor ${i + 1}`,
+          name: `Monitor ${i + 1} (Legacy)`,
           data: m,
         })
       })
@@ -41,7 +51,7 @@ async function listSources() {
     }
   }
 
-  // Get windows
+  // 3. Get windows
   if (typeof velocity.listAvailableWindows === 'function') {
     try {
       const windows = velocity.listAvailableWindows()
@@ -61,7 +71,7 @@ async function listSources() {
   return sources
 }
 
-async function recordSource(source, duration) {
+async function recordSource(source, duration, enableWebcam = false, webcamDeviceId = undefined) {
   const timestamp = Date.now()
   const recordingBaseName = `recording_${timestamp}`
   const outputPath = `tests/${recordingBaseName}.mp4`
@@ -73,10 +83,24 @@ async function recordSource(source, duration) {
   }
 
   console.log(`\n🎥 Recording "${source.name}" for ${duration / 1000} seconds...`)
+  if (enableWebcam) {
+    console.log(`📷 Webcam overlay enabled!`)
+  }
 
   try {
     let stopper
-    if (source.type === 'monitor') {
+
+    // Switch between recording methods based on the selected type
+    if (source.type === 'monitor_v2') {
+      stopper = velocity.startMonitorRecordingV2({
+        outputPath: outputPath,
+        bitrate: BITRATE,
+        includeSystemAudio: true,
+        targetFps: 60,
+        enableWebcam: enableWebcam,
+        webcamDeviceId: webcamDeviceId,
+      })
+    } else if (source.type === 'monitor') {
       stopper = velocity.startMonitorRecording(outputPath, BITRATE)
     } else if (source.type === 'window') {
       stopper = velocity.startWindowRecording(source.data.title, outputPath, BITRATE)
@@ -85,21 +109,30 @@ async function recordSource(source, duration) {
     const cursorCaptureAvailable = typeof velocity.captureCursorSamplesJson === 'function'
 
     if (cursorCaptureAvailable) {
-      console.log(`🖱️ Capturing cursor snapshots for ${duration / 1000}s (interval=${CURSOR_SAMPLE_INTERVAL_MS}ms)...`)
+      console.log(`🖱️ Capturing cursor snapshots in chunks for ${duration / 1000}s...`)
 
       const captureStartedAt = Date.now()
-      const samplesJson = velocity.captureCursorSamplesJson(duration, CURSOR_SAMPLE_INTERVAL_MS)
-      const captureEndedAt = Date.now()
+      const CHUNK_DURATION = 10000 // 10 seconds per chunk
+      let allSamples = []
 
-      let parsedSamples
-      try {
-        parsedSamples = JSON.parse(samplesJson)
-      } catch {
-        parsedSamples = {
-          parseError: true,
-          raw: samplesJson,
+      // Loop until the total requested duration has passed
+      while (Date.now() - captureStartedAt < duration) {
+        const chunkJson = velocity.captureCursorSamplesJson(CHUNK_DURATION, CURSOR_SAMPLE_INTERVAL_MS)
+        try {
+          const parsed = JSON.parse(chunkJson)
+
+          // If it's an array, merge the items. If it's an object, push the whole object.
+          if (Array.isArray(parsed)) {
+            allSamples = allSamples.concat(parsed)
+          } else {
+            allSamples.push(parsed)
+          }
+        } catch (err) {
+          console.log('⚠️ Failed to parse a cursor chunk:', err.message)
         }
       }
+
+      const captureEndedAt = Date.now()
 
       const cursorPayload = {
         recording: {
@@ -112,8 +145,9 @@ async function recordSource(source, duration) {
           endedAtEpochMs: captureEndedAt,
           requestedDurationMs: duration,
           actualCaptureDurationMs: captureEndedAt - captureStartedAt,
+          webcamEnabled: enableWebcam,
         },
-        cursorCapture: parsedSamples,
+        cursorCapture: allSamples,
       }
 
       fs.writeFileSync(cursorOutputPath, JSON.stringify(cursorPayload, null, 2), 'utf-8')
@@ -124,7 +158,11 @@ async function recordSource(source, duration) {
     }
 
     console.log('🛑 Stopping recording...')
-    stopper.stop()
+    if (stopper && typeof stopper.stop === 'function') {
+      stopper.stop()
+    } else {
+      console.log('⚠️ Warning: No valid stopper returned from native module.')
+    }
 
     // Wait a bit for file to finalize
     await new Promise((resolve) => setTimeout(resolve, 500))
@@ -173,7 +211,35 @@ async function main() {
     }
 
     const selected = sources[selectedIndex]
-    await recordSource(selected, RECORD_DURATION)
+
+    // Check for webcams if the user chose the Monitor V2 option
+    let enableWebcam = false
+    let webcamDeviceId = undefined
+
+    if (selected.type === 'monitor_v2' && typeof velocity.listWebcamDevices === 'function') {
+      try {
+        const webcams = velocity.listWebcamDevices()
+        if (webcams && webcams.length > 0) {
+          console.log('\nAvailable Webcams:')
+          console.log('  0. None (Do not record webcam)')
+          webcams.forEach((cam, i) => {
+            console.log(`  ${i + 1}. ${cam.label || 'Unknown Device'} ${cam.isDefault ? '(Default)' : ''}`)
+          })
+
+          const camAnswer = await question('\nSelect webcam number (0 to skip): ')
+          const camIndex = parseInt(camAnswer) - 1
+
+          if (camIndex >= 0 && camIndex < webcams.length) {
+            enableWebcam = true
+            webcamDeviceId = webcams[camIndex].id
+          }
+        }
+      } catch (e) {
+        console.log('⚠️ Failed to list webcams, continuing without it:', e.message)
+      }
+    }
+
+    await recordSource(selected, RECORD_DURATION, enableWebcam, webcamDeviceId)
   } catch (error) {
     console.error('❌ Error:', error.message)
   } finally {

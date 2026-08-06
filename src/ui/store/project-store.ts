@@ -9,6 +9,7 @@ import type {
   CursorRegionOverride,
   Project,
   RecordedMouseEvent,
+  RemoteCameraState,
   WebcamOverlayConfig,
   ZoomConfig,
 } from '../types';
@@ -20,6 +21,7 @@ interface ProjectState {
   isLoading: boolean;
   error: string | null;
   mouseEvents: RecordedMouseEvent[];
+  remoteCamera: RemoteCameraState;
 
   // Actions
   loadProject: (recordingId: string) => Promise<boolean>;
@@ -38,9 +40,42 @@ interface ProjectState {
   updateWebcamOverlay: (config: Partial<WebcamOverlayConfig>) => Promise<void>;
   updateCropConfig: (config: CropConfig | null) => Promise<void>;
   updateDuration: (durationMs: number) => Promise<void>;
+  startRemoteCameraPairing: () => Promise<void>;
+  cancelRemoteCameraPairing: () => void;
+  setRemoteCameraState: (state: RemoteCameraState) => void;
 
   // Setters for syncing from other stores (if needed) or internal updates
   setProject: (project: Project | null) => void;
+}
+
+const DEFAULT_REMOTE_CAMERA_STATE: RemoteCameraState = {
+  status: 'idle',
+};
+
+function resolvePairingOrigin(): string {
+  if (typeof window === 'undefined') {
+    return 'http://localhost:5123';
+  }
+
+  const origin = window.location.origin;
+  if (!origin || origin === 'null' || origin.startsWith('file:')) {
+    return 'http://localhost:5123';
+  }
+
+  return origin;
+}
+
+function createSessionToken(): string {
+  return Math.random().toString(36).slice(2, 10);
+}
+
+function createSessionId(): string {
+  return Math.random().toString(36).slice(2, 10);
+}
+
+function buildPairingUrl(origin: string, sessionId: string, token: string): string {
+  const normalizedOrigin = origin.replace(/\/$/, '');
+  return `${normalizedOrigin}/remote-camera/pair?session=${sessionId}&token=${token}`;
 }
 
 // Debounced IPC call for background color updates
@@ -57,6 +92,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   isLoading: false,
   error: null,
   mouseEvents: [],
+  remoteCamera: DEFAULT_REMOTE_CAMERA_STATE,
 
   loadProject: async (recordingId: string) => {
     set({ isLoading: true, error: null });
@@ -120,6 +156,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       mouseEvents: [],
       error: null,
       isLoading: false,
+      remoteCamera: DEFAULT_REMOTE_CAMERA_STATE,
     });
     window.electron.editor.closeProject();
 
@@ -386,6 +423,30 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     } catch (err) {
       console.error('[ProjectStore] updateDuration error:', err);
     }
+  },
+
+  startRemoteCameraPairing: async () => {
+    const origin = resolvePairingOrigin();
+    const sessionId = createSessionId();
+    const token = createSessionToken();
+    const pairingUrl = buildPairingUrl(origin, sessionId, token);
+    const expiresAt = Date.now() + 2 * 60 * 1000;
+
+    set({
+      remoteCamera: {
+        status: 'pairing',
+        pairingUrl,
+        expiresAt,
+      },
+    });
+  },
+
+  cancelRemoteCameraPairing: () => {
+    set({ remoteCamera: DEFAULT_REMOTE_CAMERA_STATE });
+  },
+
+  setRemoteCameraState: (state: RemoteCameraState) => {
+    set({ remoteCamera: state });
   },
 
   setProject: (project) => set({ project }),

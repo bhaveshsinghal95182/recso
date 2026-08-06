@@ -113,33 +113,25 @@ fn create_camera(index: CameraIndex, target_fps: u32) -> Result<Camera, String> 
 }
 
 fn rgb_to_bgra_bottom_up(rgb: &[u8], width: usize, height: usize) -> Vec<u8> {
-  let mut output = vec![0u8; width.saturating_mul(height).saturating_mul(4)];
+    let mut output = vec![0u8; width * height * 4];
+    let row_bytes_rgb = width * 3;
+    let row_bytes_bgra = width * 4;
 
-  for y in 0..height {
-    let src_row_start = y.saturating_mul(width).saturating_mul(3);
-    let dst_y = height.saturating_sub(1).saturating_sub(y);
-    let dst_row_start = dst_y.saturating_mul(width).saturating_mul(4);
+    // Iterate over rows in reverse to flip the image bottom-up
+    for (y, rgb_row) in rgb.chunks_exact(row_bytes_rgb).enumerate() {
+        let dst_y = height - 1 - y;
+        let dst_row = &mut output[dst_y * row_bytes_bgra .. (dst_y + 1) * row_bytes_bgra];
 
-    for x in 0..width {
-      let src = src_row_start + x.saturating_mul(3);
-      let dst = dst_row_start + x.saturating_mul(4);
-
-      if src + 2 >= rgb.len() || dst + 3 >= output.len() {
-        continue;
-      }
-
-      let r = rgb[src];
-      let g = rgb[src + 1];
-      let b = rgb[src + 2];
-
-      output[dst] = b;
-      output[dst + 1] = g;
-      output[dst + 2] = r;
-      output[dst + 3] = 255;
+        // Zip the chunks together to eliminate bounds checking entirely
+        for (src_pixel, dst_pixel) in rgb_row.chunks_exact(3).zip(dst_row.chunks_exact_mut(4)) {
+            dst_pixel[0] = src_pixel[2]; // B
+            dst_pixel[1] = src_pixel[1]; // G
+            dst_pixel[2] = src_pixel[0]; // R
+            dst_pixel[3] = 255;          // A
+        }
     }
-  }
 
-  output
+    output
 }
 
 fn capture_next_bgra_frame(

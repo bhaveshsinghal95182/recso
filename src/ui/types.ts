@@ -49,6 +49,17 @@ export interface RecorderState {
   bytesWritten: number;
 }
 
+export type RemoteCameraStatus = 'idle' | 'pairing' | 'connecting' | 'connected' | 'error';
+
+export interface RemoteCameraState {
+  status: RemoteCameraStatus;
+  pairingUrl?: string;
+  qrDataUrl?: string;
+  expiresAt?: number;
+  label?: string;
+  error?: string;
+}
+
 export interface UseScreenRecorderOptions {
   /** Chunk interval in ms (default: 1000) */
   timeslice?: number;
