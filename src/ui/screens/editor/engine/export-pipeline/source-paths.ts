@@ -21,7 +21,10 @@ export function toFileUrl(rawPath: string | undefined): string {
   return normalized;
 }
 
-function inferWebcamPathFromRawVideo(rawVideoPath: string | undefined): string | undefined {
+function inferSidecarPathFromRawVideo(
+  rawVideoPath: string | undefined,
+  suffix: string,
+): string | undefined {
   if (!rawVideoPath) {
     return undefined;
   }
@@ -31,7 +34,24 @@ function inferWebcamPathFromRawVideo(rawVideoPath: string | undefined): string |
     return undefined;
   }
 
-  return `${rawVideoPath.slice(0, lastDot)}_camera${rawVideoPath.slice(lastDot)}`;
+  return `${rawVideoPath.slice(0, lastDot)}${suffix}${rawVideoPath.slice(lastDot)}`;
+}
+
+function inferWebcamPathFromRawVideo(rawVideoPath: string | undefined): string | undefined {
+  return inferSidecarPathFromRawVideo(rawVideoPath, '_camera');
+}
+
+/**
+ * Audio-only sidecars the recorder keeps next to the raw video whenever it could not embed those
+ * streams into the recording itself. Missing files are handled by the caller.
+ */
+export function resolveProjectAudioSidecarPaths(
+  project: Pick<Project, 'rawVideoPath'> | null | undefined,
+): { desktopAudioPath?: string; micPath?: string } {
+  return {
+    desktopAudioPath: inferSidecarPathFromRawVideo(project?.rawVideoPath, '_desktop-audio'),
+    micPath: inferSidecarPathFromRawVideo(project?.rawVideoPath, '_mic'),
+  };
 }
 
 export function resolveProjectWebcamSourcePath(

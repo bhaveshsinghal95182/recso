@@ -515,6 +515,14 @@ function cleanupAuxTempFiles(auxStreams: Record<string, AuxStreamState>): void {
   });
 }
 
+/**
+ * Reports whether a file carries *usable* audio.
+ *
+ * The presence of an audio track is not enough: windows-capture (the crate behind velocity) always
+ * registers an audio stream on its encoder, even when audio capture is disabled, so every
+ * video-only native recording contains an AAC track with zero samples. Treating that stub as real
+ * audio would make the caller throw away the desktop-audio sidecar and ship a silent recording.
+ */
 async function hasPrimaryAudioTrack(filePath: string): Promise<boolean> {
   const { ALL_FORMATS, FilePathSource, Input } = await import('mediabunny');
 
@@ -525,7 +533,11 @@ async function hasPrimaryAudioTrack(filePath: string): Promise<boolean> {
 
   try {
     const audioTrack = await input.getPrimaryAudioTrack();
-    return Boolean(audioTrack);
+    if (!audioTrack) {
+      return false;
+    }
+
+    return (await audioTrack.computeDuration()) > 0;
   } catch {
     return false;
   } finally {
@@ -537,7 +549,6 @@ async function muxDesktopAudioIntoVideo(
   videoPath: string,
   audioPath: string,
   fileExtension: 'mp4' | 'mkv',
-  videoWallClockStartMs: number,
 ): Promise<boolean> {
   const ext = `.${fileExtension}`;
   const videoDir = path.dirname(videoPath);
@@ -605,36 +616,32 @@ async function muxDesktopAudioIntoVideo(
     const videoStartTimestamp = await videoTrack.getFirstTimestamp();
     const audioStartTimestamp = await audioTrack.getFirstTimestamp();
 
-    // Base offset calculation from file timestamps
+    // Base offset calculation from file timestamps. Mediabunny reports timestamps in seconds.
     let audioTimestampOffset = videoStartTimestamp - audioStartTimestamp;
 
-    // Detect and compensate for audio initialization delay
-    // When audio MediaStream starts with latency, it captures fewer samples than video duration
+    // Detect and compensate for audio initialization delay.
+    // The audio stream opens after native video capture is already running, but both are stopped
+    // together — so the device warm-up shows up as audio being shorter than the video, and the
+    // audio has to be pushed later by that difference to line up with the picture.
     const videoDuration = await videoInput.computeDuration();
     const audioDuration = await audioInput.computeDuration();
 
     if (Number.isFinite(videoDuration) && Number.isFinite(audioDuration) && videoDuration > 0) {
-      const durationDiffMs = (videoDuration - audioDuration) * 1000;
+      const audioInitDelaySeconds = videoDuration - audioDuration;
 
-      // If audio is significantly shorter than video, likely initialization delay
-      // Typical audio device init: 100-1000ms
-      if (durationDiffMs > 400 && durationDiffMs <= 1500) {
-        // Use the duration difference as the estimated initialization delay
-        // with a safety margin to avoid over-correction
-        const audioInitDelayMs = Math.min(durationDiffMs * 0.9, 1200);
-        // Convert delay in ms to timestamp offset
-        // Assuming 48kHz audio (typical for desktop audio)
-        const samplesPerMs = 48;
-        const audioInitDelayTs = audioInitDelayMs * samplesPerMs;
-        audioTimestampOffset -= audioInitDelayTs;
+      // Typical audio device init is well under a second; anything larger is not a warm-up delay
+      // (e.g. a truncated sidecar) and is left uncorrected.
+      if (audioInitDelaySeconds > 0.05 && audioInitDelaySeconds <= 3) {
+        audioTimestampOffset += audioInitDelaySeconds;
 
         console.log(
           '[RecorderService] Audio sync fix: detected',
-          audioInitDelayMs.toFixed(0),
+          (audioInitDelaySeconds * 1000).toFixed(0),
           'ms init delay, adjusting offset from',
-          (videoStartTimestamp - audioStartTimestamp).toFixed(0),
-          'to',
-          audioTimestampOffset.toFixed(0),
+          (videoStartTimestamp - audioStartTimestamp).toFixed(3),
+          's to',
+          audioTimestampOffset.toFixed(3),
+          's',
         );
       }
     }
@@ -678,22 +685,20 @@ async function muxDesktopAudioIntoVideo(
       }
     }
 
-    if (!wroteVideo) {
-      console.warn('[RecorderService] Desktop audio mux aborted: no video packets available.');
+    if (!wroteVideo || !wroteAudio) {
+      console.warn(
+        `[RecorderService] Desktop audio mux aborted: no usable ${wroteVideo ? 'desktop audio' : 'video'} packets.`,
+      );
       await output.cancel();
       output = null;
-      return false;
-    }
-
-    if (!wroteAudio) {
-      console.warn('[RecorderService] Desktop audio mux aborted: no usable desktop audio packets.');
-      await output.cancel();
-      output = null;
+      if (fs.existsSync(muxedOutputPath)) {
+        fs.unlinkSync(muxedOutputPath);
+      }
       return false;
     }
 
     console.log(
-      `[RecorderService] Desktop audio mux packet summary: video=${videoPacketCount}, audio=${audioPacketCount}, baseOffset=${(videoStartTimestamp - audioStartTimestamp).toFixed(0)}, appliedOffset=${audioTimestampOffset.toFixed(0)}`,
+      `[RecorderService] Desktop audio mux packet summary: video=${videoPacketCount}, audio=${audioPacketCount}, baseOffset=${(videoStartTimestamp - audioStartTimestamp).toFixed(3)}s, appliedOffset=${audioTimestampOffset.toFixed(3)}s`,
     );
 
     await output.finalize();
@@ -1135,7 +1140,6 @@ export async function stopRecording(recordingId: string): Promise<StopRecordingR
           finalScreenPath,
           desktopAudioStream.tempPath,
           currentRecording.fileExtension,
-          currentRecording.wallClockStartMs,
         );
 
         if (muxed) {

@@ -1,18 +1,23 @@
 import { getCutAdjustedDurationMs } from '../functions';
 import { resolveCroppedSourceDimensions } from '../source-crop';
+import type { ExtraAudioSource } from './audio-mix';
+import { appendMixedAudioTrack } from './audio-mix';
 import { buildStaticBackgroundLayer } from './background-layer';
 import { buildExportCompositionConfig } from './composition-config';
 import { runCanvasConversion } from './conversion';
 import { resolveLayout, resolveWebcamLayout } from './layout-resolver';
 import { createProgressSnapshot } from './progress';
 import { resolveOutputDimensions } from './settings';
-import { resolveProjectWebcamSourcePath, toFileUrl } from './source-paths';
+import {
+  resolveProjectAudioSidecarPaths,
+  resolveProjectWebcamSourcePath,
+  toFileUrl,
+} from './source-paths';
 import type {
   EngineCanvasExportOptions,
   EngineCanvasExportResult,
   PreparedWebcamSource,
 } from './types';
-import { appendWebcamAudioTrack } from './webcam-audio';
 import { prepareWebcamSource } from './webcam-source';
 
 export async function runEngineCanvasExport({
@@ -144,19 +149,38 @@ export async function runEngineCanvasExport({
     // Report composition complete, export starting
     onProgress?.(createProgressSnapshot(1, totalFrames, startedAtMs, 'composition'));
 
-    const outputBuffer =
-      project.webcamOverlay?.enabled && webcamSourceUrl
-        ? await appendWebcamAudioTrack(
-            encodedBuffer,
-            webcamSourceUrl,
-            compositionConfig.cuts,
-            compositionDurationMs / 1000,
-            () => cancelRequestedRef.current,
-            (fraction) => {
-              onProgress?.(createProgressSnapshot(fraction, totalFrames, startedAtMs, 'export'));
-            },
-          )
-        : encodedBuffer;
+    // Microphone and system audio live in sidecar files whenever the recorder could not embed
+    // them into the raw recording, so they have to be mixed in here — independently of whether the
+    // webcam is actually drawn on screen.
+    const audioSidecarPaths = resolveProjectAudioSidecarPaths(project);
+    const extraAudioSources: ExtraAudioSource[] = [
+      { url: toFileUrl(audioSidecarPaths.desktopAudioPath), label: 'system audio' },
+      { url: toFileUrl(audioSidecarPaths.micPath), label: 'microphone' },
+    ]
+      .filter((source) => Boolean(source.url))
+      .map((source) => ({ ...source, compensateStartDelay: true }));
+
+    if (webcamSourceUrl) {
+      // The camera sidecar carries the microphone track; it stays locked to the camera footage,
+      // which is composited without start-delay compensation.
+      extraAudioSources.push({
+        url: webcamSourceUrl,
+        label: 'camera microphone',
+        compensateStartDelay: false,
+      });
+    }
+
+    const outputBuffer = await appendMixedAudioTrack(
+      encodedBuffer,
+      extraAudioSources,
+      compositionConfig.cuts,
+      sourceDurationMs / 1000,
+      compositionDurationMs / 1000,
+      () => cancelRequestedRef.current,
+      (fraction) => {
+        onProgress?.(createProgressSnapshot(fraction, totalFrames, startedAtMs, 'export'));
+      },
+    );
 
     onProgress?.(createProgressSnapshot(1, totalFrames, startedAtMs, 'export'));
 
