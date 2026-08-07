@@ -254,12 +254,19 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
                 data.byteOffset === 0 && data.byteLength === data.buffer.byteLength
                   ? (data.buffer as ArrayBuffer)
                   : data.slice().buffer;
-              await window.electron.recorder.writeChunk(
+              const written = await window.electron.recorder.writeChunk(
                 recordingId!,
                 streamId,
                 chunk.position,
                 exactChunk,
               );
+
+              // A rejected write means the sidecar on disk is already incomplete. Failing the
+              // stream surfaces that instead of silently finishing a truncated file; the main
+              // process has logged the underlying reason.
+              if (!written) {
+                throw new Error(`Failed to write ${streamId} chunk at offset ${chunk.position}`);
+              }
             },
           });
 
@@ -269,7 +276,12 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
           });
         };
 
-        const outputFormat = new Mp4OutputFormat({ fastStart: 'in-memory' });
+        // `fastStart: 'in-memory'` keeps every media chunk in renderer memory until finalize, so
+        // memory grows with recording length and the whole file is pushed across IPC in one burst
+        // when the user hits stop — which is how long recordings ended up truncated or lost.
+        // Writing metadata at the end streams the data out as it is produced instead; these
+        // sidecars are only ever read back from local disk, so moov placement does not matter.
+        const outputFormat = new Mp4OutputFormat({ fastStart: false });
 
         const resolveDesktopAudioSourceId = (): string | null => {
           if (sourceId.startsWith('screen:')) {

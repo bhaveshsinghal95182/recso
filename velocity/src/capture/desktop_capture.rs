@@ -118,6 +118,13 @@ impl Capture {
       }
     }
 
+    // NOTE: `disabled(true)` does not keep the audio track out of the file. windows-capture 2.0.0
+    // always calls `SetAudio` and builds its `MediaStreamSource` from both a video and an audio
+    // stream descriptor; the disabled flag is only consulted in the sample-requested handler, which
+    // answers audio requests with `SetSample(None)`. Every video-only recording therefore ends up
+    // with an AAC track carrying zero samples. Consumers must treat the mere presence of an audio
+    // track as meaningless and check that it actually has samples — see `hasPrimaryAudioTrack()` in
+    // src/electron/services/recorder.service.ts.
     let audio_settings = if self.native_audio_active {
       AudioSettingsBuilder::default()
         .sample_rate(AUDIO_SAMPLE_RATE as u32)
