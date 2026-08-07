@@ -515,6 +515,78 @@ function cleanupAuxTempFiles(auxStreams: Record<string, AuxStreamState>): void {
   });
 }
 
+const NATIVE_FINALIZE_POLL_MS = 250;
+const NATIVE_FINALIZE_STABLE_SAMPLES = 2;
+const NATIVE_FINALIZE_TIMEOUT_MS = 120_000;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function hasReadableVideoTrack(filePath: string): Promise<boolean> {
+  const { ALL_FORMATS, FilePathSource, Input } = await import('mediabunny');
+
+  const input = new Input({
+    source: new FilePathSource(filePath),
+    formats: ALL_FORMATS,
+  });
+
+  try {
+    const videoTrack = await input.getPrimaryVideoTrack();
+    if (!videoTrack) {
+      return false;
+    }
+
+    return (await videoTrack.computeDuration()) > 0;
+  } catch {
+    return false;
+  } finally {
+    input.dispose();
+  }
+}
+
+/**
+ * Waits until the native capture file is actually finished being written.
+ *
+ * `Stopper.stop()` gives up waiting on the capture thread after a few seconds, and the encoder's
+ * finalization work scales with the length of the recording — so on longer recordings it can still
+ * be writing when stop() returns. Moving the file at that point produces a truncated, unplayable
+ * recording, so the file has to prove it is complete: a size that stopped changing *and* a video
+ * track that can be read back, which is only true once the trailing metadata has been written.
+ */
+async function waitForNativeRecordingFile(filePath: string): Promise<boolean> {
+  const startedAtMs = Date.now();
+  let lastSize = -1;
+  let stableSamples = 0;
+
+  while (Date.now() - startedAtMs < NATIVE_FINALIZE_TIMEOUT_MS) {
+    let size = -1;
+    try {
+      size = fs.statSync(filePath).size;
+    } catch {
+      size = -1;
+    }
+
+    if (size > 0 && size === lastSize) {
+      stableSamples += 1;
+
+      if (
+        stableSamples >= NATIVE_FINALIZE_STABLE_SAMPLES &&
+        (await hasReadableVideoTrack(filePath))
+      ) {
+        return true;
+      }
+    } else {
+      stableSamples = 0;
+    }
+
+    lastSize = size;
+    await delay(NATIVE_FINALIZE_POLL_MS);
+  }
+
+  return false;
+}
+
 /**
  * Reports whether a file carries *usable* audio.
  *
@@ -1046,10 +1118,30 @@ export async function stopRecording(recordingId: string): Promise<StopRecordingR
   try {
     currentRecording.stopper.stop();
 
-    // Allow native capture loop to flush and close output file.
-    await new Promise((resolve) => setTimeout(resolve, 350));
+    // Wait for the native capture loop to flush and close its output file before touching it.
+    const finalizeStartedAtMs = Date.now();
+    const nativeFileReady = await waitForNativeRecordingFile(currentRecording.tempPath);
+    console.log(
+      `[RecorderService] Native capture finalize took ${Date.now() - finalizeStartedAtMs}ms (ready=${nativeFileReady})`,
+    );
 
     closeAuxStreams(currentRecording.auxStreams);
+
+    if (!nativeFileReady) {
+      // Leaving the temp file and the incomplete database row in place lets the recovery flow
+      // offer this recording on the next launch instead of shipping a corrupt file as a success.
+      console.error(
+        '[RecorderService] Native capture file never finished writing:',
+        currentRecording.tempPath,
+      );
+      activeRecording = null;
+
+      return {
+        success: false,
+        error:
+          'The recording did not finish writing to disk. It has been kept for recovery — reopen the app to restore it.',
+      };
+    }
 
     if (!fs.existsSync(currentRecording.outputDir)) {
       fs.mkdirSync(currentRecording.outputDir, { recursive: true });
