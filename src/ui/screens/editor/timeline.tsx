@@ -367,7 +367,8 @@ export function Timeline() {
       setSelectedZoom(zoomId);
       setSelectedCursorRegion(null);
       void setZoomSource(source);
-      setActivePropertiesTab('zoom');
+      // Webcam regions are edited in the webcam panel, screen regions in the zoom panel.
+      setActivePropertiesTab(source === 'webcam' ? 'webcam' : 'zoom');
     },
     [
       setSelectedCut,

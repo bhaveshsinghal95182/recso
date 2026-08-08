@@ -1,17 +1,18 @@
-import { Check } from 'lucide-react';
+/**
+ * ZoomPanel — screen zoom regions only.
+ *
+ * Webcam zoom regions are edited in the webcam panel, so everything about the
+ * webcam lives in one place. This panel therefore reads `zoomRegionsBySource.screen`
+ * directly rather than the ambient `zoomRegions`, which follows the timeline's
+ * current source and would otherwise swap this panel's contents underneath it.
+ */
+
+import { Check, Crosshair, Sparkles, Wand2, ZoomIn } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { AutoZoomButton } from '@/components/auto-zoom-button';
-import Ai from '@/components/icons/ai-chip';
 import CopyIcon from '@/components/icons/copy-icon';
-import FocusIcon from '@/components/icons/focus-icon';
 import type { AnimatedIconHandle } from '@/components/icons/types';
-import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Switch } from '@/components/ui/switch';
 import {
   DEFAULT_ZOOM_LEVEL,
   GROUP_THRESHOLD_MS,
@@ -23,34 +24,22 @@ import { useProjectStore } from '@/store/project-store';
 import { useTimelineStore } from '@/store/timeline-store';
 import type { RecordedMouseEvent, ZoomRegion } from '@/types';
 
+import {
+  ActionCard,
+  PanelButton,
+  PanelEmpty,
+  PanelNote,
+  PanelSection,
+  PanelSlider,
+} from './panel-kit';
+
+const ZOOM_SOURCE = 'screen' as const;
+
 function clampUnit(value: number): number {
   if (!Number.isFinite(value)) {
     return 0;
   }
   return Math.max(0, Math.min(1, value));
-}
-
-function clampWebcamHeightRatio(value: number): number {
-  if (!Number.isFinite(value)) {
-    return 0.34;
-  }
-
-  return Math.max(0.08, Math.min(0.75, value));
-}
-
-function resolveEffectiveWebcamHeightRatio(
-  zoom: ZoomRegion | undefined,
-  baseHeightRatio: number,
-): number {
-  if (!zoom) {
-    return clampWebcamHeightRatio(baseHeightRatio);
-  }
-
-  if (typeof zoom.webcamHeightRatio === 'number' && Number.isFinite(zoom.webcamHeightRatio)) {
-    return clampWebcamHeightRatio(zoom.webcamHeightRatio);
-  }
-
-  return clampWebcamHeightRatio(baseHeightRatio * Math.max(0.1, zoom.zoomLevel));
 }
 
 function resolveNormalizedEventCoordinates(
@@ -74,8 +63,7 @@ function resolveNormalizedEventCoordinates(
 export function ZoomPanel() {
   const { project } = useProjectStore();
   const {
-    zoomSource,
-    zoomRegions,
+    zoomRegionsBySource,
     selectedZoomId,
     updateZoom,
     updateZoomRegions,
@@ -84,146 +72,63 @@ export function ZoomPanel() {
     setIsEditingFocalPoint,
   } = useTimelineStore();
 
-  const selectedZoom = zoomRegions.find((z) => z.id === selectedZoomId);
-  const baseWebcamHeightRatio = clampWebcamHeightRatio(project?.webcamOverlay?.heightRatio ?? 0.34);
-  const focusIconRef = useRef<AnimatedIconHandle>(null);
+  const zoomRegions = zoomRegionsBySource.screen;
+  const selectedZoom = zoomRegions.find((zoom) => zoom.id === selectedZoomId);
   const copyIconRef = useRef<AnimatedIconHandle>(null);
 
-  // Local state for debounced slider
-  const [localZoomLevel, setLocalZoomLevel] = useState(selectedZoom?.zoomLevel ?? 1.5);
-  const [localWebcamHeightRatio, setLocalWebcamHeightRatio] = useState(() =>
-    resolveEffectiveWebcamHeightRatio(selectedZoom, baseWebcamHeightRatio),
-  );
-  const [isWebcamFullScreen, setIsWebcamFullScreen] = useState(
-    selectedZoom?.webcamFullScreen === true,
+  const [localZoomLevel, setLocalZoomLevel] = useState(
+    selectedZoom?.zoomLevel ?? DEFAULT_ZOOM_LEVEL,
   );
   const [isGenerating, setIsGenerating] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const webcamDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Sync local state when selected zoom changes
   useEffect(() => {
     if (selectedZoom) {
       setLocalZoomLevel(selectedZoom.zoomLevel);
-      setLocalWebcamHeightRatio(
-        resolveEffectiveWebcamHeightRatio(selectedZoom, baseWebcamHeightRatio),
-      );
-      setIsWebcamFullScreen(selectedZoom.webcamFullScreen === true);
     }
-  }, [
-    selectedZoom?.id,
-    selectedZoom?.zoomLevel,
-    selectedZoom?.webcamHeightRatio,
-    selectedZoom?.webcamFullScreen,
-    baseWebcamHeightRatio,
-  ]);
+  }, [selectedZoom?.id, selectedZoom?.zoomLevel]);
 
-  // Debounced update handler
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
+    };
+  }, []);
+
   const handleZoomLevelChange = useCallback(
-    (value: string) => {
-      const level = parseFloat(value);
-      if (isNaN(level) || level < 1 || level > 5) return;
+    (level: number) => {
+      if (!Number.isFinite(level) || level < 1 || level > 5) return;
 
-      // Update local state immediately for responsive UI
       setLocalZoomLevel(level);
 
-      // Debounce the actual update
       if (debounceRef.current) {
         clearTimeout(debounceRef.current);
       }
 
       debounceRef.current = setTimeout(() => {
         if (selectedZoom) {
-          updateZoom({ ...selectedZoom, zoomLevel: level });
+          void updateZoom({ ...selectedZoom, zoomLevel: level }, ZOOM_SOURCE);
         }
       }, 150);
     },
     [selectedZoom, updateZoom],
   );
-
-  // Debounced webcam height ratio handler
-  const handleWebcamHeightRatioChange = useCallback(
-    (value: string) => {
-      if (isWebcamFullScreen) {
-        return;
-      }
-
-      const ratio = parseFloat(value);
-      if (isNaN(ratio) || ratio < 0.08 || ratio > 0.75) return;
-
-      setLocalWebcamHeightRatio(ratio);
-
-      if (webcamDebounceRef.current) {
-        clearTimeout(webcamDebounceRef.current);
-      }
-
-      webcamDebounceRef.current = setTimeout(() => {
-        if (selectedZoom) {
-          updateZoom({ ...selectedZoom, webcamHeightRatio: ratio });
-        }
-      }, 150);
-    },
-    [isWebcamFullScreen, selectedZoom, updateZoom],
-  );
-
-  const handleWebcamFullScreenChange = useCallback(
-    (checked: boolean) => {
-      setIsWebcamFullScreen(checked);
-      if (selectedZoom) {
-        updateZoom({ ...selectedZoom, webcamFullScreen: checked });
-      }
-    },
-    [selectedZoom, updateZoom],
-  );
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current);
-      }
-      if (webcamDebounceRef.current) {
-        clearTimeout(webcamDebounceRef.current);
-      }
-    };
-  }, []);
 
   const handleApplyToAll = useCallback(() => {
     if (!selectedZoom || zoomRegions.length <= 1) return;
 
-    const shouldApplyWebcamSettings = zoomSource === 'webcam';
-    const webcamHeightRatioToApply = selectedZoom.webcamHeightRatio ?? localWebcamHeightRatio;
-    const webcamFullScreenToApply = selectedZoom.webcamFullScreen ?? isWebcamFullScreen;
-
-    // Build array of updated zoom regions
     const updatedZooms = zoomRegions
-      .filter((z) => z.id !== selectedZoom.id)
-      .map((z) => ({
-        ...z,
-        zoomLevel: selectedZoom.zoomLevel,
-        ...(shouldApplyWebcamSettings
-          ? {
-              webcamHeightRatio: webcamHeightRatioToApply,
-              webcamFullScreen: webcamFullScreenToApply,
-            }
-          : {}),
-      }));
+      .filter((zoom) => zoom.id !== selectedZoom.id)
+      .map((zoom) => ({ ...zoom, zoomLevel: selectedZoom.zoomLevel }));
 
-    // Use bulk update for efficiency
-    updateZoomRegions(updatedZooms);
+    void updateZoomRegions(updatedZooms, ZOOM_SOURCE);
 
     setIsCopied(true);
     setTimeout(() => setIsCopied(false), 2000);
-  }, [
-    selectedZoom,
-    zoomRegions,
-    updateZoomRegions,
-    zoomSource,
-    localWebcamHeightRatio,
-    isWebcamFullScreen,
-  ]);
+  }, [selectedZoom, zoomRegions, updateZoomRegions]);
 
   /**
    * Apply smart panning to one or many zoom regions.
@@ -236,19 +141,17 @@ export function ZoomPanel() {
     setIsPanning(true);
 
     try {
-      // 1. Fetch ALL mouse events (moves + clicks)
       const allEvents = await window.electron.editor.getMouseEvents();
 
-      // Get video duration — fall back to max event timestamp if duration is 0
-      // (WebM files written via streaming MediaRecorder often have duration=0 in metadata)
+      // Fall back to the last event when duration metadata is missing —
+      // streamed WebM often reports duration 0.
       let videoDuration = project.timeline.duration;
       if (videoDuration <= 0 && allEvents.length > 0) {
-        videoDuration = Math.max(...allEvents.map((e) => e.timestampMs)) + 5000;
+        videoDuration = Math.max(...allEvents.map((event) => event.timestampMs)) + 5000;
       }
 
-      // Filter to moves within video duration
       const moves = allEvents
-        .filter((e) => e.timestampMs <= videoDuration)
+        .filter((event) => event.timestampMs <= videoDuration)
         .sort((a, b) => a.timestampMs - b.timestampMs);
 
       if (moves.length === 0) {
@@ -259,25 +162,18 @@ export function ZoomPanel() {
       const videoWidth = project.videoDimensions?.width || 1920;
       const videoHeight = project.videoDimensions?.height || 1080;
 
-      // 2. Determine which regions to process
       const regionsToProcess = selectedZoom ? [selectedZoom] : [...zoomRegions];
-
-      // 3. Process each region → add focalKeyframes (no splitting)
       const updatedRegions: ZoomRegion[] = [];
 
       for (const region of regionsToProcess) {
-        const updated = smartPanSingleRegion(region, moves, videoWidth, videoHeight);
-        updatedRegions.push(updated);
+        updatedRegions.push(smartPanSingleRegion(region, moves, videoWidth, videoHeight));
       }
 
-      // 4. Merge updated regions back with untouched ones
-      const processedIds = new Set(regionsToProcess.map((r) => r.id));
-      const untouched = zoomRegions.filter((z) => !processedIds.has(z.id));
-
+      const processedIds = new Set(regionsToProcess.map((region) => region.id));
+      const untouched = zoomRegions.filter((zoom) => !processedIds.has(zoom.id));
       const allRegions = [...untouched, ...updatedRegions].sort((a, b) => a.startMs - b.startMs);
 
-      // Full state replacement (syncs to backend and updates local state)
-      await replaceZoomRegions(allRegions);
+      await replaceZoomRegions(allRegions, ZOOM_SOURCE);
     } catch {
       // Failed to smart pan
     } finally {
@@ -290,24 +186,20 @@ export function ZoomPanel() {
    * Groups rapid clicks (within GROUP_THRESHOLD_MS) into single zoom regions.
    */
   const generateZoomsFromClicks = useCallback(async () => {
-    if (!project || zoomSource !== 'screen') return;
+    if (!project) return;
 
     setIsGenerating(true);
 
     try {
-      // Fetch mouse events from backend
       const events = await window.electron.editor.getMouseEvents();
 
-      // Get video duration — fall back to max event timestamp if duration is 0
-      // (WebM files written via streaming MediaRecorder often have duration=0 in metadata)
       let videoDuration = project.timeline.duration;
       if (videoDuration <= 0 && events.length > 0) {
-        videoDuration = Math.max(...events.map((e) => e.timestampMs)) + 5000;
+        videoDuration = Math.max(...events.map((event) => event.timestampMs)) + 5000;
       }
 
-      // Filter for clicks only, exclude clicks past video duration, and sort by time
       const clicks = events
-        .filter((e) => e.eventType === 'click' && e.timestampMs <= videoDuration)
+        .filter((event) => event.eventType === 'click' && event.timestampMs <= videoDuration)
         .sort((a, b) => a.timestampMs - b.timestampMs);
 
       if (clicks.length === 0) {
@@ -315,11 +207,9 @@ export function ZoomPanel() {
         return;
       }
 
-      // Get video dimensions for normalizing coordinates
       const videoWidth = project.videoDimensions?.width || 1920;
       const videoHeight = project.videoDimensions?.height || 1080;
 
-      // Generate zoom regions by grouping rapid clicks
       const newZooms: ZoomRegion[] = [];
       let currentRegion: ZoomRegion | null = null;
       let lastClickTime = 0;
@@ -328,13 +218,9 @@ export function ZoomPanel() {
         const timeSinceLastClick = click.timestampMs - lastClickTime;
 
         if (currentRegion && timeSinceLastClick < GROUP_THRESHOLD_MS) {
-          // Extend current region - rapid click detected
-
-          // Clamp endMs to video duration
+          // Rapid click — extend the region, keep the first click's focal point.
           currentRegion.endMs = Math.min(click.timestampMs + ZOOM_DURATION_MS, videoDuration);
-          // Keep focal point at first click's location
         } else {
-          // Create new region
           if (currentRegion) {
             newZooms.push(currentRegion);
           }
@@ -359,226 +245,119 @@ export function ZoomPanel() {
         lastClickTime = click.timestampMs;
       }
 
-      // Don't forget the last region
       if (currentRegion) {
         newZooms.push(currentRegion);
       }
 
-      // Replace all zoom regions with the generated ones (preserves focal points)
-      await replaceZoomRegions(newZooms, 'screen');
+      await replaceZoomRegions(newZooms, ZOOM_SOURCE);
     } catch {
       // Failed to generate zooms
     } finally {
       setIsGenerating(false);
     }
-  }, [project, replaceZoomRegions, zoomSource]);
+  }, [project, replaceZoomRegions]);
 
-  const smartPanButton = (
-    <Card className="p-4 shadow-sm border-2 border-brand/20 bg-linear-to-br from-brand-dark/10 to-transparent gap-2">
-      <div className="flex items-center gap-3">
-        <div className="bg-brand/20 text-brand-light p-2 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_10px_rgba(16,185,129,0.2)]">
-          <Ai size="24" />
-        </div>
-        <h3 className="font-semibold text-base text-brand-light">Smart Pan</h3>
-      </div>
+  const automation = (
+    <PanelSection title="Automate">
+      <ActionCard
+        Icon={Sparkles}
+        title="Auto zoom"
+        description="Create a zoom region around every mouse click, grouping rapid clicks together."
+        actionLabel={isGenerating ? 'Generating…' : 'Generate from clicks'}
+        disabled={isGenerating || !project}
+        onAction={() => void generateZoomsFromClicks()}
+      />
 
-      <p className="text-sm text-muted-foreground leading-relaxed mt-2 mb-4">
-        Automatically follows the mouse cursor or active window region within the zoomed area.
-      </p>
-
-      <Button
-        className="w-full font-bold tracking-wide uppercase text-xs h-10 bg-brand/10 text-brand-light border-brand/30 hover:bg-brand/20 hover:border-brand/50 hover:text-white transition-all duration-300 shadow-[0_0_10px_rgba(16,185,129,0.1)] hover:shadow-[0_0_15px_rgba(16,185,129,0.2)]"
-        onClick={handleSmartPan}
+      <ActionCard
+        Icon={Wand2}
+        title="Smart pan"
+        description={
+          selectedZoom
+            ? 'Follow the cursor inside this region instead of holding one focal point.'
+            : 'Follow the cursor inside every zoom region instead of holding one focal point.'
+        }
+        actionLabel={isPanning ? 'Panning…' : 'Enable smart pan'}
         disabled={isPanning || !project || zoomRegions.length === 0}
-        variant={'outline'}
-      >
-        {isPanning ? 'Panning...' : 'Enable Smart Pan'}
-      </Button>
-    </Card>
+        onAction={() => void handleSmartPan()}
+      />
+    </PanelSection>
   );
 
   if (!selectedZoom) {
     return (
-      <div className="space-y-4">
-        {/* Smart Pan button - global mode */}
-        {zoomRegions.length > 0 && smartPanButton}
-
-        {zoomSource === 'screen' && (
-          <div className="pt-4 h-full ">
-            <AutoZoomButton
-              generateZoomsFromClicks={generateZoomsFromClicks}
-              isGenerating={isGenerating}
-              project={project}
-            />
-          </div>
-        )}
-
-        {zoomSource === 'webcam' && (
-          <p className="pt-2 text-xs text-muted-foreground">
-            Auto Zoom creates regions for screen recording only. Switch the zoom source to screen to
-            generate auto zooms.
-          </p>
-        )}
-      </div>
+      <>
+        <PanelEmpty
+          Icon={ZoomIn}
+          title="No zoom region selected"
+          hint="Pick one on the timeline, or double-click the screen zoom lane to add one."
+        />
+        {automation}
+      </>
     );
   }
 
   return (
-    <div className="space-y-4">
-      <div className="space-y-2">
-        <Label htmlFor="zoom-level">Zoom Level</Label>
-        <div className="flex items-center gap-2">
-          <input
-            type="range"
-            id="zoom-level-slider"
-            min="1"
-            max="5"
-            step="0.1"
-            value={localZoomLevel}
-            onChange={(e) => handleZoomLevelChange(e.target.value)}
-            className="flex-1"
-          />
-          <Input
-            id="zoom-level"
-            type="number"
-            min="1"
-            max="5"
-            step="0.1"
-            value={localZoomLevel}
-            onChange={(e) => handleZoomLevelChange(e.target.value)}
-            className="w-20 font-mono text-xs h-8"
-          />
-        </div>
-      </div>
+    <>
+      <PanelSection title="Selected region">
+        <PanelSlider
+          label="Zoom level"
+          value={localZoomLevel}
+          min={1}
+          max={5}
+          step={0.1}
+          onChange={handleZoomLevelChange}
+          format={(value) => `${value.toFixed(1)}x`}
+        />
 
-      {zoomSource === 'webcam' && (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between rounded-md border border-border p-3">
-            <div className="space-y-1">
-              <Label htmlFor="webcam-full-screen" className="text-sm">
-                Full Canvas Webcam
-              </Label>
-              <p className="text-[11px] text-muted-foreground leading-snug">
-                Use webcam as the full frame for this timeline region.
-              </p>
-            </div>
-            <Switch
-              id="webcam-full-screen"
-              checked={isWebcamFullScreen}
-              onCheckedChange={handleWebcamFullScreenChange}
-            />
-          </div>
+        <PanelButton
+          Icon={Crosshair}
+          active={isEditingFocalPoint}
+          onClick={() => setIsEditingFocalPoint(!isEditingFocalPoint)}
+        >
+          {isEditingFocalPoint ? 'Done editing focal point' : 'Edit focal point'}
+        </PanelButton>
 
-          <Label htmlFor="webcam-height-ratio">Webcam Canvas Height</Label>
-          <div className="flex items-center gap-2">
-            <input
-              type="range"
-              id="webcam-height-ratio-slider"
-              min="0.08"
-              max="0.75"
-              step="0.01"
-              value={localWebcamHeightRatio}
-              onChange={(e) => handleWebcamHeightRatioChange(e.target.value)}
-              disabled={isWebcamFullScreen}
-              className="flex-1"
-            />
-            <Input
-              id="webcam-height-ratio"
-              type="number"
-              min="0.08"
-              max="0.75"
-              step="0.01"
-              value={localWebcamHeightRatio}
-              onChange={(e) => handleWebcamHeightRatioChange(e.target.value)}
-              disabled={isWebcamFullScreen}
-              className="w-20 font-mono text-xs h-8"
-            />
-          </div>
-          <p className="text-[11px] text-muted-foreground leading-snug">
-            {isWebcamFullScreen
-              ? 'Full-canvas mode is active for this region.'
-              : 'Controls the webcam overlay size within this region (0.08 - 0.75).'}
-          </p>
-        </div>
-      )}
-
-      {zoomRegions.length > 1 && (
-        <div className="pt-2">
-          <Button
-            variant="outline"
+        {zoomRegions.length > 1 && (
+          <PanelButton
             onClick={handleApplyToAll}
             onMouseEnter={() => copyIconRef.current?.startAnimation()}
             onMouseLeave={() => copyIconRef.current?.stopAnimation()}
-            className="w-full"
           >
-            {/* <Copy className="size-4 mr-2" /> */}
-            <div className="relative size-4 mr-2">
+            <span className="relative size-4">
               <AnimatePresence mode="wait" initial={false}>
                 {isCopied ? (
-                  <motion.div
+                  <motion.span
                     key="check"
                     initial={{ opacity: 0, scale: 0.5 }}
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.5 }}
                     transition={{ duration: 0.2 }}
-                    className="absolute inset-0 flex items-center justify-center"
+                    className="absolute inset-0 grid place-items-center"
                   >
-                    <Check className="size-4 text-green-500" />
-                  </motion.div>
+                    <Check className="size-4 text-emerald-400" />
+                  </motion.span>
                 ) : (
-                  <motion.div
+                  <motion.span
                     key="copy"
                     initial={{ opacity: 0, scale: 0.5 }}
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.5 }}
                     transition={{ duration: 0.2 }}
-                    className="absolute inset-0 flex items-center justify-center"
+                    className="absolute inset-0 grid place-items-center"
                   >
                     <CopyIcon ref={copyIconRef} size={16} />
-                  </motion.div>
+                  </motion.span>
                 )}
               </AnimatePresence>
-            </div>
-            Apply to All ({zoomRegions.length} regions)
-          </Button>
-        </div>
-      )}
+            </span>
+            Apply level to all {zoomRegions.length} regions
+          </PanelButton>
+        )}
 
-      {/* Edit Focal Point button */}
-      <div
-        className="pt-2"
-        onMouseEnter={() => focusIconRef.current?.startAnimation()}
-        onMouseLeave={() => focusIconRef.current?.stopAnimation()}
-      >
-        <Button
-          variant={isEditingFocalPoint ? 'default' : 'outline'}
-          onClick={() => setIsEditingFocalPoint(!isEditingFocalPoint)}
-          className="w-full"
-        >
-          <FocusIcon className="size-4 mr-2" ref={focusIconRef} />
-          {isEditingFocalPoint ? 'Done Editing' : 'Edit Focal Point'}
-        </Button>
-      </div>
+        <PanelNote>Webcam zoom regions are edited in the Webcam panel.</PanelNote>
+      </PanelSection>
 
-      {/* Smart Pan button - local mode (selected region) */}
-      {smartPanButton}
-
-      {zoomSource === 'screen' && (
-        <div className="pt-4 border-t border-border">
-          <AutoZoomButton
-            generateZoomsFromClicks={generateZoomsFromClicks}
-            isGenerating={isGenerating}
-            project={project}
-          />
-        </div>
-      )}
-
-      {zoomSource === 'webcam' && (
-        <p className="pt-4 text-xs text-muted-foreground border-t border-border">
-          Auto Zoom creates regions for screen recording only. Switch the zoom source to screen to
-          generate auto zooms.
-        </p>
-      )}
-    </div>
+      {automation}
+    </>
   );
 }

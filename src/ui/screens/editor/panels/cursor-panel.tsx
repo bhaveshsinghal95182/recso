@@ -1,9 +1,7 @@
-import { ImagePlus } from 'lucide-react';
+import { ImagePlus, MousePointer2, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { cn } from '@/lib/utils';
 import {
   type CursorTimelineRegion,
   deriveCursorTimelineRegions,
@@ -12,6 +10,15 @@ import {
 import { useProjectStore } from '@/store/project-store';
 import { useTimelineStore } from '@/store/timeline-store';
 import type { CursorRegionOverride } from '@/types';
+
+import {
+  PANEL_LABEL,
+  PanelButton,
+  PanelEmpty,
+  PanelNote,
+  PanelSection,
+  PanelSlider,
+} from './panel-kit';
 
 interface CursorTypeGroup {
   key: string;
@@ -277,218 +284,189 @@ export function CursorPanel() {
     }
   };
 
+  const scopeLabel = isEditingRegionOverride ? 'This region only' : 'Whole recording';
+  const clearAction = isEditingRegionOverride
+    ? selectedRegionOverride && (
+        <button
+          type="button"
+          className="cursor-pointer text-[10px] font-[750] uppercase tracking-[0.1em] text-red-300/80 transition hover:text-red-300"
+          onClick={() => {
+            if (!selectedCursorRegion) {
+              return;
+            }
+
+            void removeCursorRegionOverride(selectedCursorRegion.id);
+          }}
+        >
+          Clear override
+        </button>
+      )
+    : cursor.style === 'custom' &&
+      cursor.customImagePath && (
+        <button
+          type="button"
+          className="cursor-pointer text-[10px] font-[750] uppercase tracking-[0.1em] text-red-300/80 transition hover:text-red-300"
+          onClick={() => void updateCursorConfig({ style: 'default', customImagePath: undefined })}
+        >
+          Reset
+        </button>
+      );
+
   return (
-    <div className="space-y-6">
+    <>
       {selectedCursorRegion ? (
-        <div className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
-          <div className="font-semibold uppercase tracking-[0.08em]">
-            Editing Selected Cursor Region
+        <div className="rounded-[14px] border border-[#5eead4]/35 bg-emerald-500/12 px-3 py-2.5">
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="text-[10px] font-[750] uppercase tracking-[0.1em] text-[#5eead4]">
+              Editing region
+            </span>
+            <span className="font-mono text-[11px] tabular-nums text-[#ccfbf1]/75">
+              {formatMilliseconds(selectedCursorRegion.startMs)} –{' '}
+              {formatMilliseconds(selectedCursorRegion.endMs)}
+            </span>
           </div>
-          <div className="text-emerald-100/80 mt-1">
-            {formatMilliseconds(selectedCursorRegion.startMs)} -{' '}
-            {formatMilliseconds(selectedCursorRegion.endMs)}
-          </div>
-          <div className="text-emerald-100/70 mt-1">
-            Custom image changes apply only inside this timeline region.
-          </div>
+          <p className="mt-1 text-[11px] leading-snug text-[#ccfbf1]/60">
+            Image changes apply only inside this region. Deselect it on the timeline to edit the
+            whole recording.
+          </p>
         </div>
       ) : null}
 
-      <div className="space-y-3 rounded-md border border-border/60 p-3 bg-muted/10">
-        <div className="flex items-center justify-between gap-2">
-          <div>
-            <Label>Cursor Pack</Label>
-            <p className="text-[11px] text-muted-foreground mt-1">
-              Assign one image per detected cursor type, then apply the pack to all matching
-              regions.
-            </p>
-          </div>
-          <Button
-            size="sm"
-            onClick={() => void applyPackToTimeline()}
-            disabled={
-              (!hasPackImage && !hasExistingOverrides) ||
-              cursorRegions.length === 0 ||
-              isApplyingPack
-            }
-          >
-            {isApplyingPack ? 'Applying...' : 'Apply Pack'}
-          </Button>
-        </div>
+      <PanelSection title="Cursor image" action={clearAction || undefined}>
+        <button
+          type="button"
+          onClick={() => void openCursorPicker()}
+          className={cn(
+            'grid h-20 w-full cursor-pointer place-items-center content-center gap-1.5 rounded-[14px] transition-colors',
+            activeImage
+              ? 'border border-white/10 bg-white/[0.03] hover:border-[#5eead4]/50'
+              : 'border border-dashed border-white/15 text-white/45 hover:border-[#5eead4]/40 hover:text-white/70',
+          )}
+        >
+          {activeImage ? (
+            <img src={activeImage} alt="Custom cursor" className="size-10 object-contain" />
+          ) : (
+            <>
+              <ImagePlus className="size-4" />
+              <span className={PANEL_LABEL}>Choose a PNG or SVG</span>
+            </>
+          )}
+        </button>
 
-        <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={loadPackFromExistingOverrides}
-            disabled={cursorRegions.length === 0}
-          >
-            Load From Timeline
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => setPackAssignments({})}
-            disabled={!hasPackImage}
-          >
-            Clear Pack
-          </Button>
-        </div>
+        <PanelNote>Applies to: {scopeLabel}</PanelNote>
+      </PanelSection>
+
+      <PanelSection title="Size">
+        <PanelSlider
+          label="Cursor size"
+          value={cursor.size}
+          min={0.2}
+          max={3}
+          step={0.1}
+          onChange={handleSizeInput}
+          format={(value) => `${value.toFixed(1)}x`}
+        />
+      </PanelSection>
+
+      <PanelSection
+        title="Cursor pack"
+        action={
+          cursorRegions.length > 0 ? (
+            <span className={PANEL_LABEL}>{cursorTypeGroups.length} types</span>
+          ) : undefined
+        }
+      >
+        <PanelNote>
+          Assign one image per detected cursor type, then apply it to every matching region at once.
+        </PanelNote>
 
         {cursorTypeGroups.length === 0 ? (
-          <div className="text-[11px] text-muted-foreground">No cursor types detected yet.</div>
+          <PanelEmpty
+            Icon={MousePointer2}
+            title="No cursor types detected"
+            hint="This project has no recorded cursor movement to group."
+          />
         ) : (
           <div className="space-y-2">
             {cursorTypeGroups.map((group) => {
               const assignedPath = packAssignments[group.key]?.trim();
               const assignedPreviewSrc = toImageSrc(assignedPath);
-              const detectedPreviewSrc = toImageSrc(group.sourceCursorDataUrl);
-              const previewSrc = assignedPreviewSrc ?? detectedPreviewSrc;
+              const previewSrc = assignedPreviewSrc ?? toImageSrc(group.sourceCursorDataUrl);
 
               return (
                 <div
                   key={group.key}
-                  className="rounded-md border border-border/50 bg-background/40 px-2 py-2"
+                  className="flex items-center gap-2.5 rounded-[14px] border border-white/[0.07] bg-white/[0.025] px-2.5 py-2"
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <div>
-                      <div className="text-xs font-medium">{group.label}</div>
-                      <div className="text-[10px] text-muted-foreground">
-                        {group.regions.length} timeline region
-                        {group.regions.length === 1 ? '' : 's'}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {previewSrc ? (
-                        <img
-                          src={previewSrc}
-                          alt={`${group.label} cursor preview`}
-                          className="h-7 w-7 rounded-sm border border-border/70 object-contain bg-muted/20"
-                          title={
-                            assignedPreviewSrc
-                              ? 'Assigned replacement cursor'
-                              : 'Detected source cursor'
-                          }
-                        />
-                      ) : (
-                        <div
-                          className="h-7 w-7 rounded-sm border border-dashed border-border/70 bg-muted/20"
-                          title="No cursor preview available"
-                        />
-                      )}
+                  {previewSrc ? (
+                    <img
+                      src={previewSrc}
+                      alt={`${group.label} cursor preview`}
+                      className="size-8 flex-none rounded-[8px] border border-white/10 bg-black/25 object-contain p-1"
+                      title={assignedPreviewSrc ? 'Assigned replacement' : 'Detected source cursor'}
+                    />
+                  ) : (
+                    <span
+                      className="size-8 flex-none rounded-[8px] border border-dashed border-white/15 bg-black/25"
+                      title="No cursor preview available"
+                    />
+                  )}
 
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => void assignPackImage(group.key)}
-                      >
-                        Choose
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => clearPackImage(group.key)}
-                        disabled={!assignedPath}
-                      >
-                        Clear
-                      </Button>
-                    </div>
-                  </div>
+                  <span className="grid min-w-0 flex-1 gap-0.5">
+                    <span className="truncate text-[12px] font-[650] text-white/85">
+                      {group.label}
+                    </span>
+                    <span className="text-[10px] text-white/35">
+                      {group.regions.length} region{group.regions.length === 1 ? '' : 's'}
+                    </span>
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() => void assignPackImage(group.key)}
+                    className="cursor-pointer rounded-[10px] border border-white/10 bg-white/[0.045] px-2.5 py-1.5 text-[11px] font-[650] text-white/70 transition hover:border-white/25 hover:bg-white/10 hover:text-white"
+                  >
+                    Choose
+                  </button>
+                  {assignedPath ? (
+                    <button
+                      type="button"
+                      onClick={() => clearPackImage(group.key)}
+                      title="Clear assignment"
+                      aria-label={`Clear ${group.label} assignment`}
+                      className="grid size-7 flex-none cursor-pointer place-items-center rounded-full text-white/40 transition hover:bg-white/10 hover:text-white"
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  ) : null}
                 </div>
               );
             })}
           </div>
         )}
-      </div>
 
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <Label>
-            {isEditingRegionOverride ? 'Region Cursor PNG/SVG' : 'Global Cursor PNG/SVG'}
-          </Label>
-          {isEditingRegionOverride
-            ? selectedRegionOverride && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-6 px-2 text-[10px] text-destructive hover:text-destructive hover:bg-destructive/10"
-                  onClick={() => {
-                    if (!selectedCursorRegion) {
-                      return;
-                    }
-
-                    void removeCursorRegionOverride(selectedCursorRegion.id);
-                  }}
-                >
-                  Clear Override
-                </Button>
-              )
-            : cursor.style === 'custom' &&
-              cursor.customImagePath && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-6 px-2 text-[10px] text-destructive hover:text-destructive hover:bg-destructive/10"
-                  onClick={() =>
-                    void updateCursorConfig({ style: 'default', customImagePath: undefined })
-                  }
-                >
-                  Reset
-                </Button>
-              )}
+        <div className="grid grid-cols-2 gap-2">
+          <PanelButton
+            disabled={cursorRegions.length === 0}
+            onClick={loadPackFromExistingOverrides}
+          >
+            Load from timeline
+          </PanelButton>
+          <PanelButton disabled={!hasPackImage} onClick={() => setPackAssignments({})}>
+            Clear pack
+          </PanelButton>
         </div>
 
-        {activeImage ? (
-          <button
-            type="button"
-            onClick={() => {
-              void openCursorPicker();
-            }}
-            className="w-full h-16 rounded-md border border-border/60 bg-muted/10 hover:bg-muted/30 hover:border-primary/50 transition-colors flex items-center justify-center"
-          >
-            <img src={activeImage} alt="Custom cursor" className="h-10 w-10 object-contain" />
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={() => {
-              void openCursorPicker();
-            }}
-            className="w-full h-16 rounded-md border border-dashed border-border/60 hover:border-primary/50 flex flex-col items-center justify-center gap-1 cursor-pointer transition-colors bg-muted/10 hover:bg-muted/30"
-          >
-            <ImagePlus className="w-4 h-4 text-muted-foreground/70" />
-            <span className="text-[11px] text-muted-foreground font-medium">
-              Choose PNG/SVG file
-            </span>
-          </button>
-        )}
-      </div>
-
-      <div className="space-y-2">
-        <Label htmlFor="cursor-size">Cursor Size</Label>
-        <div className="flex items-center gap-2">
-          <input
-            id="cursor-size-slider"
-            type="range"
-            min="0.2"
-            max="3"
-            step="0.1"
-            value={cursor.size}
-            onChange={(e) => handleSizeInput(Number(e.target.value))}
-            className="flex-1"
-          />
-          <Input
-            id="cursor-size"
-            type="number"
-            min="0.2"
-            max="3"
-            step="0.1"
-            value={cursor.size}
-            onChange={(e) => handleSizeInput(Number(e.target.value))}
-            className="w-20 font-mono text-xs h-8"
-          />
-        </div>
-      </div>
-    </div>
+        <PanelButton
+          tone="accent"
+          disabled={
+            (!hasPackImage && !hasExistingOverrides) || cursorRegions.length === 0 || isApplyingPack
+          }
+          onClick={() => void applyPackToTimeline()}
+        >
+          {isApplyingPack ? 'Applying…' : 'Apply pack to timeline'}
+        </PanelButton>
+      </PanelSection>
+    </>
   );
 }
