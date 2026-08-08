@@ -1,16 +1,21 @@
 /**
  * TimelineRegion Component
  *
- * A unified component for rendering timeline regions (cuts, zooms, etc.)
+ * A unified component for rendering timeline regions (cuts, zooms, cursor spans).
  * Supports:
  * - Dragging to move the region
  * - Resizing via edge handles
  * - Selection and deletion
- * - Customizable styling per region type
+ *
+ * Every region renders at the same height inside its lane and shares one neutral
+ * surface; type is communicated by the icon and lane, not by a saturated fill.
  */
 
+import { MousePointer2, Scissors, X, ZoomIn } from 'lucide-react';
+import type { ComponentType } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { cn } from '@/lib/utils';
 import { usePlaybackStore } from '@/store/playback-store';
 
 export type RegionVariant = 'cut' | 'zoom' | 'cursor';
@@ -52,34 +57,29 @@ interface TimelineRegionProps<T extends BaseRegion> {
   dataRegionType?: RegionVariant;
 }
 
-// Variant-specific styling configuration
-const variantStyles: Record<
+const variantMeta: Record<
   RegionVariant,
-  {
-    default: string;
-    selected: string;
-    deleteButton: string;
-    deleteTitle: string;
-  }
+  { icon: ComponentType<{ className?: string; size?: number }>; deleteTitle: string; layer: number }
 > = {
-  cut: {
-    default: 'bg-red-500/40 hover:bg-red-500/50',
-    selected: 'bg-red-500/60 ring-2 ring-red-400',
-    deleteButton: 'bg-red-600 hover:bg-red-700',
-    deleteTitle: 'Remove cut',
-  },
-  zoom: {
-    default: 'bg-blue-500/40 hover:bg-blue-500/50',
-    selected: 'bg-blue-500/60 ring-2 ring-blue-400',
-    deleteButton: 'bg-blue-600 hover:bg-blue-700',
-    deleteTitle: 'Remove zoom',
-  },
-  cursor: {
-    default: 'bg-emerald-500/35 hover:bg-emerald-500/45',
-    selected: 'bg-emerald-500/55 ring-2 ring-emerald-400',
-    deleteButton: 'bg-emerald-600 hover:bg-emerald-700',
-    deleteTitle: 'Remove cursor region',
-  },
+  cut: { icon: Scissors, deleteTitle: 'Remove cut', layer: 12 },
+  zoom: { icon: ZoomIn, deleteTitle: 'Remove zoom', layer: 9 },
+  cursor: { icon: MousePointer2, deleteTitle: 'Remove cursor region', layer: 6 },
+};
+
+/**
+ * Type identity is carried by a hairline edge and the icon only — never by the
+ * body fill. Emerald stays reserved for selection, so it is absent here.
+ */
+export const regionAccentText: Record<RegionVariant, string> = {
+  cut: 'text-rose-300/75',
+  zoom: 'text-sky-300/75',
+  cursor: 'text-amber-300/70',
+};
+
+const regionAccentBar: Record<RegionVariant, string> = {
+  cut: 'bg-rose-300/55',
+  zoom: 'bg-sky-300/55',
+  cursor: 'bg-amber-300/45',
 };
 
 export function TimelineRegion<T extends BaseRegion>({
@@ -117,7 +117,8 @@ export function TimelineRegion<T extends BaseRegion>({
     };
   }, []);
 
-  const styles = variantStyles[variant];
+  const meta = variantMeta[variant];
+  const Icon = meta.icon;
 
   // Convert time to percentage
   const timeToPercent = (time: number) => (duration > 0 ? (time / duration) * 100 : 0);
@@ -199,7 +200,7 @@ export function TimelineRegion<T extends BaseRegion>({
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
     },
-    [localRegion, duration, onSelect, onUpdate, debouncedUpdate, editable],
+    [localRegion, duration, onSelect, onUpdate, debouncedUpdate, editable, isPlaying, pause],
   );
 
   // Handle resize from edges
@@ -302,15 +303,23 @@ export function TimelineRegion<T extends BaseRegion>({
   return (
     <div
       ref={containerRef}
-      className={`absolute top-1 bottom-1 rounded cursor-move transition-colors group ${
-        isSelected ? styles.selected : styles.default
-      } ${
-        editable ? (isDragging || isResizing ? 'cursor-grabbing' : 'cursor-move') : 'cursor-pointer'
-      }`}
+      className={cn(
+        '@container group absolute top-[5px] bottom-[5px] flex items-center gap-1.5 overflow-hidden rounded-[8px] border pl-2 pr-1.5',
+        'border-white/12 bg-white/[0.07] text-white/60 transition duration-150',
+        'hover:border-white/25 hover:bg-white/[0.13] hover:text-white/90',
+        isSelected &&
+          'border-[#5eead4]/45 bg-emerald-400/15 text-[#ccfbf1] hover:border-[#5eead4]/55 hover:bg-emerald-400/20',
+        editable
+          ? isDragging || isResizing
+            ? 'cursor-grabbing'
+            : 'cursor-move'
+          : 'cursor-pointer',
+      )}
       style={{
         left: `${left}%`,
-        width: `${Math.max(width, 0.5)}%`,
-        zIndex: variant === 'cut' ? 12 : variant === 'zoom' ? 9 : 6,
+        width: `${Math.max(width, 0.25)}%`,
+        minWidth: 8,
+        zIndex: meta.layer,
       }}
       data-cut-id={dataCutId}
       data-region-id={dataRegionId}
@@ -325,49 +334,54 @@ export function TimelineRegion<T extends BaseRegion>({
       onKeyDown={handleKeyDown}
       tabIndex={isSelected && editable ? 0 : -1}
     >
+      {/* Hairline type accent — the only colour on the region body */}
+      <span
+        className={cn(
+          'pointer-events-none absolute inset-y-0 left-0 w-[2px]',
+          isSelected ? 'bg-[#5eead4]/70' : regionAccentBar[variant],
+        )}
+      />
+
       {editable && (
         <>
-          {/* Left resize handle - visible bar */}
+          {/* Edge resize handles */}
           <div
-            className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize flex items-center justify-center hover:bg-white/20"
+            className="absolute left-0 top-0 bottom-0 z-10 flex w-1.5 cursor-ew-resize items-center justify-center"
             onMouseDown={(e) => handleResizeStart(e, 'left')}
           >
-            <div className="w-0.5 h-4 bg-white/60 rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />
+            <div className="h-3.5 w-0.5 rounded-full bg-current opacity-0 transition-opacity group-hover:opacity-60" />
           </div>
 
-          {/* Right resize handle - visible bar */}
           <div
-            className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize flex items-center justify-center hover:bg-white/20"
+            className="absolute right-0 top-0 bottom-0 z-10 flex w-1.5 cursor-ew-resize items-center justify-center"
             onMouseDown={(e) => handleResizeStart(e, 'right')}
           >
-            <div className="w-0.5 h-4 bg-white/60 rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />
+            <div className="h-3.5 w-0.5 rounded-full bg-current opacity-0 transition-opacity group-hover:opacity-60" />
           </div>
-
-          {/* Delete button */}
-          <button
-            type="button"
-            className={`absolute -top-2 -right-2 w-4 h-4 ${styles.deleteButton} rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-20`}
-            onClick={handleDeleteClick}
-            title={styles.deleteTitle}
-          >
-            <svg
-              className="w-2.5 h-2.5 text-white"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="3"
-            >
-              <path d="M18 6L6 18M6 6l12 12" />
-            </svg>
-          </button>
         </>
       )}
 
-      {/* Region label */}
-      {label && width > 5 && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <span className="text-[10px] text-white/70 font-medium select-none">{label}</span>
-        </div>
+      {/* Identity: icon shows up once the region is wide enough to hold it */}
+      <Icon
+        className={cn('hidden shrink-0 @[26px]:block', !isSelected && regionAccentText[variant])}
+        size={11}
+      />
+
+      {label && (
+        <span className="hidden truncate text-[10px] font-[700] tracking-[0.06em] select-none @[74px]:inline">
+          {label}
+        </span>
+      )}
+
+      {editable && (
+        <button
+          type="button"
+          className="ml-auto hidden size-4 shrink-0 place-items-center rounded-full bg-white/10 text-white/70 opacity-0 transition hover:bg-red-500/70 hover:text-white group-hover:opacity-100 @[74px]:grid"
+          onClick={handleDeleteClick}
+          title={`${meta.deleteTitle} (Ctrl+click removes it from every lane)`}
+        >
+          <X size={9} strokeWidth={3} />
+        </button>
       )}
     </div>
   );
