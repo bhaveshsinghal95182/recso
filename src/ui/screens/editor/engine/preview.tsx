@@ -16,6 +16,7 @@ import { usePreviewViewportSize } from './preview-runtime/viewport';
 import { CropDialog } from '../crop-dialog';
 import { FocalPointOverlay } from '../focal-point-overlay';
 import { VerticalTabs } from '../vertical-tabs';
+import { WebcamResizeOverlay } from '../webcam-resize-overlay';
 import { type CanvasFrameContext } from './adapters';
 import { CompositionEngine } from './engine';
 import {
@@ -29,7 +30,7 @@ import { useEnginePreviewConfigMapper } from './preview-config-mapper.ts';
 import type { CompositionConfig } from './types';
 
 export function EnginePreview() {
-  const { project, mouseEvents } = useProjectStore();
+  const { project, mouseEvents, updateWebcamOverlay } = useProjectStore();
   const {
     zoomRegions,
     zoomRegionsBySource,
@@ -59,6 +60,7 @@ export function EnginePreview() {
   const {
     canvasSize,
     layout,
+    webcamLayout,
     durationMs,
     compositionConfig,
     videoSrc,
@@ -238,6 +240,15 @@ export function EnginePreview() {
     play();
   }, [isPlaying, pause, play]);
 
+  const handleWebcamResize = useCallback(
+    (heightRatio: number) => {
+      // Clearing the preset keeps the size pills in the webcam panel honest —
+      // a hand-dragged size is no longer small/medium/large.
+      void updateWebcamOverlay({ size: undefined, heightRatio });
+    },
+    [updateWebcamOverlay],
+  );
+
   const handleFullscreenPreview = useCallback(() => {
     const fullscreenElement = fullscreenContainerRef.current;
     if (!fullscreenElement) {
@@ -307,6 +318,19 @@ export function EnginePreview() {
             playsInline
             preload="auto"
           />
+
+          {!isExportPreviewFullscreen &&
+            !isEditingFocalPoint &&
+            webcamLayout &&
+            project.webcamOverlay?.enabled && (
+              <WebcamResizeOverlay
+                webcamOverlay={project.webcamOverlay}
+                webcamLayout={webcamLayout}
+                canvasSize={canvasSize}
+                previewScale={previewDisplaySize.scale}
+                onResize={handleWebcamResize}
+              />
+            )}
 
           {isEditingFocalPoint && selectedZoomId && selectedZoom && project.videoDimensions && (
             <FocalPointOverlay

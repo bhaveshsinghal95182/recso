@@ -36,7 +36,13 @@ export interface VideoConfig {
   };
 }
 
-export type WebcamOverlayAnchor = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
+/**
+ * Re-exported rather than redeclared — the engine and the project model must
+ * agree on the placement grid or the composed frame drifts from the config.
+ */
+import type { WebcamOverlayAnchor } from '@/types';
+
+export type { WebcamOverlayAnchor };
 export type WebcamOverlayShape = 'circle' | 'rectangle-landscape' | 'rectangle-portrait' | 'square';
 
 export interface WebcamShadowLayer {

@@ -20,9 +20,16 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
+import { getAnchorLabel, WEBCAM_ANCHORS } from '@/screens/editor/engine/webcam-anchor';
 import { useProjectStore } from '@/store/project-store';
-import type { RemoteCameraState, WebcamOverlayShape, WebcamOverlaySize } from '@/types';
+import type {
+  RemoteCameraState,
+  WebcamOverlayAnchor,
+  WebcamOverlayShape,
+  WebcamOverlaySize,
+} from '@/types';
 
+const DEFAULT_WEBCAM_ANCHOR: WebcamOverlayAnchor = 'bottom-right';
 const DEFAULT_WEBCAM_SIZE: WebcamOverlaySize = 'medium';
 const DEFAULT_WEBCAM_ASPECT_RATIO = 3 / 4;
 const DEFAULT_WEBCAM_HEIGHT_RATIO = 0.34;
@@ -306,6 +313,8 @@ export function WebcamPanel() {
     [currentAspectRatio, project.webcamOverlay?.shape],
   );
 
+  const currentAnchor = project.webcamOverlay?.anchor ?? DEFAULT_WEBCAM_ANCHOR;
+
   const currentSizeOption = useMemo(
     () => resolveWebcamSizeOption(project.webcamOverlay?.size, currentHeightRatio),
     [currentHeightRatio, project.webcamOverlay?.size],
@@ -338,6 +347,15 @@ export function WebcamPanel() {
     }
 
     void updateWebcamOverlay({ enabled: checked });
+  };
+
+  const handleAnchorChange = (value: WebcamOverlayAnchor) => {
+    if (!canEditWebcam) {
+      return;
+    }
+
+    setValidationMessage(null);
+    void updateWebcamOverlay({ anchor: value });
   };
 
   const handleShapePresetChange = (value: WebcamOverlayShape) => {
@@ -630,6 +648,50 @@ export function WebcamPanel() {
 
       {canEditWebcam && (
         <>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                Position
+              </Label>
+              <span className="text-[11px] text-muted-foreground">
+                {getAnchorLabel(currentAnchor)}
+              </span>
+            </div>
+
+            {/* The frame stands in for the video; each dot is a placement slot. */}
+            <div
+              className="grid aspect-video w-32 grid-cols-3 grid-rows-3 rounded-[10px] border border-border/60 bg-black/30 p-1"
+              role="radiogroup"
+              aria-label="Webcam position"
+            >
+              {WEBCAM_ANCHORS.map((anchorOption) => {
+                const isActive = currentAnchor === anchorOption;
+
+                return (
+                  <button
+                    key={anchorOption}
+                    type="button"
+                    role="radio"
+                    aria-checked={isActive}
+                    aria-label={getAnchorLabel(anchorOption)}
+                    title={getAnchorLabel(anchorOption)}
+                    className="group grid cursor-pointer place-items-center rounded-[6px] transition-colors hover:bg-white/[0.06]"
+                    disabled={!canEditWebcam}
+                    onClick={() => handleAnchorChange(anchorOption)}
+                  >
+                    <span
+                      className={`rounded-full transition-all duration-150 ${
+                        isActive
+                          ? 'size-2 bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]'
+                          : 'size-1.5 bg-white/25 group-hover:bg-white/60'
+                      }`}
+                    />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           <div className="space-y-2">
             <Label className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
               Shape

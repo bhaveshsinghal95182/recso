@@ -75,7 +75,17 @@ export interface ZoomConfig {
   focalY: number;
 }
 
-export type WebcamOverlayAnchor = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
+/** 3x3 placement grid for the webcam overlay. */
+export type WebcamOverlayAnchor =
+  | 'top-left'
+  | 'top-center'
+  | 'top-right'
+  | 'center-left'
+  | 'center'
+  | 'center-right'
+  | 'bottom-left'
+  | 'bottom-center'
+  | 'bottom-right';
 export type WebcamOverlayShape = 'circle' | 'rectangle-landscape' | 'rectangle-portrait' | 'square';
 export type WebcamOverlaySize = 'small' | 'medium' | 'large';
 

@@ -41,7 +41,17 @@ export interface LayoutResult {
   scale: number;
 }
 
-export type WebcamAnchor = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
+/** 3x3 placement grid for the webcam overlay. */
+export type WebcamAnchor =
+  | 'top-left'
+  | 'top-center'
+  | 'top-right'
+  | 'center-left'
+  | 'center'
+  | 'center-right'
+  | 'bottom-left'
+  | 'bottom-center'
+  | 'bottom-right';
 
 export interface WebcamLayoutRequest {
   /** Optional anchor point on canvas. Default: bottom-right */

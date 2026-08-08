@@ -20,6 +20,7 @@ import type {
   LayoutResult,
   Rectangle,
   Size,
+  WebcamAnchor,
   WebcamLayoutRequest,
   WebcamLayoutResult,
 } from '../types/compositor.types.js';
@@ -232,6 +233,27 @@ export function calculateLayout(videoBounds: Rectangle | Size, canvasSize?: Size
 }
 
 /**
+ * Anchor fractions for the 3x3 placement grid — 0 pins the leading edge, 1 the
+ * trailing edge, 0.5 centres the box.
+ *
+ * This duplicates `src/ui/screens/editor/engine/webcam-anchor.ts` because the
+ * Electron tsconfig sets `rootDir: "."`, so main-process code cannot import from
+ * `src/ui` without restructuring the build output. The two must stay in sync:
+ * the renderer uses its copy as the offline fallback for this very function.
+ */
+const ANCHOR_FRACTIONS: Record<WebcamAnchor, { x: number; y: number }> = {
+  'top-left': { x: 0, y: 0 },
+  'top-center': { x: 0.5, y: 0 },
+  'top-right': { x: 1, y: 0 },
+  'center-left': { x: 0, y: 0.5 },
+  center: { x: 0.5, y: 0.5 },
+  'center-right': { x: 1, y: 0.5 },
+  'bottom-left': { x: 0, y: 1 },
+  'bottom-center': { x: 0.5, y: 1 },
+  'bottom-right': { x: 1, y: 1 },
+};
+
+/**
  * Calculate a webcam overlay layout on the canvas.
  *
  * Defaults:
@@ -292,28 +314,9 @@ export function calculateWebcamLayout(
     width = Math.max(1, Math.round(height * aspectRatio));
   }
 
-  let x = marginPx;
-  let y = marginPx;
-
-  switch (anchor) {
-    case 'top-right':
-      x = canvas.width - width - marginPx;
-      y = marginPx;
-      break;
-    case 'bottom-left':
-      x = marginPx;
-      y = canvas.height - height - marginPx;
-      break;
-    case 'bottom-right':
-      x = canvas.width - width - marginPx;
-      y = canvas.height - height - marginPx;
-      break;
-    case 'top-left':
-    default:
-      x = marginPx;
-      y = marginPx;
-      break;
-  }
+  const fractions = ANCHOR_FRACTIONS[anchor] ?? ANCHOR_FRACTIONS['bottom-right'];
+  let x = marginPx + (canvas.width - width - marginPx * 2) * fractions.x;
+  let y = marginPx + (canvas.height - height - marginPx * 2) * fractions.y;
 
   x = clamp(Math.round(x), 0, Math.max(0, canvas.width - width));
   y = clamp(Math.round(y), 0, Math.max(0, canvas.height - height));

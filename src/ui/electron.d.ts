@@ -165,7 +165,16 @@ interface ElectronAPI {
     calculateWebcamLayout: (
       canvasSize?: { width: number; height: number },
       request?: {
-        anchor?: 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
+        anchor?:
+          | 'top-left'
+          | 'top-center'
+          | 'top-right'
+          | 'center-left'
+          | 'center'
+          | 'center-right'
+          | 'bottom-left'
+          | 'bottom-center'
+          | 'bottom-right';
         aspectRatio?: number;
         heightRatio?: number;
         marginPx?: number;

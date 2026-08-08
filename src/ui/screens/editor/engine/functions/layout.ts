@@ -1,4 +1,5 @@
 import type { CompositionConfig, VideoLayout, WebcamOverlayConfig } from '../types';
+import { resolveAnchoredPosition } from '../webcam-anchor';
 import {
   clamp,
   DEFAULT_WEBCAM_ASPECT_RATIO,
@@ -80,34 +81,18 @@ export function computeWebcamLayout(
     width = Math.max(1, Math.round(height * aspectRatio));
   }
 
-  let x = margin;
-  let y = margin;
-  switch (webcamConfig.anchor) {
-    case 'top-right':
-      x = frameWidth - width - margin;
-      y = margin;
-      break;
-    case 'bottom-left':
-      x = margin;
-      y = frameHeight - height - margin;
-      break;
-    case 'bottom-right':
-      x = frameWidth - width - margin;
-      y = frameHeight - height - margin;
-      break;
-    case 'top-left':
-    default:
-      x = margin;
-      y = margin;
-      break;
-  }
-
-  x = clamp(Math.round(x), 0, Math.max(0, frameWidth - width));
-  y = clamp(Math.round(y), 0, Math.max(0, frameHeight - height));
+  const position = resolveAnchoredPosition(
+    webcamConfig.anchor,
+    width,
+    height,
+    frameWidth,
+    frameHeight,
+    margin,
+  );
 
   return {
-    x,
-    y,
+    x: position.x,
+    y: position.y,
     width,
     height,
     scale: height / Math.max(1, frameHeight),

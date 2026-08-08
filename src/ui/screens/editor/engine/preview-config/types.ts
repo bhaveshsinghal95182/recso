@@ -12,6 +12,8 @@ export type CanvasSize = {
 export interface EnginePreviewMappedConfig {
   canvasSize: CanvasSize;
   layout: CompositionLayout;
+  /** Webcam overlay rect in canvas coordinates, or null when the overlay is off. */
+  webcamLayout: CompositionLayout | null;
   durationMs: number;
   compositionConfig: CompositionConfig;
   videoSrc: string;
