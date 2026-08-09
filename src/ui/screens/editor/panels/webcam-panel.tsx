@@ -1,28 +1,64 @@
+/**
+ * WebcamPanel
+ *
+ * Everything about the webcam lives here, including the per-region controls that
+ * used to sit in the zoom panel. A webcam zoom region only ever expresses one
+ * thing — how big the webcam is while it runs — but the data model offers three
+ * overlapping ways to say it (zoomLevel, webcamHeightRatio, webcamFullScreen).
+ * The mode picker below makes them exclusive so they can no longer contradict
+ * each other:
+ *
+ *   Grow  -> webcamHeightRatio cleared, size derives from zoomLevel
+ *   Exact -> webcamHeightRatio set, zoomLevel ignored for sizing
+ *   Fill  -> webcamFullScreen, everything else ignored
+ */
+
 import { Dialog } from '@base-ui/react/dialog';
 import {
   Camera,
   Circle,
   Copy,
   Loader2,
-  Maximize2,
-  Minimize2,
   QrCode,
   RectangleHorizontal,
   RectangleVertical,
-  SlidersHorizontal,
   Smartphone,
   Square,
+  VideoOff,
   X,
 } from 'lucide-react';
-import { type ComponentType, useEffect, useMemo, useState } from 'react';
+import { type ComponentType, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
+import { cn } from '@/lib/utils';
+import { getAnchorLabel, WEBCAM_ANCHORS } from '@/screens/editor/engine/webcam-anchor';
 import { useProjectStore } from '@/store/project-store';
-import type { RemoteCameraState, WebcamOverlayShape, WebcamOverlaySize } from '@/types';
+import { useTimelineStore } from '@/store/timeline-store';
+import type {
+  RemoteCameraState,
+  WebcamOverlayAnchor,
+  WebcamOverlayShape,
+  WebcamOverlaySize,
+  ZoomRegion,
+} from '@/types';
 
+import {
+  OptionGrid,
+  OptionTile,
+  PANEL_LABEL,
+  PanelButton,
+  PanelEmpty,
+  PanelNote,
+  PanelRow,
+  PanelSection,
+  PanelSlider,
+  Segmented,
+} from './panel-kit';
+
+const DEFAULT_WEBCAM_ANCHOR: WebcamOverlayAnchor = 'bottom-right';
 const DEFAULT_WEBCAM_SIZE: WebcamOverlaySize = 'medium';
 const DEFAULT_WEBCAM_ASPECT_RATIO = 3 / 4;
 const DEFAULT_WEBCAM_HEIGHT_RATIO = 0.34;
@@ -30,30 +66,37 @@ const DEFAULT_WEBCAM_BORDER_RADIUS_PX = 24;
 
 const MIN_ASPECT_RATIO = 0.2;
 const MAX_ASPECT_RATIO = 5;
-const MIN_SIZE_PERCENT = 8;
-const MAX_SIZE_PERCENT = 75;
+const MIN_HEIGHT_RATIO = 0.08;
+const MAX_HEIGHT_RATIO = 0.75;
 
 type WebcamSizeOption = WebcamOverlaySize | 'custom';
+/** How a webcam zoom region decides the webcam's size while it runs. */
+type RegionSizeMode = 'grow' | 'exact' | 'fill';
 
 interface IconOption<T extends string> {
   value: T;
   label: string;
   Icon: ComponentType<{ className?: string }>;
-  iconClassName?: string;
 }
 
 const SHAPE_OPTIONS: IconOption<WebcamOverlayShape>[] = [
   { value: 'circle', label: 'Circle', Icon: Circle },
-  { value: 'rectangle-landscape', label: 'Landscape', Icon: RectangleHorizontal },
-  { value: 'rectangle-portrait', label: 'Portrait', Icon: RectangleVertical },
+  { value: 'rectangle-landscape', label: 'Wide', Icon: RectangleHorizontal },
+  { value: 'rectangle-portrait', label: 'Tall', Icon: RectangleVertical },
   { value: 'square', label: 'Square', Icon: Square },
 ];
 
-const SIZE_OPTIONS: IconOption<WebcamSizeOption>[] = [
-  { value: 'small', label: 'Small', Icon: Minimize2 },
-  { value: 'medium', label: 'Medium', Icon: Square, iconClassName: 'h-3.5 w-3.5' },
-  { value: 'large', label: 'Large', Icon: Maximize2 },
-  { value: 'custom', label: 'Custom', Icon: SlidersHorizontal },
+const SIZE_OPTIONS: { value: WebcamSizeOption; label: string }[] = [
+  { value: 'small', label: 'Small' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'large', label: 'Large' },
+  { value: 'custom', label: 'Custom' },
+];
+
+const REGION_MODE_OPTIONS: { value: RegionSizeMode; label: string; hint: string }[] = [
+  { value: 'grow', label: 'Grow', hint: 'Scale the webcam by the zoom level' },
+  { value: 'exact', label: 'Exact', hint: 'Pin the webcam to a specific size' },
+  { value: 'fill', label: 'Fill frame', hint: 'Webcam takes over the whole canvas' },
 ];
 
 const SHAPE_ASPECT_RATIO: Record<WebcamOverlayShape, number> = {
@@ -171,6 +214,36 @@ function shapeFromAspectRatio(aspectRatio: number): WebcamOverlayShape {
   return aspectRatio > 1.05 ? 'rectangle-landscape' : 'rectangle-portrait';
 }
 
+/** Which of the three exclusive sizing modes a region is currently in. */
+function resolveRegionSizeMode(region: ZoomRegion | undefined): RegionSizeMode {
+  if (!region) {
+    return 'grow';
+  }
+
+  if (region.webcamFullScreen === true) {
+    return 'fill';
+  }
+
+  return Number.isFinite(region.webcamHeightRatio) ? 'exact' : 'grow';
+}
+
+/** The size a region resolves to, mirroring computeActiveWebcamHeightRatio. */
+function resolveRegionHeightRatio(region: ZoomRegion | undefined, baseHeightRatio: number): number {
+  if (!region) {
+    return clamp(baseHeightRatio, MIN_HEIGHT_RATIO, MAX_HEIGHT_RATIO);
+  }
+
+  if (Number.isFinite(region.webcamHeightRatio)) {
+    return clamp(region.webcamHeightRatio as number, MIN_HEIGHT_RATIO, MAX_HEIGHT_RATIO);
+  }
+
+  return clamp(
+    baseHeightRatio * Math.max(0.1, region.zoomLevel),
+    MIN_HEIGHT_RATIO,
+    MAX_HEIGHT_RATIO,
+  );
+}
+
 /**
  * The phone-as-webcam flow is UI-only for now: there is no signalling service, no
  * WebRTC transport and no IPC behind it (see
@@ -224,44 +297,6 @@ function formatExpiryLabel(expiresAt?: number): string | null {
   return `Expires in ${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
-function IconPillOption({
-  label,
-  Icon,
-  iconClassName,
-  showLabel = true,
-  active,
-  disabled,
-  onClick,
-}: {
-  label: string;
-  Icon: ComponentType<{ className?: string }>;
-  iconClassName?: string;
-  showLabel?: boolean;
-  active: boolean;
-  disabled?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      disabled={disabled}
-      onClick={onClick}
-      className={`inline-flex items-center rounded-full border py-1.5 text-xs transition-colors ${
-        showLabel ? 'gap-2 px-3' : 'justify-center px-2.5'
-      } ${
-        active
-          ? 'bg-primary text-primary-foreground shadow-sm'
-          : 'bg-background/90 text-foreground/65 hover:border-primary/65 hover:bg-primary/10'
-      } ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
-    >
-      <Icon className={iconClassName ?? 'h-3.5 w-3.5'} />
-      {showLabel && <span className="font-medium leading-none">{label}</span>}
-    </button>
-  );
-}
-
 export function WebcamPanel() {
   const {
     project,
@@ -270,46 +305,46 @@ export function WebcamPanel() {
     startRemoteCameraPairing,
     cancelRemoteCameraPairing,
   } = useProjectStore();
+  const { zoomRegionsBySource, selectedZoomId, updateZoom, updateZoomRegions } = useTimelineStore();
 
   const [ratioWidthInput, setRatioWidthInput] = useState('3');
   const [ratioHeightInput, setRatioHeightInput] = useState('4');
-  const [sizePercentInput, setSizePercentInput] = useState('34');
   const [showCustomSettings, setShowCustomSettings] = useState(false);
   const [validationMessage, setValidationMessage] = useState<string | null>(null);
   const [pairingOpen, setPairingOpen] = useState(false);
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
+  const [localRegionZoom, setLocalRegionZoom] = useState(1.5);
+  const [localRegionSize, setLocalRegionSize] = useState(DEFAULT_WEBCAM_HEIGHT_RATIO);
+  const regionDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  if (!project) {
-    return null;
-  }
-
-  const webcamSourcePath = project.webcamOverlay?.sourcePath;
-  const canEditWebcam = Boolean(webcamSourcePath);
-  const isWebcamEnabled = Boolean(project.webcamOverlay?.enabled && canEditWebcam);
+  const webcamRegions = zoomRegionsBySource.webcam;
+  const selectedRegion = webcamRegions.find((region) => region.id === selectedZoomId);
 
   const currentAspectRatio = useMemo(() => {
-    const value = project.webcamOverlay?.aspectRatio;
+    const value = project?.webcamOverlay?.aspectRatio;
     return Number.isFinite(value) && (value as number) > 0
       ? (value as number)
       : DEFAULT_WEBCAM_ASPECT_RATIO;
-  }, [project.webcamOverlay?.aspectRatio]);
+  }, [project?.webcamOverlay?.aspectRatio]);
 
   const currentHeightRatio = useMemo(() => {
-    const value = project.webcamOverlay?.heightRatio;
+    const value = project?.webcamOverlay?.heightRatio;
     return Number.isFinite(value) && (value as number) > 0
       ? (value as number)
       : DEFAULT_WEBCAM_HEIGHT_RATIO;
-  }, [project.webcamOverlay?.heightRatio]);
+  }, [project?.webcamOverlay?.heightRatio]);
 
   const currentShape = useMemo(
-    () => resolveWebcamShape(project.webcamOverlay?.shape, currentAspectRatio),
-    [currentAspectRatio, project.webcamOverlay?.shape],
+    () => resolveWebcamShape(project?.webcamOverlay?.shape, currentAspectRatio),
+    [currentAspectRatio, project?.webcamOverlay?.shape],
   );
 
   const currentSizeOption = useMemo(
-    () => resolveWebcamSizeOption(project.webcamOverlay?.size, currentHeightRatio),
-    [currentHeightRatio, project.webcamOverlay?.size],
+    () => resolveWebcamSizeOption(project?.webcamOverlay?.size, currentHeightRatio),
+    [currentHeightRatio, project?.webcamOverlay?.size],
   );
+
+  const regionMode = resolveRegionSizeMode(selectedRegion);
 
   useEffect(() => {
     const parts = ratioToParts(currentAspectRatio);
@@ -318,8 +353,17 @@ export function WebcamPanel() {
   }, [currentAspectRatio]);
 
   useEffect(() => {
-    setSizePercentInput((currentHeightRatio * 100).toFixed(1));
-  }, [currentHeightRatio]);
+    if (selectedRegion) {
+      setLocalRegionZoom(selectedRegion.zoomLevel);
+      setLocalRegionSize(resolveRegionHeightRatio(selectedRegion, currentHeightRatio));
+    }
+  }, [
+    selectedRegion?.id,
+    selectedRegion?.zoomLevel,
+    selectedRegion?.webcamHeightRatio,
+    selectedRegion?.webcamFullScreen,
+    currentHeightRatio,
+  ]);
 
   useEffect(() => {
     if (remoteCamera.status === 'pairing' || remoteCamera.status === 'connecting') {
@@ -332,12 +376,109 @@ export function WebcamPanel() {
     }
   }, [remoteCamera.status]);
 
+  useEffect(() => {
+    return () => {
+      if (regionDebounceRef.current) {
+        clearTimeout(regionDebounceRef.current);
+      }
+    };
+  }, []);
+
+  const commitRegion = useCallback(
+    (patch: Partial<ZoomRegion>, immediate = false) => {
+      if (!selectedRegion) {
+        return;
+      }
+
+      const next = { ...selectedRegion, ...patch };
+
+      if (regionDebounceRef.current) {
+        clearTimeout(regionDebounceRef.current);
+        regionDebounceRef.current = null;
+      }
+
+      if (immediate) {
+        void updateZoom(next, 'webcam');
+        return;
+      }
+
+      regionDebounceRef.current = setTimeout(() => {
+        void updateZoom(next, 'webcam');
+      }, 150);
+    },
+    [selectedRegion, updateZoom],
+  );
+
+  const handleRegionModeChange = useCallback(
+    (mode: RegionSizeMode) => {
+      if (!selectedRegion) {
+        return;
+      }
+
+      // Each mode owns exactly one field; the others are cleared so the engine
+      // cannot fall back to a stale value the UI is no longer showing.
+      if (mode === 'fill') {
+        commitRegion({ webcamFullScreen: true }, true);
+        return;
+      }
+
+      if (mode === 'exact') {
+        commitRegion(
+          {
+            webcamFullScreen: false,
+            webcamHeightRatio: resolveRegionHeightRatio(selectedRegion, currentHeightRatio),
+          },
+          true,
+        );
+        return;
+      }
+
+      commitRegion({ webcamFullScreen: false, webcamHeightRatio: undefined }, true);
+    },
+    [commitRegion, currentHeightRatio, selectedRegion],
+  );
+
+  const handleApplyRegionToAll = useCallback(() => {
+    if (!selectedRegion || webcamRegions.length <= 1) {
+      return;
+    }
+
+    const updated = webcamRegions
+      .filter((region) => region.id !== selectedRegion.id)
+      .map((region) => ({
+        ...region,
+        zoomLevel: selectedRegion.zoomLevel,
+        webcamHeightRatio: selectedRegion.webcamHeightRatio,
+        webcamFullScreen: selectedRegion.webcamFullScreen,
+      }));
+
+    void updateZoomRegions(updated, 'webcam');
+  }, [selectedRegion, updateZoomRegions, webcamRegions]);
+
+  if (!project) {
+    return null;
+  }
+
+  const webcamSourcePath = project.webcamOverlay?.sourcePath;
+  const canEditWebcam = Boolean(webcamSourcePath);
+  const isWebcamEnabled = Boolean(project.webcamOverlay?.enabled && canEditWebcam);
+  const currentAnchor = project.webcamOverlay?.anchor ?? DEFAULT_WEBCAM_ANCHOR;
+
   const handleWebcamToggle = (checked: boolean) => {
     if (!canEditWebcam) {
       return;
     }
 
     void updateWebcamOverlay({ enabled: checked });
+  };
+
+  const handleAnchorChange = (value: WebcamOverlayAnchor) => {
+    if (!canEditWebcam) {
+      return;
+    }
+
+    setValidationMessage(null);
+    void updateWebcamOverlay({ anchor: value });
   };
 
   const handleShapePresetChange = (value: WebcamOverlayShape) => {
@@ -373,6 +514,17 @@ export function WebcamPanel() {
     });
   };
 
+  const handleCustomSizeChange = (percent: number) => {
+    if (!canEditWebcam) {
+      return;
+    }
+
+    void updateWebcamOverlay({
+      size: undefined,
+      heightRatio: clamp(percent / 100, MIN_HEIGHT_RATIO, MAX_HEIGHT_RATIO),
+    });
+  };
+
   const applyCustomAspectRatio = () => {
     if (!canEditWebcam) {
       return;
@@ -392,34 +544,12 @@ export function WebcamPanel() {
     }
 
     const nextAspectRatio = clamp(widthPart / heightPart, MIN_ASPECT_RATIO, MAX_ASPECT_RATIO);
-    const nextShape = shapeFromAspectRatio(nextAspectRatio);
 
     setValidationMessage(null);
     void updateWebcamOverlay({
-      shape: nextShape,
+      shape: shapeFromAspectRatio(nextAspectRatio),
       aspectRatio: nextAspectRatio,
       borderRadiusPx: DEFAULT_WEBCAM_BORDER_RADIUS_PX,
-    });
-  };
-
-  const applyCustomSize = () => {
-    if (!canEditWebcam) {
-      return;
-    }
-
-    const sizePercent = Number(sizePercentInput);
-    if (!Number.isFinite(sizePercent) || sizePercent <= 0) {
-      setValidationMessage('Size must be a number greater than zero.');
-      return;
-    }
-
-    const clampedPercent = clamp(sizePercent, MIN_SIZE_PERCENT, MAX_SIZE_PERCENT);
-    const nextHeightRatio = clampedPercent / 100;
-
-    setValidationMessage(null);
-    void updateWebcamOverlay({
-      size: undefined,
-      heightRatio: nextHeightRatio,
     });
   };
 
@@ -429,20 +559,18 @@ export function WebcamPanel() {
   const remoteStatusLabel = resolveRemoteCameraStatusLabel(remoteCamera);
   const remoteExpiryLabel = formatExpiryLabel(remoteCamera.expiresAt);
 
-  const handleStartPairing = async () => {
-    await startRemoteCameraPairing();
-    setPairingOpen(true);
+  const handleStartPairing = () => {
+    void startRemoteCameraPairing();
   };
 
   const handleCancelPairing = () => {
-    cancelRemoteCameraPairing();
-    setPairingOpen(false);
+    void cancelRemoteCameraPairing();
   };
 
   const handlePairingOpenChange = (open: boolean) => {
     setPairingOpen(open);
     if (!open && isPairing) {
-      cancelRemoteCameraPairing();
+      void cancelRemoteCameraPairing();
     }
   };
 
@@ -464,59 +592,242 @@ export function WebcamPanel() {
   const copyLabel =
     copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Copy failed' : 'Copy link';
 
-  const remoteToneClasses =
-    remoteTone === 'active'
-      ? 'text-emerald-500 bg-emerald-500/10'
-      : remoteTone === 'error'
-        ? 'text-destructive bg-destructive/10'
-        : 'text-muted-foreground bg-muted/60';
+  if (!canEditWebcam) {
+    return (
+      <PanelEmpty
+        Icon={VideoOff}
+        title="No webcam recorded"
+        hint="This project has no webcam track, so there is nothing to overlay."
+      />
+    );
+  }
 
   return (
-    <div className="space-y-4">
-      {SHOW_REMOTE_CAMERA && (
-        <div className="rounded-xl border border-border/70 bg-background px-3 py-3">
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex items-center gap-2.5">
-              <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-primary/15 text-primary">
-                <Smartphone className="h-4 w-4" />
-              </span>
-              <div>
-                <label className="text-sm font-medium">Phone as Webcam</label>
-                <p className="text-xs text-muted-foreground">
-                  Use your phone camera as a webcam overlay.
-                </p>
-              </div>
-            </div>
+    <>
+      <PanelRow
+        label="Webcam overlay"
+        hint={isWebcamEnabled ? 'Shown on the canvas' : 'Hidden from the canvas'}
+        control={<Switch checked={isWebcamEnabled} onCheckedChange={handleWebcamToggle} />}
+      />
 
-            <span
-              className={`inline-flex items-center rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${remoteToneClasses}`}
+      {isWebcamEnabled && (
+        <>
+          <PanelSection
+            title="Position"
+            action={<span className={PANEL_LABEL}>{getAnchorLabel(currentAnchor)}</span>}
+          >
+            {/* The frame stands in for the video; each dot is a placement slot. */}
+            <div
+              className="grid aspect-video w-full grid-cols-3 grid-rows-3 rounded-[12px] border border-white/[0.07] bg-black/30 p-1.5"
+              role="radiogroup"
+              aria-label="Webcam position"
             >
-              {remoteStatusLabel}
-            </span>
-          </div>
+              {WEBCAM_ANCHORS.map((anchorOption) => {
+                const isActive = currentAnchor === anchorOption;
 
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <Button size="sm" onClick={handleStartPairing} disabled={isPairing || isConnected}>
-              {isConnected ? 'Connected' : 'Use phone'}
-            </Button>
+                return (
+                  <button
+                    key={anchorOption}
+                    type="button"
+                    role="radio"
+                    aria-checked={isActive}
+                    aria-label={getAnchorLabel(anchorOption)}
+                    title={getAnchorLabel(anchorOption)}
+                    className="group grid cursor-pointer place-items-center rounded-[8px] transition-colors hover:bg-white/[0.06]"
+                    onClick={() => handleAnchorChange(anchorOption)}
+                  >
+                    <span
+                      className={cn(
+                        'rounded-full transition-all duration-150',
+                        isActive
+                          ? 'size-2.5 bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]'
+                          : 'size-1.5 bg-white/25 group-hover:bg-white/60',
+                      )}
+                    />
+                  </button>
+                );
+              })}
+            </div>
+          </PanelSection>
 
-            {isPairing && (
-              <Button size="sm" variant="outline" onClick={handleCancelPairing}>
-                Cancel
-              </Button>
+          <PanelSection title="Shape">
+            <OptionGrid columns={4}>
+              {SHAPE_OPTIONS.map((option) => (
+                <OptionTile
+                  key={option.value}
+                  label={option.label}
+                  Icon={option.Icon}
+                  active={currentShape === option.value}
+                  onClick={() => handleShapePresetChange(option.value)}
+                />
+              ))}
+            </OptionGrid>
+          </PanelSection>
+
+          <PanelSection title="Size">
+            <Segmented
+              options={SIZE_OPTIONS}
+              value={showCustomSettings ? 'custom' : currentSizeOption}
+              onChange={handleSizePresetChange}
+            />
+
+            {(showCustomSettings || currentSizeOption === 'custom') && (
+              <div className="space-y-3 rounded-[14px] border border-white/[0.07] bg-white/[0.025] p-3">
+                <PanelSlider
+                  label="Height"
+                  value={Math.round(currentHeightRatio * 100)}
+                  min={MIN_HEIGHT_RATIO * 100}
+                  max={MAX_HEIGHT_RATIO * 100}
+                  step={1}
+                  onChange={handleCustomSizeChange}
+                  format={(value) => `${Math.round(value)}% of canvas`}
+                />
+
+                <div className="space-y-1.5">
+                  <span className={cn(PANEL_LABEL, 'block')}>Aspect ratio</span>
+                  <div className="grid grid-cols-[1fr_auto_1fr_auto] items-center gap-2">
+                    <Input
+                      value={ratioWidthInput}
+                      onChange={(event) => setRatioWidthInput(event.target.value)}
+                      className="h-8 text-xs"
+                      inputMode="decimal"
+                      placeholder="Width"
+                      aria-label="Aspect ratio width"
+                    />
+                    <span className="text-xs text-white/35">:</span>
+                    <Input
+                      value={ratioHeightInput}
+                      onChange={(event) => setRatioHeightInput(event.target.value)}
+                      className="h-8 text-xs"
+                      inputMode="decimal"
+                      placeholder="Height"
+                      aria-label="Aspect ratio height"
+                    />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 px-3 text-xs"
+                      onClick={applyCustomAspectRatio}
+                    >
+                      Apply
+                    </Button>
+                  </div>
+                </div>
+
+                {validationMessage && (
+                  <p className="text-[11px] text-red-300">{validationMessage}</p>
+                )}
+              </div>
             )}
 
-            {isConnected && (
-              <Button size="sm" variant="outline" onClick={handleCancelPairing}>
-                Disconnect
-              </Button>
-            )}
-          </div>
+            <PanelNote>Drag the grip on the preview to resize the webcam directly.</PanelNote>
+          </PanelSection>
 
-          {remoteCamera.error && (
-            <p className="mt-2 text-xs text-destructive">{remoteCamera.error}</p>
-          )}
-        </div>
+          <PanelSection
+            title="Webcam region"
+            action={
+              webcamRegions.length > 0 ? (
+                <span className={PANEL_LABEL}>{webcamRegions.length} on timeline</span>
+              ) : undefined
+            }
+          >
+            {selectedRegion ? (
+              <>
+                <Segmented
+                  options={REGION_MODE_OPTIONS}
+                  value={regionMode}
+                  onChange={handleRegionModeChange}
+                />
+
+                {regionMode === 'grow' && (
+                  <PanelSlider
+                    label="Zoom level"
+                    value={localRegionZoom}
+                    min={1}
+                    max={5}
+                    step={0.1}
+                    onChange={(value) => {
+                      setLocalRegionZoom(value);
+                      commitRegion({ zoomLevel: value });
+                    }}
+                    format={(value) => `${value.toFixed(1)}x`}
+                    hint={`Webcam reaches ${Math.round(
+                      clamp(
+                        currentHeightRatio * Math.max(0.1, localRegionZoom),
+                        MIN_HEIGHT_RATIO,
+                        MAX_HEIGHT_RATIO,
+                      ) * 100,
+                    )}% of canvas height.`}
+                  />
+                )}
+
+                {regionMode === 'exact' && (
+                  <PanelSlider
+                    label="Webcam height"
+                    value={Math.round(localRegionSize * 100)}
+                    min={MIN_HEIGHT_RATIO * 100}
+                    max={MAX_HEIGHT_RATIO * 100}
+                    step={1}
+                    onChange={(value) => {
+                      const ratio = clamp(value / 100, MIN_HEIGHT_RATIO, MAX_HEIGHT_RATIO);
+                      setLocalRegionSize(ratio);
+                      commitRegion({ webcamHeightRatio: ratio });
+                    }}
+                    format={(value) => `${Math.round(value)}% of canvas`}
+                  />
+                )}
+
+                {regionMode === 'fill' && (
+                  <PanelNote>
+                    The webcam eases up to cover the whole canvas for this region, then back down.
+                  </PanelNote>
+                )}
+
+                {webcamRegions.length > 1 && (
+                  <PanelButton onClick={handleApplyRegionToAll}>
+                    Apply to all {webcamRegions.length} regions
+                  </PanelButton>
+                )}
+              </>
+            ) : (
+              <PanelEmpty
+                Icon={Camera}
+                title="No webcam region selected"
+                hint="Double-click the webcam zoom lane on the timeline to add one."
+              />
+            )}
+          </PanelSection>
+        </>
+      )}
+
+      {SHOW_REMOTE_CAMERA && (
+        <PanelSection title="Phone as webcam">
+          <PanelRow
+            label="Use your phone"
+            hint={remoteStatusLabel}
+            control={
+              <div className="flex items-center gap-2">
+                <span
+                  className={cn(
+                    'rounded-full px-2 py-1 text-[10px] font-[750] uppercase tracking-wide',
+                    remoteTone === 'active'
+                      ? 'bg-emerald-400/15 text-emerald-300'
+                      : remoteTone === 'error'
+                        ? 'bg-red-500/15 text-red-300'
+                        : 'bg-white/[0.06] text-white/45',
+                  )}
+                >
+                  {remoteStatusLabel}
+                </span>
+                <Button size="sm" onClick={handleStartPairing} disabled={isPairing || isConnected}>
+                  <Smartphone className="size-3.5" />
+                  {isConnected ? 'Connected' : 'Pair'}
+                </Button>
+              </div>
+            }
+          />
+          {remoteCamera.error && <p className="text-[11px] text-red-300">{remoteCamera.error}</p>}
+        </PanelSection>
       )}
 
       {SHOW_REMOTE_CAMERA && (
@@ -598,148 +909,6 @@ export function WebcamPanel() {
           </Dialog.Portal>
         </Dialog.Root>
       )}
-
-      <div className="rounded-xl border border-border/70 bg-background px-3 py-2.5">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
-            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-primary/15 text-primary">
-              <Camera className="h-4 w-4" />
-            </span>
-
-            <div>
-              <label className="text-sm font-medium">Webcam Overlay</label>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <span
-              className={`text-[10px] font-semibold uppercase tracking-wide ${
-                isWebcamEnabled ? 'text-emerald-500' : 'text-muted-foreground'
-              }`}
-            >
-              {isWebcamEnabled ? 'On' : 'Off'}
-            </span>
-            <Switch
-              checked={isWebcamEnabled}
-              onCheckedChange={handleWebcamToggle}
-              disabled={!canEditWebcam}
-            />
-          </div>
-        </div>
-      </div>
-
-      {canEditWebcam && (
-        <>
-          <div className="space-y-2">
-            <Label className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              Shape
-            </Label>
-
-            <div className="flex flex-wrap gap-2">
-              {SHAPE_OPTIONS.map((option) => (
-                <IconPillOption
-                  key={option.value}
-                  label={option.label}
-                  Icon={option.Icon}
-                  iconClassName={option.iconClassName}
-                  showLabel={false}
-                  active={currentShape === option.value}
-                  disabled={!canEditWebcam}
-                  onClick={() => handleShapePresetChange(option.value)}
-                />
-              ))}
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <Label className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              Size
-            </Label>
-
-            <div className="flex flex-wrap gap-2">
-              {SIZE_OPTIONS.map((option) => (
-                <IconPillOption
-                  key={option.value}
-                  label={option.label}
-                  Icon={option.Icon}
-                  iconClassName={option.iconClassName}
-                  active={
-                    option.value === 'custom'
-                      ? showCustomSettings
-                      : !showCustomSettings && currentSizeOption === option.value
-                  }
-                  disabled={!canEditWebcam}
-                  onClick={() => handleSizePresetChange(option.value)}
-                />
-              ))}
-            </div>
-          </div>
-
-          {showCustomSettings && (
-            <div className="space-y-2 border-t border-border/60 pt-3">
-              <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                <RectangleHorizontal className="h-3.5 w-3.5" />
-                Custom Aspect Ratio (W:H)
-              </div>
-
-              <div className="grid grid-cols-[1fr_auto_1fr_auto] items-center gap-2">
-                <Input
-                  value={ratioWidthInput}
-                  onChange={(e) => setRatioWidthInput(e.target.value)}
-                  className="h-8 text-xs"
-                  inputMode="decimal"
-                  placeholder="Width"
-                />
-                <span className="text-xs text-muted-foreground">:</span>
-                <Input
-                  value={ratioHeightInput}
-                  onChange={(e) => setRatioHeightInput(e.target.value)}
-                  className="h-8 text-xs"
-                  inputMode="decimal"
-                  placeholder="Height"
-                />
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-8 px-3 text-xs"
-                  onClick={applyCustomAspectRatio}
-                >
-                  Apply
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {showCustomSettings && (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                <SlidersHorizontal className="h-3.5 w-3.5" />
-                Custom Size (% of canvas height)
-              </div>
-
-              <div className="grid grid-cols-[1fr_auto] items-center gap-2">
-                <Input
-                  value={sizePercentInput}
-                  onChange={(e) => setSizePercentInput(e.target.value)}
-                  className="h-8 text-xs"
-                  inputMode="decimal"
-                  placeholder="34"
-                />
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-8 px-3 text-xs"
-                  onClick={applyCustomSize}
-                >
-                  Apply
-                </Button>
-              </div>
-
-              {validationMessage && <p className="text-xs text-destructive">{validationMessage}</p>}
-            </div>
-          )}
-        </>
-      )}
-    </div>
+    </>
   );
 }

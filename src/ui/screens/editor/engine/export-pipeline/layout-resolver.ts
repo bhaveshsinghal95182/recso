@@ -1,6 +1,7 @@
 import type { Project } from '@/types';
 
 import type { CompositionLayout } from '../types';
+import { resolveAnchoredPosition } from '../webcam-anchor';
 import { clamp, DEFAULT_LAYOUT_CONFIG, DEFAULT_WEBCAM_STYLE } from './defaults';
 
 function calculateFallbackLayout(
@@ -91,32 +92,18 @@ function calculateFallbackWebcamLayout(
     width = Math.max(1, Math.round(height * aspectRatio));
   }
 
-  const anchor = webcamOverlay?.anchor ?? DEFAULT_WEBCAM_STYLE.anchor;
-  let x = marginPx;
-  let y = marginPx;
-  switch (anchor) {
-    case 'top-right':
-      x = canvasWidth - width - marginPx;
-      y = marginPx;
-      break;
-    case 'bottom-left':
-      x = marginPx;
-      y = canvasHeight - height - marginPx;
-      break;
-    case 'bottom-right':
-      x = canvasWidth - width - marginPx;
-      y = canvasHeight - height - marginPx;
-      break;
-    case 'top-left':
-    default:
-      x = marginPx;
-      y = marginPx;
-      break;
-  }
+  const position = resolveAnchoredPosition(
+    webcamOverlay?.anchor ?? DEFAULT_WEBCAM_STYLE.anchor,
+    width,
+    height,
+    canvasWidth,
+    canvasHeight,
+    marginPx,
+  );
 
   return {
-    x: clamp(Math.round(x), 0, Math.max(0, canvasWidth - width)),
-    y: clamp(Math.round(y), 0, Math.max(0, canvasHeight - height)),
+    x: position.x,
+    y: position.y,
     width,
     height,
     scale: height / Math.max(1, canvasHeight),

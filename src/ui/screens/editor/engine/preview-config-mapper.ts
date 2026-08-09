@@ -198,6 +198,7 @@ export function useEnginePreviewConfigMapper(
   return {
     canvasSize,
     layout,
+    webcamLayout,
     durationMs,
     compositionConfig,
     videoSrc: previewAssets.videoSrc,

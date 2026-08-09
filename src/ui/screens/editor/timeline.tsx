@@ -1,232 +1,37 @@
 /**
  * Timeline Component
  *
- * Displays a ruler with time markers based on video duration,
- * a draggable playhead, and a track area for video/cuts.
+ * A ruler with time markers, a draggable playhead, and a stack of lanes.
+ * Every lane renders at the same height and shares one neutral surface, so the
+ * timeline reads as a single object instead of a pile of colour-coded tracks.
  */
 
+import { MousePointer2, Scissors, Video, ZoomIn } from 'lucide-react';
+import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
+import { cn } from '@/lib/utils';
 import { deriveCursorTimelineRegions } from '@/screens/editor/cursor-timeline-regions';
-import { type RegionVariant, TimelineRegion } from '@/screens/editor/timeline-region';
+import {
+  regionAccentText,
+  type RegionVariant,
+  TimelineRegion,
+} from '@/screens/editor/timeline-region';
+import { TimelineWaveform } from '@/screens/editor/timeline-waveform';
 import { usePlaybackStore } from '@/store/playback-store';
 import { useProjectStore } from '@/store/project-store';
 import { useTimelineStore } from '@/store/timeline-store';
 import { useUIStore } from '@/store/ui-store';
 import type { CutRegion, ZoomSource } from '@/types';
 
-const WAVEFORM_PEAK_COUNT = 2048;
-const waveformPeakCache = new Map<string, Promise<Float32Array>>();
+/** Width of the fixed label column that fronts the ruler and every lane. */
+const LANE_GUTTER_PX = 112;
+/** Standard height shared by every lane, in every filter. */
+const LANE_HEIGHT_PX = 44;
+const LANE_GAP_PX = 6;
 
-function toFileUrl(path: string): string {
-  if (path.startsWith('file:')) {
-    return path;
-  }
-
-  const normalized = path.replace(/\\/g, '/');
-  if (/^[a-zA-Z]:\//.test(normalized)) {
-    return `file:///${encodeURI(normalized)}`;
-  }
-
-  if (normalized.startsWith('/')) {
-    return `file://${encodeURI(normalized)}`;
-  }
-
-  return normalized;
-}
-
-function extractWaveformPeaks(audioBuffer: AudioBuffer, targetCount: number): Float32Array {
-  const channelData = Array.from({ length: audioBuffer.numberOfChannels }, (_, index) =>
-    audioBuffer.getChannelData(index),
-  );
-  const peakCount = Math.max(64, targetCount);
-  const totalSamples = audioBuffer.length;
-  const samplesPerPeak = Math.max(1, Math.floor(totalSamples / peakCount));
-  const peaks = new Float32Array(peakCount);
-  let maxPeak = 0;
-
-  for (let peakIndex = 0; peakIndex < peakCount; peakIndex += 1) {
-    const start = peakIndex * samplesPerPeak;
-    const end =
-      peakIndex === peakCount - 1 ? totalSamples : Math.min(totalSamples, start + samplesPerPeak);
-    const span = Math.max(1, end - start);
-    const stride = Math.max(1, Math.floor(span / 128));
-    let localPeak = 0;
-
-    for (const channel of channelData) {
-      for (let sampleIndex = start; sampleIndex < end; sampleIndex += stride) {
-        const amplitude = Math.abs(channel[sampleIndex] ?? 0);
-        if (amplitude > localPeak) {
-          localPeak = amplitude;
-        }
-      }
-    }
-
-    peaks[peakIndex] = localPeak;
-    if (localPeak > maxPeak) {
-      maxPeak = localPeak;
-    }
-  }
-
-  if (maxPeak > 0) {
-    for (let index = 0; index < peaks.length; index += 1) {
-      peaks[index] /= maxPeak;
-    }
-  }
-
-  return peaks;
-}
-
-async function loadWaveformPeaks(videoPath: string): Promise<Float32Array> {
-  const cached = waveformPeakCache.get(videoPath);
-  if (cached) {
-    return cached;
-  }
-
-  const pending = (async () => {
-    const sourceUrl = toFileUrl(videoPath);
-    const response = await fetch(sourceUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to read media for waveform (${response.status})`);
-    }
-
-    const bytes = await response.arrayBuffer();
-    const audioContext = new AudioContext();
-    try {
-      const decoded = await audioContext.decodeAudioData(bytes.slice(0));
-      return extractWaveformPeaks(decoded, WAVEFORM_PEAK_COUNT);
-    } finally {
-      await audioContext.close().catch(() => {
-        // Best-effort cleanup.
-      });
-    }
-  })();
-
-  waveformPeakCache.set(videoPath, pending);
-
-  try {
-    return await pending;
-  } catch (error) {
-    waveformPeakCache.delete(videoPath);
-    throw error;
-  }
-}
-
-interface TimelineWaveformProps {
-  videoPath: string | null;
-}
-
-function TimelineWaveform({ videoPath }: TimelineWaveformProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [peaks, setPeaks] = useState<Float32Array | null>(null);
-
-  useEffect(() => {
-    if (!videoPath) {
-      setPeaks(null);
-      return;
-    }
-
-    let cancelled = false;
-
-    void loadWaveformPeaks(videoPath)
-      .then((nextPeaks) => {
-        if (!cancelled) {
-          setPeaks(nextPeaks);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setPeaks(null);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [videoPath]);
-
-  const drawWaveform = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) {
-      return;
-    }
-
-    const rect = canvas.getBoundingClientRect();
-    const cssWidth = Math.max(1, Math.floor(rect.width));
-    const cssHeight = Math.max(1, Math.floor(rect.height));
-    const dpr = Math.max(1, window.devicePixelRatio || 1);
-    const bufferWidth = Math.max(1, Math.floor(cssWidth * dpr));
-    const bufferHeight = Math.max(1, Math.floor(cssHeight * dpr));
-
-    if (canvas.width !== bufferWidth || canvas.height !== bufferHeight) {
-      canvas.width = bufferWidth;
-      canvas.height = bufferHeight;
-    }
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-      return;
-    }
-
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, cssWidth, cssHeight);
-
-    if (!peaks || peaks.length === 0) {
-      return;
-    }
-
-    const centerY = cssHeight / 2;
-    const barStepPx = 2;
-    const barWidthPx = 1;
-
-    ctx.fillStyle = 'rgba(148, 163, 184, 0.6)';
-    for (let x = 0; x < cssWidth; x += barStepPx) {
-      const start = Math.floor((x / cssWidth) * peaks.length);
-      const end = Math.min(peaks.length, Math.ceil(((x + barStepPx) / cssWidth) * peaks.length));
-
-      let peak = 0;
-      for (let index = start; index < end; index += 1) {
-        const value = peaks[index] ?? 0;
-        if (value > peak) {
-          peak = value;
-        }
-      }
-
-      const barHeight = Math.max(1, peak * cssHeight * 0.9);
-      const y = centerY - barHeight / 2;
-      ctx.fillRect(x, y, barWidthPx, barHeight);
-    }
-  }, [peaks]);
-
-  useEffect(() => {
-    drawWaveform();
-  }, [drawWaveform]);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) {
-      return;
-    }
-
-    const observer = new ResizeObserver(() => {
-      drawWaveform();
-    });
-    observer.observe(canvas);
-
-    return () => {
-      observer.disconnect();
-    };
-  }, [drawWaveform]);
-
-  return <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none" />;
-}
+const surface =
+  'bg-[linear-gradient(180deg,rgba(255,255,255,0.045),transparent_42%),rgba(12,14,14,0.94)]';
 
 /**
  * Format milliseconds to MM:SS format
@@ -259,7 +64,7 @@ function getTickInterval(durationMs: number): { major: number; minor: number } {
   }
 }
 
-type TimelineMode = 'cuts' | 'zoom' | 'cursor' | 'all';
+type TimelineMode = 'all' | 'cuts' | 'zoom' | 'cursor';
 type CutLane = 'screen' | 'webcam';
 type SelectableRegionType = RegionVariant;
 
@@ -270,46 +75,25 @@ interface CutSelectionDrag {
   currentY: number;
 }
 
-interface TimelineLaneProps {
+interface LaneConfig {
+  id: string;
+  /** What the lane holds — "Cut", "Zoom", "Cursor". */
+  typeLabel: string;
+  /** Which media the lane applies to — "Screen" or "Webcam". */
   label: string;
+  kind: RegionVariant;
   videoPath: string | null;
-  laneClassName: string;
-  compact?: boolean;
-  showWaveform?: boolean;
+  regionCount: number;
+  regions: ReactNode;
+  emptyHint: string;
   onDoubleClick?: (event: React.MouseEvent<HTMLDivElement>) => void;
-  children: React.ReactNode;
 }
 
-function TimelineLane({
-  label,
-  videoPath,
-  laneClassName,
-  compact = false,
-  showWaveform = true,
-  onDoubleClick,
-  children,
-}: TimelineLaneProps) {
-  return (
-    <div className="space-y-1">
-      <div className="flex items-center justify-between px-1">
-        <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-semibold">
-          {label}
-        </span>
-        {onDoubleClick ? (
-          <span className="text-[10px] text-muted-foreground/70">Double-click to add region</span>
-        ) : null}
-      </div>
-
-      <div
-        className={`relative ${compact ? 'h-10 sm:h-12' : 'h-20 sm:h-24'} rounded-md border border-border/50 overflow-hidden ${laneClassName}`}
-        onDoubleClick={onDoubleClick}
-      >
-        {showWaveform ? <TimelineWaveform videoPath={videoPath} /> : null}
-        {children}
-      </div>
-    </div>
-  );
-}
+const laneIcons: Record<RegionVariant, typeof Scissors> = {
+  cut: Scissors,
+  zoom: ZoomIn,
+  cursor: MousePointer2,
+};
 
 function createCenteredRegion(anchorMs: number, regionDurationMs: number, durationMs: number) {
   const halfDuration = regionDurationMs / 2;
@@ -418,6 +202,7 @@ export function Timeline() {
     project?.webcamOverlay?.enabled && project?.webcamOverlay?.sourcePath,
   );
   const webcamVideoPath = project?.webcamOverlay?.sourcePath ?? null;
+  const screenVideoPath = project?.rawVideoPath ?? null;
   const screenCuts = useMemo(() => cuts.filter((cut) => hasCutOnLane(cut, 'screen')), [cuts]);
   const webcamCuts = useMemo(() => cuts.filter((cut) => hasCutOnLane(cut, 'webcam')), [cuts]);
   const screenZoomRegions = zoomRegionsBySource.screen;
@@ -582,7 +367,8 @@ export function Timeline() {
       setSelectedZoom(zoomId);
       setSelectedCursorRegion(null);
       void setZoomSource(source);
-      setActivePropertiesTab('zoom');
+      // Webcam regions are edited in the webcam panel, screen regions in the zoom panel.
+      setActivePropertiesTab(source === 'webcam' ? 'webcam' : 'zoom');
     },
     [
       setSelectedCut,
@@ -836,24 +622,6 @@ export function Timeline() {
     };
   }, [updateTrackScrollbarWidth]);
 
-  const modeRegionCount =
-    mode === 'cuts'
-      ? screenCuts.length + (webcamTimelineEnabled ? webcamCuts.length : 0)
-      : mode === 'zoom'
-        ? screenZoomRegions.length + (webcamTimelineEnabled ? webcamZoomRegions.length : 0)
-        : mode === 'cursor'
-          ? cursorRegions.length
-          : screenCuts.length +
-            (webcamTimelineEnabled ? webcamCuts.length : 0) +
-            screenZoomRegions.length +
-            cursorRegions.length +
-            (webcamTimelineEnabled ? webcamZoomRegions.length : 0);
-
-  useEffect(() => {
-    updateTrackScrollbarWidth();
-  }, [mode, modeRegionCount, webcamTimelineEnabled, updateTrackScrollbarWidth]);
-
-  const hasVisibleRegions = modeRegionCount > 0;
   const isCutSelected = useCallback(
     (cutId: string) => selectedCutId === cutId || selectedCutIds.includes(cutId),
     [selectedCutId, selectedCutIds],
@@ -868,6 +636,124 @@ export function Timeline() {
     [selectedCursorRegionId, selectedCursorRegionIds],
   );
 
+  const cutLaneCount = screenCuts.length + (webcamTimelineEnabled ? webcamCuts.length : 0);
+  const zoomLaneCount =
+    screenZoomRegions.length + (webcamTimelineEnabled ? webcamZoomRegions.length : 0);
+  const counts: Record<TimelineMode, number> = {
+    cuts: cutLaneCount,
+    zoom: zoomLaneCount,
+    cursor: cursorRegions.length,
+    all: cutLaneCount + zoomLaneCount + cursorRegions.length,
+  };
+
+  const buildCutLane = (lane: CutLane): LaneConfig => {
+    const laneCuts = lane === 'screen' ? screenCuts : webcamCuts;
+
+    return {
+      id: `${lane}-cuts`,
+      typeLabel: 'Cut',
+      label: lane === 'screen' ? 'Screen' : 'Webcam',
+      kind: 'cut',
+      videoPath: lane === 'screen' ? screenVideoPath : webcamVideoPath,
+      regionCount: laneCuts.length,
+      emptyHint: 'Double-click to add a cut',
+      onDoubleClick: (event) => handleAddCutAtTime(clientXToTime(event.clientX), lane),
+      regions: laneCuts.map((cut) => (
+        <TimelineRegion
+          key={`${lane}-cut-${cut.id}`}
+          region={cut}
+          duration={duration}
+          variant="cut"
+          label="Cut"
+          isSelected={isCutSelected(cut.id)}
+          onSelect={() => handleSelectCut(cut.id)}
+          onUpdate={updateCut}
+          onDelete={(intent) => handleDeleteCutForLane(cut, lane, intent?.deleteAllLinked ?? false)}
+          dataCutId={cut.id}
+          dataRegionId={cut.id}
+          dataRegionType="cut"
+        />
+      )),
+    };
+  };
+
+  const buildZoomLane = (source: ZoomSource): LaneConfig => {
+    const laneZooms = source === 'screen' ? screenZoomRegions : webcamZoomRegions;
+
+    return {
+      id: `${source}-zoom`,
+      typeLabel: 'Zoom',
+      label: source === 'screen' ? 'Screen' : 'Webcam',
+      kind: 'zoom',
+      videoPath: null,
+      regionCount: laneZooms.length,
+      emptyHint: 'Double-click to add a zoom',
+      onDoubleClick: (event) => handleAddZoomAtTime(clientXToTime(event.clientX), source),
+      regions: laneZooms.map((zoom) => (
+        <TimelineRegion
+          key={`${source}-zoom-${zoom.id}`}
+          region={zoom}
+          duration={duration}
+          variant="zoom"
+          label={`${zoom.zoomLevel.toFixed(1)}x`}
+          isSelected={isZoomSelected(zoom.id)}
+          onSelect={() => handleSelectZoom(zoom.id, source)}
+          onUpdate={(updatedZoom) => updateZoom(updatedZoom, source)}
+          onDelete={() => removeZoom(zoom.id, source)}
+          dataRegionId={zoom.id}
+          dataRegionType="zoom"
+        />
+      )),
+    };
+  };
+
+  const buildCursorLane = (): LaneConfig => ({
+    id: 'cursor',
+    typeLabel: 'Cursor',
+    label: 'Screen',
+    kind: 'cursor',
+    videoPath: null,
+    regionCount: cursorRegions.length,
+    emptyHint: 'No cursor data recorded for this project',
+    regions: cursorRegions.map((region) => (
+      <TimelineRegion
+        key={`cursor-${region.id}`}
+        region={region}
+        duration={duration}
+        variant="cursor"
+        label={cursorRegionOverrideIds.has(region.id) ? 'Custom' : 'Cursor'}
+        editable={false}
+        isSelected={isCursorSelected(region.id)}
+        onSelect={() => handleSelectCursor(region.id)}
+        onUpdate={() => {}}
+        onDelete={() => {}}
+        dataRegionId={region.id}
+        dataRegionType="cursor"
+      />
+    )),
+  });
+
+  const lanes: LaneConfig[] = [];
+  if (mode === 'cuts' || mode === 'all') {
+    lanes.push(buildCutLane('screen'));
+    if (webcamTimelineEnabled) {
+      lanes.push(buildCutLane('webcam'));
+    }
+  }
+  if (mode === 'zoom' || mode === 'all') {
+    lanes.push(buildZoomLane('screen'));
+    if (webcamTimelineEnabled) {
+      lanes.push(buildZoomLane('webcam'));
+    }
+  }
+  if (mode === 'cursor' || mode === 'all') {
+    lanes.push(buildCursorLane());
+  }
+
+  useEffect(() => {
+    updateTrackScrollbarWidth();
+  }, [mode, counts.all, webcamTimelineEnabled, updateTrackScrollbarWidth]);
+
   const playheadPercent = timeToPercent(currentTime);
   const rulerWidthStyle =
     trackScrollbarWidth > 0 ? { width: `calc(100% - ${trackScrollbarWidth}px)` } : undefined;
@@ -880,445 +766,178 @@ export function Timeline() {
         height: cutSelectionBounds.height,
       }
     : undefined;
+  const laneGridStyle = {
+    gridTemplateColumns: `${LANE_GUTTER_PX}px minmax(0,1fr)`,
+    rowGap: LANE_GAP_PX,
+  };
 
   return (
-    <div className="flex flex-col h-full min-h-0 overflow-hidden select-none">
+    <div className={cn('flex h-full min-h-0 select-none flex-col overflow-hidden', surface)}>
       {/* Toolbar */}
-      <div className="flex items-center gap-4 px-4 py-2 border-b border-border bg-card/50">
-        <span className="text-xs text-muted-foreground font-mono">
-          {formatTime(currentTime)} / {formatTime(duration)}
-        </span>
-
-        <div className="flex items-center gap-2">
-          <span className="text-xs uppercase tracking-[0.08em] text-muted-foreground font-semibold">
-            Mode
-          </span>
-          <Select
-            value={mode}
-            onValueChange={(nextMode) => {
-              if (!nextMode) {
-                return;
-              }
-
-              handleModeChange(nextMode);
-            }}
-          >
-            <SelectTrigger className="h-8 w-44">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="cuts">Cuts</SelectItem>
-              <SelectItem value="zoom">Zoom</SelectItem>
-              <SelectItem value="cursor">Cursor</SelectItem>
-              <SelectItem value="all">View All</SelectItem>
-            </SelectContent>
-          </Select>
+      <div className="flex flex-none items-center gap-3 border-b border-white/[0.07] px-4 py-2.5">
+        <div className="flex items-baseline gap-1.5 font-mono tabular-nums">
+          <span className="text-[15px] font-[650] text-white/90">{formatTime(currentTime)}</span>
+          <span className="text-[11px] text-white/35">/ {formatTime(duration)}</span>
         </div>
 
-        <span className="text-xs text-muted-foreground">
-          {modeRegionCount} region{modeRegionCount !== 1 ? 's' : ''}
-        </span>
-
-        {(mode === 'cuts' || mode === 'all') && (
-          <span className="text-xs text-muted-foreground/80">
-            Ctrl+click delete removes cut on both lanes
-          </span>
-        )}
-
         {!webcamTimelineEnabled && mode !== 'cursor' && (
-          <span className="text-xs text-muted-foreground/75">
-            Webcam timeline hidden (overlay off)
+          <span className="flex items-center gap-1.5 text-[11px] text-white/30">
+            <Video size={12} />
+            Webcam off
           </span>
         )}
+
+        <div className="ml-auto flex flex-none gap-1 rounded-[14px] border border-white/[0.07] bg-black/40 p-[4px]">
+          {(['all', 'cuts', 'zoom', 'cursor'] as const).map((filter) => (
+            <button
+              key={filter}
+              type="button"
+              className={cn(
+                'flex cursor-pointer items-center gap-[7px] rounded-[10px] px-[11px] py-[6px] text-white/50 transition duration-150 hover:text-white/80',
+                mode === filter && 'bg-white/10 text-white hover:text-white',
+              )}
+              onClick={() => handleModeChange(filter)}
+            >
+              <span className="text-[12px] font-[700] capitalize">{filter}</span>
+              <strong className="text-[11px] tabular-nums text-white/40">{counts[filter]}</strong>
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Timeline content */}
-      <div className="flex-1 min-h-0 flex flex-col px-4 py-2 overflow-hidden">
+      <div className="flex min-h-0 flex-1 flex-col px-4 py-3">
         {/* Ruler */}
-        <div
-          ref={containerRef}
-          className="relative h-6 shrink-0 bg-muted/30 rounded cursor-pointer"
-          onMouseDown={handleTimelineMouseDown}
-          style={rulerWidthStyle}
-        >
-          {/* Tick marks */}
-          {ticks.map((tick) => (
-            <div
-              key={tick.time}
-              className="absolute top-0 flex flex-col items-center"
-              style={{ left: `${timeToPercent(tick.time)}%` }}
-            >
-              <div
-                className={`w-px ${tick.isMajor ? 'h-3 bg-muted-foreground' : 'h-2 bg-muted-foreground/50'}`}
-              />
-              {tick.isMajor && (
-                <span className="text-[10px] text-muted-foreground mt-0.5 -translate-x-1/2">
-                  {formatTime(tick.time)}
-                </span>
-              )}
-            </div>
-          ))}
-
-          {/* Playhead */}
+        <div className="grid flex-none" style={laneGridStyle}>
+          <div />
           <div
-            className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-10 pointer-events-none"
-            style={{ left: `${playheadPercent}%` }}
+            ref={containerRef}
+            className="relative h-7 cursor-pointer"
+            onMouseDown={handleTimelineMouseDown}
+            style={rulerWidthStyle}
           >
-            {/* Playhead handle */}
-            <button
-              type="button"
-              className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-red-500 rounded-sm pointer-events-auto cursor-ew-resize"
-              onMouseDown={(event) => {
-                event.stopPropagation();
-                if (event.button !== 0) {
-                  return;
-                }
+            {/* Tick marks */}
+            {ticks.map((tick) => (
+              <div
+                key={tick.time}
+                className="absolute top-0 flex flex-col items-center"
+                style={{ left: `${timeToPercent(tick.time)}%` }}
+              >
+                <div
+                  className={cn('w-px', tick.isMajor ? 'h-2 bg-white/25' : 'h-1.5 bg-white/10')}
+                />
+                {tick.isMajor && (
+                  <span className="mt-1 -translate-x-1/2 font-mono text-[10px] tabular-nums text-white/30">
+                    {formatTime(tick.time)}
+                  </span>
+                )}
+              </div>
+            ))}
 
-                startSeekDrag(event.clientX);
-              }}
-              aria-label="Drag playhead"
-            />
+            {/* Playhead */}
+            <div
+              className="pointer-events-none absolute inset-y-0 z-10 w-px bg-white/80"
+              style={{ left: `${playheadPercent}%` }}
+            >
+              <button
+                type="button"
+                className="pointer-events-auto absolute -top-0.5 left-1/2 h-2.5 w-2.5 -translate-x-1/2 cursor-ew-resize rounded-[3px] bg-white shadow-[0_0_10px_rgba(255,255,255,0.5)]"
+                onMouseDown={(event) => {
+                  event.stopPropagation();
+                  if (event.button !== 0) {
+                    return;
+                  }
+
+                  startSeekDrag(event.clientX);
+                }}
+                aria-label="Drag playhead"
+              />
+            </div>
           </div>
         </div>
 
         {/* Track area */}
         <div
           ref={trackRef}
-          className="relative flex-1 mt-3 min-h-0 overflow-y-auto overflow-x-hidden"
+          className="relative mt-2 min-h-0 flex-1 overflow-y-auto overflow-x-hidden"
           onMouseDown={handleTrackAreaMouseDown}
           onClick={handleTrackClick}
         >
-          <div className="relative z-1 space-y-2 min-h-full">
-            {/* Playhead line follows full region stack height */}
+          <div className="relative min-h-full">
+            <div className="grid" style={laneGridStyle}>
+              {lanes.map((lane) => {
+                const LaneIcon = laneIcons[lane.kind];
+
+                return (
+                  <div key={lane.id} className="contents">
+                    <div
+                      className="flex items-center gap-2 pr-3"
+                      style={{ height: LANE_HEIGHT_PX }}
+                    >
+                      <span
+                        className={cn(
+                          'grid size-[24px] flex-none place-items-center rounded-[8px] bg-white/[0.06]',
+                          regionAccentText[lane.kind],
+                        )}
+                      >
+                        <LaneIcon size={12} />
+                      </span>
+                      <span className="grid min-w-0 gap-px">
+                        <span
+                          className={cn(
+                            'text-[9px] font-[750] uppercase tracking-[0.1em]',
+                            regionAccentText[lane.kind],
+                          )}
+                        >
+                          {lane.typeLabel}
+                        </span>
+                        <strong className="truncate text-[11px] font-[650] text-white/75">
+                          {lane.label}
+                        </strong>
+                      </span>
+                      <span className="ml-auto text-[10px] tabular-nums text-white/25">
+                        {lane.regionCount}
+                      </span>
+                    </div>
+
+                    <div
+                      className="relative overflow-hidden rounded-[12px] border border-white/[0.06] bg-white/[0.022]"
+                      style={{ height: LANE_HEIGHT_PX }}
+                      onDoubleClick={lane.onDoubleClick}
+                    >
+                      {lane.videoPath ? <TimelineWaveform videoPath={lane.videoPath} /> : null}
+
+                      {lane.regionCount === 0 ? (
+                        <span className="pointer-events-none absolute inset-0 grid place-items-center text-[10px] text-white/20">
+                          {lane.emptyHint}
+                        </span>
+                      ) : null}
+
+                      {lane.regions}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Playhead spans the full lane stack */}
             <div
-              className="absolute top-0 bottom-0 w-0.5 bg-red-500/70 z-30 pointer-events-none"
-              style={{ left: `${playheadPercent}%` }}
-            />
+              className="pointer-events-none absolute inset-y-0 right-0 z-30"
+              style={{ left: LANE_GUTTER_PX }}
+            >
+              <div
+                className="absolute inset-y-0 w-px bg-white/45"
+                style={{ left: `${playheadPercent}%` }}
+              />
+            </div>
 
             {cutSelectionOverlayStyle && (
               <div
-                className="absolute z-40 pointer-events-none rounded border border-red-300/80 bg-red-500/10"
+                className="pointer-events-none absolute z-40 rounded-[8px] border border-[#5eead4]/50 bg-emerald-400/10"
                 style={cutSelectionOverlayStyle}
               />
             )}
-
-            {mode === 'cuts' && (
-              <>
-                <TimelineLane
-                  label="Recorder Timeline"
-                  videoPath={project?.rawVideoPath ?? null}
-                  laneClassName="bg-primary/15"
-                  onDoubleClick={(event) => {
-                    const timeMs = clientXToTime(event.clientX);
-                    handleAddCutAtTime(timeMs, 'screen');
-                  }}
-                >
-                  {screenCuts.map((cut) => (
-                    <TimelineRegion
-                      key={`recorder-cut-${cut.id}`}
-                      region={cut}
-                      duration={duration}
-                      variant="cut"
-                      label="CUT"
-                      isSelected={isCutSelected(cut.id)}
-                      onSelect={() => handleSelectCut(cut.id)}
-                      onUpdate={updateCut}
-                      onDelete={(intent) =>
-                        handleDeleteCutForLane(cut, 'screen', intent?.deleteAllLinked ?? false)
-                      }
-                      dataCutId={cut.id}
-                      dataRegionId={cut.id}
-                      dataRegionType="cut"
-                    />
-                  ))}
-                </TimelineLane>
-
-                {webcamTimelineEnabled && (
-                  <TimelineLane
-                    label="Webcam Timeline"
-                    videoPath={webcamVideoPath}
-                    laneClassName="bg-violet-500/10"
-                    onDoubleClick={(event) => {
-                      const timeMs = clientXToTime(event.clientX);
-                      handleAddCutAtTime(timeMs, 'webcam');
-                    }}
-                  >
-                    {webcamCuts.map((cut) => (
-                      <TimelineRegion
-                        key={`webcam-cut-${cut.id}`}
-                        region={cut}
-                        duration={duration}
-                        variant="cut"
-                        label="CUT"
-                        isSelected={isCutSelected(cut.id)}
-                        onSelect={() => handleSelectCut(cut.id)}
-                        onUpdate={updateCut}
-                        onDelete={(intent) =>
-                          handleDeleteCutForLane(cut, 'webcam', intent?.deleteAllLinked ?? false)
-                        }
-                        dataCutId={cut.id}
-                        dataRegionId={cut.id}
-                        dataRegionType="cut"
-                      />
-                    ))}
-                  </TimelineLane>
-                )}
-              </>
-            )}
-
-            {mode === 'zoom' && (
-              <>
-                <TimelineLane
-                  label="Recorder Zoom Timeline"
-                  videoPath={project?.rawVideoPath ?? null}
-                  laneClassName="bg-blue-500/10"
-                  onDoubleClick={(event) => {
-                    const timeMs = clientXToTime(event.clientX);
-                    handleAddZoomAtTime(timeMs, 'screen');
-                  }}
-                >
-                  {screenZoomRegions.map((zoom) => (
-                    <TimelineRegion
-                      key={`screen-zoom-${zoom.id}`}
-                      region={zoom}
-                      duration={duration}
-                      variant="zoom"
-                      label={`${zoom.zoomLevel.toFixed(1)}x`}
-                      isSelected={isZoomSelected(zoom.id)}
-                      onSelect={() => handleSelectZoom(zoom.id, 'screen')}
-                      onUpdate={(updatedZoom) => updateZoom(updatedZoom, 'screen')}
-                      onDelete={() => removeZoom(zoom.id, 'screen')}
-                      dataRegionId={zoom.id}
-                      dataRegionType="zoom"
-                    />
-                  ))}
-                </TimelineLane>
-
-                {webcamTimelineEnabled && (
-                  <TimelineLane
-                    label="Webcam Zoom Timeline"
-                    videoPath={webcamVideoPath}
-                    laneClassName="bg-sky-500/10"
-                    onDoubleClick={(event) => {
-                      const timeMs = clientXToTime(event.clientX);
-                      handleAddZoomAtTime(timeMs, 'webcam');
-                    }}
-                  >
-                    {webcamZoomRegions.map((zoom) => (
-                      <TimelineRegion
-                        key={`webcam-zoom-${zoom.id}`}
-                        region={zoom}
-                        duration={duration}
-                        variant="zoom"
-                        label={`${zoom.zoomLevel.toFixed(1)}x`}
-                        isSelected={isZoomSelected(zoom.id)}
-                        onSelect={() => handleSelectZoom(zoom.id, 'webcam')}
-                        onUpdate={(updatedZoom) => updateZoom(updatedZoom, 'webcam')}
-                        onDelete={() => removeZoom(zoom.id, 'webcam')}
-                        dataRegionId={zoom.id}
-                        dataRegionType="zoom"
-                      />
-                    ))}
-                  </TimelineLane>
-                )}
-              </>
-            )}
-
-            {mode === 'cursor' && (
-              <TimelineLane
-                label="Cursor Timeline"
-                videoPath={project?.rawVideoPath ?? null}
-                laneClassName="bg-emerald-500/10"
-              >
-                {cursorRegions.map((region) => (
-                  <TimelineRegion
-                    key={region.id}
-                    region={region}
-                    duration={duration}
-                    variant="cursor"
-                    label={cursorRegionOverrideIds.has(region.id) ? 'CUSTOM' : 'CURSOR'}
-                    editable={false}
-                    isSelected={isCursorSelected(region.id)}
-                    onSelect={() => handleSelectCursor(region.id)}
-                    onUpdate={() => {}}
-                    onDelete={() => {}}
-                    dataRegionId={region.id}
-                    dataRegionType="cursor"
-                  />
-                ))}
-              </TimelineLane>
-            )}
-
-            {mode === 'all' && (
-              <div className="space-y-2 min-w-0">
-                <TimelineLane
-                  label="Recorder Cuts"
-                  videoPath={project?.rawVideoPath ?? null}
-                  laneClassName="bg-primary/15"
-                  compact
-                  showWaveform={false}
-                  onDoubleClick={(event) => {
-                    const timeMs = clientXToTime(event.clientX);
-                    handleAddCutAtTime(timeMs, 'screen');
-                  }}
-                >
-                  {screenCuts.map((cut) => (
-                    <TimelineRegion
-                      key={`all-recorder-cut-${cut.id}`}
-                      region={cut}
-                      duration={duration}
-                      variant="cut"
-                      label="CUT"
-                      isSelected={isCutSelected(cut.id)}
-                      onSelect={() => handleSelectCut(cut.id)}
-                      onUpdate={updateCut}
-                      onDelete={(intent) =>
-                        handleDeleteCutForLane(cut, 'screen', intent?.deleteAllLinked ?? false)
-                      }
-                      dataCutId={cut.id}
-                      dataRegionId={cut.id}
-                      dataRegionType="cut"
-                    />
-                  ))}
-                </TimelineLane>
-
-                {webcamTimelineEnabled && (
-                  <TimelineLane
-                    label="Webcam Cuts"
-                    videoPath={webcamVideoPath}
-                    laneClassName="bg-violet-500/10"
-                    compact
-                    showWaveform={false}
-                    onDoubleClick={(event) => {
-                      const timeMs = clientXToTime(event.clientX);
-                      handleAddCutAtTime(timeMs, 'webcam');
-                    }}
-                  >
-                    {webcamCuts.map((cut) => (
-                      <TimelineRegion
-                        key={`all-webcam-cut-${cut.id}`}
-                        region={cut}
-                        duration={duration}
-                        variant="cut"
-                        label="CUT"
-                        isSelected={isCutSelected(cut.id)}
-                        onSelect={() => handleSelectCut(cut.id)}
-                        onUpdate={updateCut}
-                        onDelete={(intent) =>
-                          handleDeleteCutForLane(cut, 'webcam', intent?.deleteAllLinked ?? false)
-                        }
-                        dataCutId={cut.id}
-                        dataRegionId={cut.id}
-                        dataRegionType="cut"
-                      />
-                    ))}
-                  </TimelineLane>
-                )}
-
-                <TimelineLane
-                  label="Recorder Zoom"
-                  videoPath={project?.rawVideoPath ?? null}
-                  laneClassName="bg-blue-500/10"
-                  compact
-                  showWaveform={false}
-                  onDoubleClick={(event) => {
-                    const timeMs = clientXToTime(event.clientX);
-                    handleAddZoomAtTime(timeMs, 'screen');
-                  }}
-                >
-                  {screenZoomRegions.map((zoom) => (
-                    <TimelineRegion
-                      key={`all-screen-zoom-${zoom.id}`}
-                      region={zoom}
-                      duration={duration}
-                      variant="zoom"
-                      label={`${zoom.zoomLevel.toFixed(1)}x`}
-                      isSelected={isZoomSelected(zoom.id)}
-                      onSelect={() => handleSelectZoom(zoom.id, 'screen')}
-                      onUpdate={(updatedZoom) => updateZoom(updatedZoom, 'screen')}
-                      onDelete={() => removeZoom(zoom.id, 'screen')}
-                      dataRegionId={zoom.id}
-                      dataRegionType="zoom"
-                    />
-                  ))}
-                </TimelineLane>
-
-                {webcamTimelineEnabled && (
-                  <TimelineLane
-                    label="Webcam Zoom"
-                    videoPath={webcamVideoPath}
-                    laneClassName="bg-sky-500/10"
-                    compact
-                    showWaveform={false}
-                    onDoubleClick={(event) => {
-                      const timeMs = clientXToTime(event.clientX);
-                      handleAddZoomAtTime(timeMs, 'webcam');
-                    }}
-                  >
-                    {webcamZoomRegions.map((zoom) => (
-                      <TimelineRegion
-                        key={`all-webcam-zoom-${zoom.id}`}
-                        region={zoom}
-                        duration={duration}
-                        variant="zoom"
-                        label={`${zoom.zoomLevel.toFixed(1)}x`}
-                        isSelected={isZoomSelected(zoom.id)}
-                        onSelect={() => handleSelectZoom(zoom.id, 'webcam')}
-                        onUpdate={(updatedZoom) => updateZoom(updatedZoom, 'webcam')}
-                        onDelete={() => removeZoom(zoom.id, 'webcam')}
-                        dataRegionId={zoom.id}
-                        dataRegionType="zoom"
-                      />
-                    ))}
-                  </TimelineLane>
-                )}
-
-                <TimelineLane
-                  label="Cursor"
-                  videoPath={project?.rawVideoPath ?? null}
-                  laneClassName="bg-emerald-500/10"
-                  compact
-                  showWaveform={false}
-                >
-                  {cursorRegions.map((region) => (
-                    <TimelineRegion
-                      key={`all-cursor-${region.id}`}
-                      region={region}
-                      duration={duration}
-                      variant="cursor"
-                      label={cursorRegionOverrideIds.has(region.id) ? 'CUSTOM' : 'CURSOR'}
-                      editable={false}
-                      isSelected={isCursorSelected(region.id)}
-                      onSelect={() => handleSelectCursor(region.id)}
-                      onUpdate={() => {}}
-                      onDelete={() => {}}
-                      dataRegionId={region.id}
-                      dataRegionType="cursor"
-                    />
-                  ))}
-                </TimelineLane>
-
-                {!webcamTimelineEnabled && (
-                  <div className="px-1 text-[10px] text-muted-foreground/75">
-                    Webcam layers are hidden because webcam overlay is off.
-                  </div>
-                )}
-              </div>
-            )}
           </div>
-
-          {/* Placeholder text when no regions */}
-          {!hasVisibleRegions && (
-            <div className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground/50">
-              {mode === 'cuts'
-                ? 'Double-click the recorder/webcam lanes to add cut regions'
-                : mode === 'zoom'
-                  ? 'Double-click the recorder/webcam lanes to add zoom regions'
-                  : mode === 'cursor'
-                    ? 'No cursor movement data available for this project'
-                    : 'View all layers in one stacked timeline with a shared playhead'}
-            </div>
-          )}
         </div>
       </div>
     </div>
