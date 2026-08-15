@@ -1,5 +1,34 @@
-import type { CompositionConfig, CompositionZoomRegion, ZoomKeyframe, ZoomState } from '../types';
+import type {
+  CompositionConfig,
+  CompositionZoomRegion,
+  VideoLayout,
+  ZoomKeyframe,
+  ZoomState,
+} from '../types';
 import { clamp, clampNormalised, lerp, smoothstep } from './common';
+
+/**
+ * Focal points are authored against the recording, not the canvas: the focal
+ * overlay normalises against the video rect and click keyframes normalise
+ * against the source frame. Map them through the video's placement before using
+ * them as a canvas-space pivot, otherwise the zoom lands off by the canvas
+ * padding — nothing at the centre, up to `padding × canvasWidth` at the edges.
+ */
+function resolveCanvasPivot(
+  focal: { x: number; y: number },
+  frameWidth: number,
+  frameHeight: number,
+  videoLayout?: VideoLayout,
+): { x: number; y: number } {
+  if (!videoLayout || videoLayout.width <= 0 || videoLayout.height <= 0) {
+    return { x: focal.x * frameWidth, y: focal.y * frameHeight };
+  }
+
+  return {
+    x: videoLayout.x + focal.x * videoLayout.width,
+    y: videoLayout.y + focal.y * videoLayout.height,
+  };
+}
 
 function resolveRegionFocalPoint(
   region: CompositionZoomRegion,
@@ -63,6 +92,7 @@ export function computeZoomStateFromRegions(
   zoomRegions: CompositionZoomRegion[],
   frameWidth: number,
   frameHeight: number,
+  videoLayout?: VideoLayout,
 ): ZoomState {
   let scale = 1;
   let pivotX = frameWidth / 2;
@@ -81,8 +111,9 @@ export function computeZoomStateFromRegions(
 
       scale = 1 + (region.zoomLevel - 1) * eased;
       const focal = resolveRegionFocalPoint(region, timestampMs);
-      pivotX = focal.x * frameWidth;
-      pivotY = focal.y * frameHeight;
+      const pivot = resolveCanvasPivot(focal, frameWidth, frameHeight, videoLayout);
+      pivotX = pivot.x;
+      pivotY = pivot.y;
       break;
     }
   }
@@ -95,6 +126,7 @@ export function computeZoomState(
   zooms: ZoomKeyframe[],
   frameWidth: number,
   frameHeight: number,
+  videoLayout?: VideoLayout,
 ): ZoomState {
   let scale = 1;
   let pivotX = frameWidth / 2;
@@ -113,8 +145,9 @@ export function computeZoomState(
       }
 
       scale = 1 + (zoom.multiplier - 1) * eased;
-      pivotX = zoom.focalPoint.x * frameWidth;
-      pivotY = zoom.focalPoint.y * frameHeight;
+      const pivot = resolveCanvasPivot(zoom.focalPoint, frameWidth, frameHeight, videoLayout);
+      pivotX = pivot.x;
+      pivotY = pivot.y;
       break;
     }
   }
@@ -127,12 +160,19 @@ export function computeZoomStateFromConfig(
   config: CompositionConfig,
   frameWidth: number,
   frameHeight: number,
+  videoLayout?: VideoLayout,
 ): ZoomState {
   if (config.zoomRegions && config.zoomRegions.length > 0) {
-    return computeZoomStateFromRegions(t * 1000, config.zoomRegions, frameWidth, frameHeight);
+    return computeZoomStateFromRegions(
+      t * 1000,
+      config.zoomRegions,
+      frameWidth,
+      frameHeight,
+      videoLayout,
+    );
   }
 
-  return computeZoomState(t, config.zooms, frameWidth, frameHeight);
+  return computeZoomState(t, config.zooms, frameWidth, frameHeight, videoLayout);
 }
 
 /**

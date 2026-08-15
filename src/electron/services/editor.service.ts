@@ -247,6 +247,23 @@ function normalizeCursorRegionOverrides(
   });
 }
 
+/**
+ * Canvas padding bounds. These mirror the renderer's layout math
+ * (`src/ui/screens/editor/engine/canvas-layout.ts`) — the main process stores
+ * the value, the renderer decides what it means. Returns null when the project
+ * has no padding set, so the renderer's default keeps applying.
+ */
+const MIN_CANVAS_PADDING = 0;
+const MAX_CANVAS_PADDING = 0.25;
+
+function normalizeCanvasPadding(padding: unknown): number | null {
+  if (typeof padding !== 'number' || !Number.isFinite(padding)) {
+    return null;
+  }
+
+  return Math.min(MAX_CANVAS_PADDING, Math.max(MIN_CANVAS_PADDING, padding));
+}
+
 function resolveBackgroundMode(project: Project): BackgroundMode {
   if (project.backgroundMode === 'color') return 'color';
   if (project.backgroundMode === 'pattern') return 'pattern';
@@ -269,6 +286,13 @@ function normalizeProjectData(project: Project): Project {
   project.cursorRegionOverrides = normalizeCursorRegionOverrides(project.cursorRegionOverrides);
   project.backgroundMode = resolveBackgroundMode(project);
   project.canvasBackgroundEnabled = project.canvasBackgroundEnabled !== false;
+
+  const canvasPadding = normalizeCanvasPadding(project.canvasPadding);
+  if (canvasPadding === null) {
+    delete project.canvasPadding;
+  } else {
+    project.canvasPadding = canvasPadding;
+  }
 
   const zoomRegionsBySource = normalizeZoomRegionsBySource(project);
   project.zoomRegionsBySource = zoomRegionsBySource;
@@ -766,6 +790,26 @@ export function updateCanvasBackgroundEnabled(enabled: boolean): boolean {
   // Auto-save metadata
   persistProjectMutation();
   return true;
+}
+
+/**
+ * Update the canvas padding stored on the project.
+ *
+ * The value is a fraction of the canvas kept clear on each side. Nothing in the
+ * main process reads it — the renderer owns the layout math for both preview
+ * and export — so this only clamps the value and writes it to the project JSON.
+ */
+export function updateCanvasPadding(padding: number): number | null {
+  if (!activeProject) return null;
+
+  const normalized = normalizeCanvasPadding(padding);
+  if (normalized === null) {
+    return activeProject.canvasPadding ?? null;
+  }
+
+  activeProject.canvasPadding = normalized;
+  persistProjectMutation();
+  return normalized;
 }
 
 export function getTimelineLayers(): TimelineLayer[] {

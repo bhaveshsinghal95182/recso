@@ -169,8 +169,8 @@ export function renderCompositionFrame({
   source,
   webcamSource,
 }: RenderCompositionFrameOptions): void {
-  const zoomState = computeZoomStateFromConfig(t, config, frameWidth, frameHeight);
   const videoLayout = computeVideoLayout(frameWidth, frameHeight, config);
+  const zoomState = computeZoomStateFromConfig(t, config, frameWidth, frameHeight, videoLayout);
   const layerStates = resolveLayerStates(config.layerStates);
 
   // Resolve per-region webcam height override from webcam-source regions.

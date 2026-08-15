@@ -127,6 +127,11 @@ export function registerEditorHandlers(): void {
     },
   );
 
+  // Update canvas padding (stored only — the renderer does the layout math)
+  ipcMain.handle('editor:update-canvas-padding', async (_event, padding: number) => {
+    return editorService.updateCanvasPadding(padding);
+  });
+
   // Update project duration
   ipcMain.handle('editor:update-project-duration', async (_event, durationMs: number) => {
     return editorService.updateProjectDuration(durationMs);

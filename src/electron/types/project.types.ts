@@ -198,6 +198,12 @@ export interface Project {
   backgroundMode?: BackgroundMode;
   /** Whether canvas background is enabled (defaults to true for backward compatibility) */
   canvasBackgroundEnabled?: boolean;
+  /**
+   * Padding kept clear on each side of the canvas, as a fraction of the canvas
+   * (0–0.25). Stored here only — the renderer owns the layout math and applies
+   * its own default when this is missing.
+   */
+  canvasPadding?: number;
   /** Optional crop configuration for the source recording */
   cropConfig?: CropConfig | null;
   /** Optional webcam overlay settings */

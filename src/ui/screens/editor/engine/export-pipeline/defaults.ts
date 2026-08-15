@@ -1,9 +1,3 @@
-export const DEFAULT_LAYOUT_CONFIG = {
-  padding: 0.04,
-  maxScale: 0.9,
-  scaleUp: true,
-};
-
 export const DEFAULT_VIDEO_STYLE = {
   borderRadius: 24,
   borderWidth: 8,

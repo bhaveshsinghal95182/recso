@@ -2,6 +2,7 @@ import { create } from 'zustand';
 
 import type { BackgroundPatternConfig } from '../../shared/patterns';
 import { debounce } from '../lib/utils';
+import { clampCanvasPadding } from '../screens/editor/engine/canvas-layout';
 import type {
   BackgroundMode,
   CropConfig,
@@ -37,6 +38,7 @@ interface ProjectState {
   updateBackgroundPattern: (pattern: BackgroundPatternConfig | null) => void;
   updateBackgroundMode: (mode: BackgroundMode) => void;
   updateCanvasBackgroundEnabled: (enabled: boolean) => Promise<void>;
+  updateCanvasPadding: (padding: number) => void;
   updateWebcamOverlay: (config: Partial<WebcamOverlayConfig>) => Promise<void>;
   updateCropConfig: (config: CropConfig | null) => Promise<void>;
   updateDuration: (durationMs: number) => Promise<void>;
@@ -84,6 +86,15 @@ const debouncedUpdateBackgroundColor = debounce(async (color: string) => {
     await window.electron.background.updateColor(color);
   } catch (err) {
     console.error('[ProjectStore] updateBackgroundColor error:', err);
+  }
+}, 300);
+
+// Padding is dragged on a slider — render from local state, persist once it settles.
+const debouncedUpdateCanvasPadding = debounce(async (padding: number) => {
+  try {
+    await window.electron.editor.updateCanvasPadding(padding);
+  } catch (err) {
+    console.error('[ProjectStore] updateCanvasPadding error:', err);
   }
 }, 300);
 
@@ -353,6 +364,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }));
       console.error('[ProjectStore] updateCanvasBackgroundEnabled error:', err);
     }
+  },
+
+  updateCanvasPadding: (padding: number) => {
+    const { project } = get();
+    if (!project) return;
+
+    const next = clampCanvasPadding(padding);
+
+    // Optimistic update — the preview and export read this straight from the project.
+    set((state) => ({
+      project: state.project ? { ...state.project, canvasPadding: next } : null,
+    }));
+
+    debouncedUpdateCanvasPadding(next);
   },
 
   updateWebcamOverlay: async (config: Partial<WebcamOverlayConfig>) => {

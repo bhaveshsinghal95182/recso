@@ -1,54 +1,10 @@
 import type { Project } from '@/types';
 
+import type { CanvasLayoutProject } from '../canvas-layout';
+import { resolveProjectCanvasLayout } from '../canvas-layout';
 import type { CompositionLayout } from '../types';
 import { resolveAnchoredPosition } from '../webcam-anchor';
-import { clamp, DEFAULT_LAYOUT_CONFIG, DEFAULT_WEBCAM_STYLE } from './defaults';
-
-function calculateFallbackLayout(
-  videoWidth: number,
-  videoHeight: number,
-  canvasWidth: number,
-  canvasHeight: number,
-): CompositionLayout {
-  const availableWidth =
-    canvasWidth * (1 - DEFAULT_LAYOUT_CONFIG.padding * 2) * DEFAULT_LAYOUT_CONFIG.maxScale;
-  const availableHeight =
-    canvasHeight * (1 - DEFAULT_LAYOUT_CONFIG.padding * 2) * DEFAULT_LAYOUT_CONFIG.maxScale;
-
-  const scaleX = availableWidth / videoWidth;
-  const scaleY = availableHeight / videoHeight;
-
-  let scale = Math.min(scaleX, scaleY);
-  if (!DEFAULT_LAYOUT_CONFIG.scaleUp && scale > 1) {
-    scale = 1;
-  }
-
-  const width = Math.round(videoWidth * scale);
-  const height = Math.round(videoHeight * scale);
-  const x = Math.round((canvasWidth - width) / 2);
-  const y = Math.round((canvasHeight - height) / 2);
-
-  return { x, y, width, height, scale };
-}
-
-function calculateFullBleedLayout(
-  videoWidth: number,
-  videoHeight: number,
-  canvasWidth: number,
-  canvasHeight: number,
-): CompositionLayout {
-  const scaleX = canvasWidth / Math.max(1, videoWidth);
-  const scaleY = canvasHeight / Math.max(1, videoHeight);
-  const scale = Math.max(scaleX, scaleY);
-
-  return {
-    x: 0,
-    y: 0,
-    width: canvasWidth,
-    height: canvasHeight,
-    scale: Number.isFinite(scale) && scale > 0 ? scale : 1,
-  };
-}
+import { clamp, DEFAULT_WEBCAM_STYLE } from './defaults';
 
 function calculateFallbackWebcamLayout(
   canvasWidth: number,
@@ -110,31 +66,22 @@ function calculateFallbackWebcamLayout(
   };
 }
 
-export async function resolveLayout(
+/**
+ * The export uses the same layout math as the preview, driven by the project's
+ * own padding, so what you see in the editor is what gets rendered.
+ */
+export function resolveLayout(
+  project: CanvasLayoutProject,
   videoWidth: number,
   videoHeight: number,
   canvasWidth: number,
   canvasHeight: number,
-  canvasBackgroundEnabled = true,
-): Promise<CompositionLayout> {
-  if (!canvasBackgroundEnabled) {
-    return calculateFullBleedLayout(videoWidth, videoHeight, canvasWidth, canvasHeight);
-  }
-
-  try {
-    return await window.electron.compositor.calculateLayout(
-      {
-        width: videoWidth,
-        height: videoHeight,
-      },
-      {
-        width: canvasWidth,
-        height: canvasHeight,
-      },
-    );
-  } catch {
-    return calculateFallbackLayout(videoWidth, videoHeight, canvasWidth, canvasHeight);
-  }
+): CompositionLayout {
+  return resolveProjectCanvasLayout(
+    project,
+    { width: videoWidth, height: videoHeight },
+    { width: canvasWidth, height: canvasHeight },
+  );
 }
 
 export async function resolveWebcamLayout(

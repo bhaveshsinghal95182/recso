@@ -116,7 +116,6 @@ interface ElectronAPI {
       backgroundPath: string | null;
       backgroundColor: string;
       canvasSize: { width: number; height: number };
-      layout: { padding: number; maxScale: number; scaleUp: boolean };
       canvasBackgroundEnabled: boolean;
     }>;
 
@@ -125,7 +124,6 @@ interface ElectronAPI {
       backgroundPath: string | null;
       backgroundColor: string;
       canvasSize: { width: number; height: number };
-      layout: { padding: number; maxScale: number; scaleUp: boolean };
       canvasBackgroundEnabled: boolean;
     }>;
 
@@ -146,20 +144,6 @@ interface ElectronAPI {
 
     /** Get target canvas size */
     getCanvasSize: () => Promise<{ width: number; height: number }>;
-
-    /** Set layout configuration */
-    setLayoutConfig: (
-      config: Partial<{ padding: number; maxScale: number; scaleUp: boolean }>,
-    ) => Promise<boolean>;
-
-    /** Get layout configuration */
-    getLayoutConfig: () => Promise<{ padding: number; maxScale: number; scaleUp: boolean }>;
-
-    /** Calculate layout for video on canvas */
-    calculateLayout: (
-      videoBounds: { x?: number; y?: number; width: number; height: number },
-      canvasSize?: { width: number; height: number },
-    ) => Promise<{ x: number; y: number; width: number; height: number; scale: number }>;
 
     /** Calculate layout for webcam overlay on canvas */
     calculateWebcamLayout: (
@@ -186,7 +170,6 @@ interface ElectronAPI {
       backgroundPath: string | null;
       backgroundColor: string;
       canvasSize: { width: number; height: number };
-      layout: { padding: number; maxScale: number; scaleUp: boolean };
       canvasBackgroundEnabled: boolean;
     }>;
 
@@ -245,6 +228,9 @@ interface ElectronAPI {
     updateWebcamOverlay: (
       config: Partial<WebcamOverlayConfig>,
     ) => Promise<WebcamOverlayConfig | null | undefined>;
+
+    /** Store the canvas padding (fraction of the canvas per side) on the project */
+    updateCanvasPadding: (padding: number) => Promise<number | null>;
 
     /** Update project duration */
     updateProjectDuration: (durationMs: number) => Promise<boolean>;

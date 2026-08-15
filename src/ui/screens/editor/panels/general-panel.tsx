@@ -13,7 +13,20 @@ import {
   type BackgroundPatternConfig,
   patternPresets as patterns,
 } from '../../../../shared/patterns';
-import { PANEL_LABEL, PanelNote, PanelRow, PanelSection, Segmented } from './panel-kit';
+import {
+  CANVAS_PADDING_STEP,
+  MAX_CANVAS_PADDING,
+  MIN_CANVAS_PADDING,
+  resolveCanvasPadding,
+} from '../engine/canvas-layout';
+import {
+  PANEL_LABEL,
+  PanelNote,
+  PanelRow,
+  PanelSection,
+  PanelSlider,
+  Segmented,
+} from './panel-kit';
 import { PatternImportPanel } from './pattern-import-panel';
 
 const PASTEL_COLORS = [
@@ -75,6 +88,7 @@ export function GeneralPanel() {
     updateBackgroundPath,
     updateBackgroundMode,
     updateCanvasBackgroundEnabled,
+    updateCanvasPadding,
   } = useProjectStore();
   const [presetColors, setPresetColors] = useState<string[]>(PASTEL_COLORS);
   const hasCrop = useProjectStore((state) => {
@@ -85,6 +99,7 @@ export function GeneralPanel() {
   if (!project) return null;
 
   const isBackgroundEnabled = project.canvasBackgroundEnabled !== false;
+  const canvasPadding = resolveCanvasPadding(project);
   const backgroundMode = resolveBackgroundMode(
     project.backgroundMode,
     project.backgroundPath,
@@ -156,6 +171,17 @@ export function GeneralPanel() {
             className="overflow-hidden"
           >
             <div className="space-y-5">
+              <PanelSlider
+                label="Padding"
+                value={canvasPadding}
+                min={MIN_CANVAS_PADDING}
+                max={MAX_CANVAS_PADDING}
+                step={CANVAS_PADDING_STEP}
+                onChange={updateCanvasPadding}
+                format={(value) => `${(value * 100).toFixed(1)}%`}
+                hint="Space between the recording and the canvas edge."
+              />
+
               <Segmented
                 options={BACKGROUND_MODE_OPTIONS}
                 value={backgroundMode}

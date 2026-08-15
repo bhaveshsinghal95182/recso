@@ -328,6 +328,8 @@ export interface Project {
   backgroundPattern?: BackgroundPatternConfig | null;
   backgroundMode?: BackgroundMode;
   canvasBackgroundEnabled?: boolean;
+  /** Padding kept clear on each side of the canvas, as a fraction of the canvas (0–0.25) */
+  canvasPadding?: number;
   /** Optional crop configuration for the source recording */
   cropConfig?: CropConfig | null;
   webcamOverlay?: WebcamOverlayConfig | null;

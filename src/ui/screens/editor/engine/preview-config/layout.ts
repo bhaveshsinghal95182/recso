@@ -1,7 +1,6 @@
 import type { Project } from '@/types';
 
-import { clamp, DEFAULT_LAYOUT_CONFIG, DEFAULT_WEBCAM_STYLE } from '../export-pipeline/defaults';
-import { resolveCroppedSourceDimensions } from '../source-crop';
+import { clamp, DEFAULT_WEBCAM_STYLE } from '../export-pipeline/defaults';
 import type { CompositionLayout } from '../types';
 import { resolveAnchoredPosition } from '../webcam-anchor';
 import type { CanvasSize } from './types';
@@ -10,62 +9,6 @@ export const DEFAULT_CANVAS_SIZE: CanvasSize = {
   width: 1920,
   height: 1080,
 };
-
-function toDefaultLayout(canvasSize: CanvasSize): CompositionLayout {
-  return {
-    x: 0,
-    y: 0,
-    width: canvasSize.width,
-    height: canvasSize.height,
-    scale: 1,
-  };
-}
-
-export function calculateFullBleedLayout(
-  videoWidth: number,
-  videoHeight: number,
-  canvasWidth: number,
-  canvasHeight: number,
-): CompositionLayout {
-  const scaleX = canvasWidth / Math.max(1, videoWidth);
-  const scaleY = canvasHeight / Math.max(1, videoHeight);
-  const scale = Math.max(scaleX, scaleY);
-
-  return {
-    x: 0,
-    y: 0,
-    width: canvasWidth,
-    height: canvasHeight,
-    scale: Number.isFinite(scale) && scale > 0 ? scale : 1,
-  };
-}
-
-export function calculateFallbackLayout(
-  videoWidth: number,
-  videoHeight: number,
-  canvasWidth: number,
-  canvasHeight: number,
-): CompositionLayout {
-  const availableWidth =
-    canvasWidth * (1 - DEFAULT_LAYOUT_CONFIG.padding * 2) * DEFAULT_LAYOUT_CONFIG.maxScale;
-  const availableHeight =
-    canvasHeight * (1 - DEFAULT_LAYOUT_CONFIG.padding * 2) * DEFAULT_LAYOUT_CONFIG.maxScale;
-
-  const scaleX = availableWidth / videoWidth;
-  const scaleY = availableHeight / videoHeight;
-
-  let scale = Math.min(scaleX, scaleY);
-  if (!DEFAULT_LAYOUT_CONFIG.scaleUp && scale > 1) {
-    scale = 1;
-  }
-
-  const width = Math.round(videoWidth * scale);
-  const height = Math.round(videoHeight * scale);
-  const x = Math.round((canvasWidth - width) / 2);
-  const y = Math.round((canvasHeight - height) / 2);
-
-  return { x, y, width, height, scale };
-}
 
 export function calculateFallbackWebcamLayout(
   canvasWidth: number,
@@ -127,9 +70,12 @@ export function calculateFallbackWebcamLayout(
   };
 }
 
+/**
+ * What the preview still asks the main process for. The video layout is not in
+ * here — the renderer derives that from the project's own padding.
+ */
 export interface PreviewLayoutSnapshot {
   canvasSize: CanvasSize;
-  layout: CompositionLayout;
   webcamLayout: CompositionLayout | null;
 }
 
@@ -140,32 +86,11 @@ export async function loadPreviewLayoutSnapshot(
   if (!project.videoDimensions) {
     return {
       canvasSize: DEFAULT_CANVAS_SIZE,
-      layout: toDefaultLayout(DEFAULT_CANVAS_SIZE),
       webcamLayout: null,
     };
   }
 
-  const effectiveVideoDimensions = resolveCroppedSourceDimensions(
-    project.videoDimensions,
-    project.cropConfig,
-  );
-
   const canvasSize = await window.electron.compositor.getCanvasSize();
-  const layout =
-    project.canvasBackgroundEnabled === false
-      ? calculateFullBleedLayout(
-          effectiveVideoDimensions.width,
-          effectiveVideoDimensions.height,
-          canvasSize.width,
-          canvasSize.height,
-        )
-      : await window.electron.compositor.calculateLayout(
-          {
-            width: effectiveVideoDimensions.width,
-            height: effectiveVideoDimensions.height,
-          },
-          canvasSize,
-        );
 
   let webcamLayout: CompositionLayout | null = null;
   if (project.webcamOverlay?.enabled && webcamSourcePath) {
@@ -189,7 +114,6 @@ export async function loadPreviewLayoutSnapshot(
 
   return {
     canvasSize,
-    layout,
     webcamLayout,
   };
 }
@@ -198,36 +122,8 @@ export function buildFallbackPreviewLayoutSnapshot(
   project: Project,
   webcamSourcePath: string | undefined,
 ): PreviewLayoutSnapshot {
-  if (!project.videoDimensions) {
-    return {
-      canvasSize: DEFAULT_CANVAS_SIZE,
-      layout: toDefaultLayout(DEFAULT_CANVAS_SIZE),
-      webcamLayout: null,
-    };
-  }
-
-  const effectiveVideoDimensions = resolveCroppedSourceDimensions(
-    project.videoDimensions,
-    project.cropConfig,
-  );
-
-  const layout =
-    project.canvasBackgroundEnabled === false
-      ? calculateFullBleedLayout(
-          effectiveVideoDimensions.width,
-          effectiveVideoDimensions.height,
-          DEFAULT_CANVAS_SIZE.width,
-          DEFAULT_CANVAS_SIZE.height,
-        )
-      : calculateFallbackLayout(
-          effectiveVideoDimensions.width,
-          effectiveVideoDimensions.height,
-          DEFAULT_CANVAS_SIZE.width,
-          DEFAULT_CANVAS_SIZE.height,
-        );
-
   const webcamLayout =
-    project.webcamOverlay?.enabled && webcamSourcePath
+    project.videoDimensions && project.webcamOverlay?.enabled && webcamSourcePath
       ? calculateFallbackWebcamLayout(
           DEFAULT_CANVAS_SIZE.width,
           DEFAULT_CANVAS_SIZE.height,
@@ -237,7 +133,6 @@ export function buildFallbackPreviewLayoutSnapshot(
 
   return {
     canvasSize: DEFAULT_CANVAS_SIZE,
-    layout,
     webcamLayout,
   };
 }

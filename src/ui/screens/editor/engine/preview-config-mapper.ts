@@ -10,9 +10,7 @@ import {
 } from './preview-config/composition';
 import {
   buildFallbackPreviewLayoutSnapshot,
-  calculateFallbackLayout,
   calculateFallbackWebcamLayout,
-  calculateFullBleedLayout,
   DEFAULT_CANVAS_SIZE,
   loadPreviewLayoutSnapshot,
 } from './preview-config/layout';
@@ -20,6 +18,7 @@ import type {
   CanvasSize,
   EnginePreviewMappedConfig as PreviewMappedConfig,
 } from './preview-config/types';
+import { resolveProjectCanvasLayout } from './canvas-layout';
 import { resolveCroppedSourceDimensions } from './source-crop';
 import type { CompositionLayout } from './types';
 
@@ -34,7 +33,6 @@ export function useEnginePreviewConfigMapper(
 ): PreviewMappedConfig {
   const durationMs = project?.timeline?.duration || 0;
   const [canvasSize, setCanvasSize] = useState<CanvasSize>(DEFAULT_CANVAS_SIZE);
-  const [backendLayout, setBackendLayout] = useState<CompositionLayout | null>(null);
   const [backendWebcamLayout, setBackendWebcamLayout] = useState<CompositionLayout | null>(null);
 
   const webcamSourcePath = useMemo(() => resolveProjectWebcamSourcePath(project), [project]);
@@ -42,13 +40,11 @@ export function useEnginePreviewConfigMapper(
   useEffect(() => {
     if (!project?.videoDimensions) {
       setCanvasSize(DEFAULT_CANVAS_SIZE);
-      setBackendLayout(null);
       setBackendWebcamLayout(null);
       return;
     }
 
     let cancelled = false;
-    setBackendLayout(null);
     setBackendWebcamLayout(null);
 
     const syncLayoutFromBackend = async () => {
@@ -59,7 +55,6 @@ export function useEnginePreviewConfigMapper(
         }
 
         setCanvasSize(snapshot.canvasSize);
-        setBackendLayout(snapshot.layout);
         setBackendWebcamLayout(snapshot.webcamLayout);
       } catch {
         if (cancelled) {
@@ -68,7 +63,6 @@ export function useEnginePreviewConfigMapper(
 
         const fallbackSnapshot = buildFallbackPreviewLayoutSnapshot(project, webcamSourcePath);
         setCanvasSize(fallbackSnapshot.canvasSize);
-        setBackendLayout(fallbackSnapshot.layout);
         setBackendWebcamLayout(fallbackSnapshot.webcamLayout);
       }
     };
@@ -87,6 +81,7 @@ export function useEnginePreviewConfigMapper(
     webcamSourcePath,
   ]);
 
+  // Padding changes land here immediately — no round trip to the main process.
   const layout = useMemo<CompositionLayout>(() => {
     if (!project?.videoDimensions) {
       return {
@@ -98,35 +93,16 @@ export function useEnginePreviewConfigMapper(
       };
     }
 
-    const sourceDimensions = resolveCroppedSourceDimensions(
-      project.videoDimensions,
-      project.cropConfig,
-    );
-
-    if (project.canvasBackgroundEnabled === false) {
-      return calculateFullBleedLayout(
-        sourceDimensions.width,
-        sourceDimensions.height,
-        canvasSize.width,
-        canvasSize.height,
-      );
-    }
-
-    if (backendLayout) {
-      return backendLayout;
-    }
-
-    return calculateFallbackLayout(
-      sourceDimensions.width,
-      sourceDimensions.height,
-      canvasSize.width,
-      canvasSize.height,
+    return resolveProjectCanvasLayout(
+      project,
+      resolveCroppedSourceDimensions(project.videoDimensions, project.cropConfig),
+      canvasSize,
     );
   }, [
-    backendLayout,
     canvasSize.height,
     canvasSize.width,
     project?.canvasBackgroundEnabled,
+    project?.canvasPadding,
     project?.cropConfig,
     project?.videoDimensions,
   ]);

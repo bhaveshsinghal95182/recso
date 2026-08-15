@@ -3,19 +3,17 @@
  *
  * Provides:
  * - Background management (set/get)
- * - Layout calculation
+ * - Webcam overlay layout calculation
  * - Configuration management
+ *
+ * The video's own layout is not here: the renderer computes it from the
+ * project's `canvasPadding`, so preview and export always agree.
  */
 
 import { dialog, ipcMain } from 'electron';
 
 import * as CompositorService from '../services/compositor.service.js';
-import type {
-  LayoutConfig,
-  Rectangle,
-  Size,
-  WebcamLayoutRequest,
-} from '../types/compositor.types.js';
+import type { Size, WebcamLayoutRequest } from '../types/compositor.types.js';
 
 /**
  * Register all compositor IPC handlers
@@ -65,28 +63,6 @@ export function registerCompositorHandlers(): void {
   ipcMain.handle('compositor:get-canvas-size', async () => {
     return CompositorService.getCanvasSize();
   });
-
-  // Set layout config
-  ipcMain.handle(
-    'compositor:set-layout-config',
-    async (_event, layoutConfig: Partial<LayoutConfig>) => {
-      CompositorService.setLayoutConfig(layoutConfig);
-      return true;
-    },
-  );
-
-  // Get layout config
-  ipcMain.handle('compositor:get-layout-config', async () => {
-    return CompositorService.getLayoutConfig();
-  });
-
-  // Calculate layout for video bounds
-  ipcMain.handle(
-    'compositor:calculate-layout',
-    async (_event, videoBounds: Rectangle | Size, canvasSize?: Size) => {
-      return CompositorService.calculateLayout(videoBounds, canvasSize);
-    },
-  );
 
   // Calculate layout for webcam overlay
   ipcMain.handle(

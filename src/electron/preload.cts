@@ -184,18 +184,6 @@ electron.contextBridge.exposeInMainWorld('electron', {
     getCanvasSize: (): Promise<{ width: number; height: number }> =>
       electron.ipcRenderer.invoke('compositor:get-canvas-size'),
 
-    setLayoutConfig: (config: Record<string, unknown>): Promise<boolean> =>
-      electron.ipcRenderer.invoke('compositor:set-layout-config', config),
-
-    getLayoutConfig: (): Promise<{ padding: number; maxScale: number; scaleUp: boolean }> =>
-      electron.ipcRenderer.invoke('compositor:get-layout-config'),
-
-    calculateLayout: (
-      videoBounds: { x?: number; y?: number; width: number; height: number },
-      canvasSize?: { width: number; height: number },
-    ): Promise<{ x: number; y: number; width: number; height: number; scale: number }> =>
-      electron.ipcRenderer.invoke('compositor:calculate-layout', videoBounds, canvasSize),
-
     calculateWebcamLayout: (
       canvasSize?: { width: number; height: number },
       request?: {
@@ -266,6 +254,10 @@ electron.contextBridge.exposeInMainWorld('electron', {
 
     updateWebcamOverlay: (config: Record<string, unknown>) =>
       electron.ipcRenderer.invoke('editor:update-webcam-overlay', config),
+
+    /** Store the canvas padding (fraction of the canvas per side) on the project */
+    updateCanvasPadding: (padding: number): Promise<number | null> =>
+      electron.ipcRenderer.invoke('editor:update-canvas-padding', padding),
 
     /** Update project duration */
     updateProjectDuration: (durationMs: number) =>

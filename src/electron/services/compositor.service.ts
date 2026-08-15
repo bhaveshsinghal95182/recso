@@ -1,14 +1,14 @@
 /**
- * CompositorService — The "Math Brain" for video compositing.
+ * CompositorService — compositor configuration held by the main process.
  *
  * Responsibilities:
- * - Manages compositor configuration (background, layout settings)
- * - Calculates layout positioning for centering/scaling video on canvas
- * - Provides a single source of truth for both frontend preview and backend export
+ * - Manages compositor configuration (background, canvas size)
+ * - Calculates the webcam overlay placement on the canvas
  *
- * Note: This service does NOT render pixels. Rendering is done by:
- * - Frontend: Canvas in the Editor (Phase 13)
- * - Backend: FFmpeg during export (Phase 11)
+ * Note: This service does NOT render pixels, and it does not decide how the
+ * recording is framed. The renderer owns that math
+ * (`src/ui/screens/editor/engine/canvas-layout.ts`) and drives both the preview
+ * and the export from the project's stored `canvasPadding`.
  */
 
 import fs from 'fs';
@@ -16,9 +16,7 @@ import path from 'path';
 
 import type {
   CompositorConfig,
-  LayoutConfig,
   LayoutResult,
-  Rectangle,
   Size,
   WebcamAnchor,
   WebcamLayoutRequest,
@@ -120,116 +118,6 @@ export function setCanvasSize(size: Size): void {
  */
 export function getCanvasSize(): Size {
   return { ...config.canvasSize };
-}
-
-/**
- * Update layout configuration
- */
-export function setLayoutConfig(layoutConfig: Partial<LayoutConfig>): void {
-  config.layout = { ...config.layout, ...layoutConfig };
-}
-
-/**
- * Get layout configuration
- */
-export function getLayoutConfig(): LayoutConfig {
-  return { ...config.layout };
-}
-
-/**
- * Calculate the layout for placing a video on the canvas.
- *
- * Logic:
- * 1. Calculate the scale needed to fit the video within available space (with padding)
- * 2. If scaleUp is enabled, scale up small videos to fill more of the canvas
- * 3. Apply maxScale as a limit on how much of the available space to fill
- * 4. Center the result on the canvas
- *
- * @param videoBounds - The original video/window dimensions
- * @param canvasSize - Optional override for canvas size (defaults to config)
- * @returns LayoutResult with position, size, and scale factor
- */
-export function calculateLayout(videoBounds: Rectangle | Size, canvasSize?: Size): LayoutResult {
-  const canvas = canvasSize || config.canvasSize;
-  const layout = config.layout;
-  const canvasBackgroundEnabled = config.canvasBackgroundEnabled !== false;
-
-  // Extract video dimensions
-  const videoWidth = videoBounds.width;
-  const videoHeight = videoBounds.height;
-
-  // In full-bleed mode (background disabled), always fill the canvas exactly.
-  // Keep scale representative of the draw target so cursor sizing/mapping stays aligned.
-  if (!canvasBackgroundEnabled) {
-    const scaleX = canvas.width / Math.max(1, videoWidth);
-    const scaleY = canvas.height / Math.max(1, videoHeight);
-    const scale = Math.max(scaleX, scaleY);
-
-    console.log('[Compositor] Calculating full-bleed layout:', {
-      video: `${videoWidth}x${videoHeight}`,
-      canvas: `${canvas.width}x${canvas.height}`,
-      mode: 'full-bleed',
-    });
-
-    return {
-      x: 0,
-      y: 0,
-      width: canvas.width,
-      height: canvas.height,
-      scale: Number.isFinite(scale) && scale > 0 ? scale : 1,
-    };
-  }
-
-  // Framed mode (background enabled) - existing behavior
-  console.log('[Compositor] Calculating framed layout:', {
-    video: `${videoWidth}x${videoHeight}`,
-    canvas: `${canvas.width}x${canvas.height}`,
-    padding: layout.padding,
-    maxScale: layout.maxScale,
-    scaleUp: layout.scaleUp,
-  });
-
-  // Calculate available space (with padding)
-  // maxScale further limits how much of the available space we use
-  const effectiveMaxFill = layout.maxScale; // e.g., 0.9 means fill up to 90% of available space
-  const availableWidth = canvas.width * (1 - layout.padding * 2) * effectiveMaxFill;
-  const availableHeight = canvas.height * (1 - layout.padding * 2) * effectiveMaxFill;
-
-  // Calculate scale factors to fit video within the available space
-  const scaleX = availableWidth / videoWidth;
-  const scaleY = availableHeight / videoHeight;
-
-  // Use the smaller scale to maintain aspect ratio (ensures video fits)
-  let scale = Math.min(scaleX, scaleY);
-
-  // If scaleUp is false and this would scale up the video, use 1:1 instead
-  if (!layout.scaleUp && scale > 1) {
-    scale = 1;
-  }
-
-  // Calculate final dimensions
-  const finalWidth = Math.round(videoWidth * scale);
-  const finalHeight = Math.round(videoHeight * scale);
-
-  // Center on canvas
-  const x = Math.round((canvas.width - finalWidth) / 2);
-  const y = Math.round((canvas.height - finalHeight) / 2);
-
-  const result = {
-    x,
-    y,
-    width: finalWidth,
-    height: finalHeight,
-    scale,
-  };
-
-  console.log('[Compositor] Final layout:', result, {
-    scaleX: scaleX.toFixed(3),
-    scaleY: scaleY.toFixed(3),
-    chosenScale: scale.toFixed(3),
-  });
-
-  return result;
 }
 
 /**

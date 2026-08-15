@@ -17,16 +17,6 @@ export interface Rectangle {
   height: number;
 }
 
-/** Layout configuration options */
-export interface LayoutConfig {
-  /** Padding around the video as a percentage (0-1). Default: 0.04 (4%) */
-  padding: number;
-  /** Maximum scale factor when window is smaller than canvas. Default: 0.9 */
-  maxScale: number;
-  /** Whether to scale up small windows to fill more space */
-  scaleUp: boolean;
-}
-
 /** Result of layout calculation */
 export interface LayoutResult {
   /** X offset on the canvas */
@@ -74,8 +64,6 @@ export interface CompositorConfig {
   backgroundColor: string;
   /** Target canvas dimensions */
   canvasSize: Size;
-  /** Layout configuration */
-  layout: LayoutConfig;
   /** Whether canvas background is enabled (true for framed, false for full-bleed) */
   canvasBackgroundEnabled: boolean;
 }
@@ -85,10 +73,5 @@ export const DEFAULT_COMPOSITOR_CONFIG: CompositorConfig = {
   backgroundPath: null,
   backgroundColor: '#000000',
   canvasSize: { width: 1920, height: 1080 },
-  layout: {
-    padding: 0.04,
-    maxScale: 0.9,
-    scaleUp: true,
-  },
   canvasBackgroundEnabled: true,
 };

@@ -84,12 +84,12 @@ export async function runEngineCanvasExport({
     const screenCuts = project.cuts.filter((cut) => cut.targets?.screen ?? true);
     const compositionDurationMs = getCutAdjustedDurationMs(sourceDurationMs, screenCuts);
     const outputDimensions = resolveOutputDimensions(config);
-    const layout = await resolveLayout(
+    const layout = resolveLayout(
+      project,
       sourceDimensions.width,
       sourceDimensions.height,
       outputDimensions.width,
       outputDimensions.height,
-      project.canvasBackgroundEnabled !== false,
     );
 
     const webcamLayout =
