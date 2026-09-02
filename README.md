@@ -15,6 +15,7 @@ Built with Electron, React, and a native Rust capture engine.
 - **Crash-safe recording** — recording metadata is persisted to a local SQLite database so in-progress recordings can be recovered after a crash.
 - **Project management** — recordings are saved as local projects with a recent-projects list for quickly resuming past work.
 - **Export pipeline** — a staged compositor/export pipeline (via [Mediabunny](https://www.npmjs.com/package/mediabunny)) renders the final video with backgrounds, zoom, cursor effects, and webcam overlay baked in.
+- **GPU video engine (parallel, not yet wired into the editor)** — hardware decode, colour grading and encode that keep frames on the GPU end to end, in the `velocity` crate. See [docs/ENGINE.md](docs/ENGINE.md).
 - **System tray integration** — start/stop recordings and access the app from the system tray.
 - **Basic usage telemetry** — anonymous, opt-out-friendly telemetry to help understand feature usage (see `src/electron/services/telemetry`).
 
@@ -125,16 +126,19 @@ Build configuration lives in [electron-builder.json](electron-builder.json).
 
 ## Other Scripts
 
-| Script                | Description                                                      |
-| --------------------- | ---------------------------------------------------------------- |
-| `pnpm cleanup:db`     | Runs the database cleanup script against the local SQLite store. |
-| `pnpm rebuild:native` | Rebuilds native dependencies for the current Electron version.   |
+| Script                | Description                                                       |
+| --------------------- | ----------------------------------------------------------------- |
+| `pnpm cleanup:db`     | Runs the database cleanup script against the local SQLite store.  |
+| `pnpm rebuild:native` | Rebuilds native dependencies for the current Electron version.    |
+| `pnpm build:engine`   | Builds the `velocity` Rust addon, including the GPU video engine. |
+| `pnpm engine:check`   | Headless end-to-end check of the GPU video engine.                |
 
 ## Documentation
 
 - [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) — fixes for common native module / build issues.
 - [docs/blog-webcam-export-optimization.md](docs/blog-webcam-export-optimization.md) — notes on webcam export performance.
 - [src/ui/screens/editor/engine/export-pipeline/README.md](src/ui/screens/editor/engine/export-pipeline/README.md) — architecture of the video export pipeline.
+- [docs/ENGINE.md](docs/ENGINE.md) — the GPU video engine: a parallel hardware decode/grade/encode path in the `velocity` crate, the recorder metadata that feeds it, and how it is meant to take over from the `<video>` + Pixi path.
 - [implementation-plans/](implementation-plans/) — design docs for planned/in-progress features.
 
 ## License
