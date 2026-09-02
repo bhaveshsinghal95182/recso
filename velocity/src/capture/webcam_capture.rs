@@ -10,6 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use windows_capture::encoder::{
   AudioSettingsBuilder, ContainerSettingsBuilder, VideoEncoder, VideoSettingsBuilder,
+  VideoSettingsSubType,
 };
 
 const WEBCAM_DEFAULT_BITRATE: u32 = 3_000_000;
@@ -254,7 +255,11 @@ fn run_webcam_recording_loop(
 
   let mut encoder = match VideoEncoder::new(
     VideoSettingsBuilder::new(expected_frame_width as u32, expected_frame_height as u32)
-      .bitrate(WEBCAM_DEFAULT_BITRATE),
+      .bitrate(WEBCAM_DEFAULT_BITRATE)
+      // windows-capture defaults to HEVC, and a stock Windows install has no
+      // HEVC decoder MFT -- the sidecar would be undecodable by the engine even
+      // though the screen track next to it is fine.
+      .sub_type(VideoSettingsSubType::H264),
     AudioSettingsBuilder::default().disabled(true),
     ContainerSettingsBuilder::default(),
     &sidecar_path,
