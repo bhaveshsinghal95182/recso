@@ -80,6 +80,13 @@ export interface RecordingMetadata {
     height: number;
     isMaximized: boolean;
   } | null;
+  /**
+   * What the recorder reported when it stopped.
+   *
+   * Null for recordings made before the recorder started reporting, and for
+   * files recovered after a crash -- both fall back to probing the file.
+   */
+  mediaInfo: RecordingMediaInfo | null;
 }
 
 /** State event pushed to renderer */
@@ -100,9 +107,57 @@ export interface StartRecordingResult {
   error?: string;
 }
 
+/**
+ * What the native recorder knows about a file it just wrote.
+ *
+ * Reported by `Stopper.stop()`. Every field here used to be recovered by
+ * demuxing the finished file with mediabunny; the recorder had all of it at
+ * capture time and was throwing it away.
+ */
+export interface RecordingMediaInfo {
+  outputPath: string;
+  /** `screen` or `webcam` -- one recording can produce both. */
+  role: 'screen' | 'webcam' | string;
+  width: number;
+  height: number;
+  /** Frames actually handed to the encoder. */
+  frames: number;
+  durationMs: number;
+  /**
+   * Measured frames over elapsed capture time.
+   *
+   * Screen capture is variable-rate: Windows only delivers a frame when
+   * something on screen changes, so this is usually far below `configuredFps`
+   * and bears no relation to the container's nominal rate. Treat it as an
+   * average, not a constant -- for anything frame-exact use `frames` and
+   * `durationMs`.
+   */
+  fps: number;
+  /** The rate we asked Windows for. */
+  configuredFps: number;
+  bitrate: number;
+  codec: string;
+  /**
+   * True only when captured audio bytes actually reached the encoder.
+   *
+   * The file always carries an AAC track regardless -- windows-capture always
+   * registers one -- so track presence proves nothing and this is the only
+   * honest answer.
+   */
+  hasAudio: boolean;
+  fileSize: number;
+  /** False when the capture produced no frames: a failed recording that still wrote a header. */
+  usable: boolean;
+}
+
 /** Result of stopping a recording */
 export interface StopRecordingResult {
   success: boolean;
   filePath?: string;
   error?: string;
+  /**
+   * What the recorder wrote, straight from the capture thread. Absent only if
+   * the native recorder is too old to report it.
+   */
+  media?: RecordingMediaInfo;
 }

@@ -20,7 +20,11 @@ import { app } from 'electron';
 import Database from 'better-sqlite3';
 import path from 'path';
 
-import type { RecordingMetadata, RecordingStatus } from '../types/recorder.types.js';
+import type {
+  RecordingMediaInfo,
+  RecordingMetadata,
+  RecordingStatus,
+} from '../types/recorder.types.js';
 
 let db: Database.Database | null = null;
 
@@ -48,9 +52,14 @@ export function initializeDatabase(): void {
       source_id TEXT NOT NULL,
       started_at INTEGER NOT NULL,
       stopped_at INTEGER,
-      window_bounds TEXT
+      window_bounds TEXT,
+      media_info TEXT
     )
   `);
+
+  // CREATE TABLE IF NOT EXISTS does nothing to a table that already exists, so
+  // databases from before media reporting need the column added explicitly.
+  addColumnIfMissing(db, 'recordings', 'media_info', 'TEXT');
 
   // Create mouse_events table for mouse path tracking
   db.exec(`
@@ -134,12 +143,16 @@ export function updateRecordingStatus(id: string, status: RecordingStatus): void
 /**
  * Mark recording as completed with final path
  */
-export function completeRecording(id: string, finalPath: string): void {
+export function completeRecording(
+  id: string,
+  finalPath: string,
+  mediaInfo?: RecordingMediaInfo | null,
+): void {
   const database = getDatabase();
   const stmt = database.prepare(`
-    UPDATE recordings SET status = 'completed', final_path = ?, stopped_at = ? WHERE id = ?
+    UPDATE recordings SET status = 'completed', final_path = ?, stopped_at = ?, media_info = ? WHERE id = ?
   `);
-  stmt.run(finalPath, Date.now(), id);
+  stmt.run(finalPath, Date.now(), mediaInfo ? JSON.stringify(mediaInfo) : null, id);
 }
 
 /**
@@ -200,5 +213,48 @@ function mapRowToMetadata(row: Record<string, unknown>): RecordingMetadata {
     startedAt: row.started_at as number,
     stoppedAt: (row.stopped_at as number) || null,
     windowBounds: row.window_bounds ? JSON.parse(row.window_bounds as string) : null,
+    mediaInfo: parseMediaInfo(row.media_info),
   };
+}
+
+/**
+ * Stored as JSON in a text column, like `window_bounds`.
+ *
+ * Tolerates garbage rather than throwing: a project that cannot read its
+ * recorder metadata should fall back to probing the file, not fail to open.
+ */
+function parseMediaInfo(value: unknown): RecordingMediaInfo | null {
+  if (typeof value !== 'string' || value.length === 0) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(value) as RecordingMediaInfo;
+  } catch {
+    console.warn('[DatabaseService] Ignoring unreadable media_info');
+    return null;
+  }
+}
+
+/**
+ * Additive schema migration.
+ *
+ * There is no migration framework here; the schema is created inline. Adding a
+ * column to an existing database therefore has to be done by hand, and has to
+ * be idempotent because this runs on every launch.
+ */
+function addColumnIfMissing(
+  database: Database.Database,
+  table: string,
+  column: string,
+  definition: string,
+): void {
+  const columns = database.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+
+  if (columns.some((existing) => existing.name === column)) {
+    return;
+  }
+
+  database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  console.log(`[DatabaseService] Added ${table}.${column}`);
 }

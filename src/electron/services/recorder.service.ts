@@ -17,6 +17,7 @@ import path from 'path';
 import type {
   DesktopSource,
   RecordingConfig,
+  RecordingMediaInfo,
   RecordingState,
   RecordingStateEvent,
   StartRecordingResult,
@@ -26,7 +27,14 @@ import { completeRecording, createRecording, getRecording } from './database.ser
 import { initProjectFolder } from './project-storage.service.js';
 
 interface VelocityStopper {
-  stop(): void;
+  /**
+   * Stops every capture and describes what was written -- one entry per
+   * capture, so a v2 recording with the webcam enabled reports two.
+   *
+   * Returns undefined on a velocity build predating media reporting, which is
+   * why every caller treats the result as optional.
+   */
+  stop(): RecordingMediaInfo[] | undefined;
 }
 
 interface VelocityBindings {
@@ -124,6 +132,16 @@ interface SourceMeta {
 }
 
 let activeRecording: ActiveRecording | null = null;
+
+/**
+ * Finalize passes that are currently running, keyed by recording id.
+ *
+ * Finalizing is slow — waiting on the native capture to flush, then muxing
+ * desktop audio into the video — and `final_path` is only written to the
+ * database once it completes. Anything that needs a finished recording awaits
+ * the entry here instead of reading a half-written row.
+ */
+const finalizingRecordings = new Map<string, Promise<StopRecordingResult>>();
 let velocityBindingsCache: VelocityBindings | null = null;
 let sourceMetaById = new Map<string, SourceMeta>();
 
@@ -521,6 +539,45 @@ const NATIVE_FINALIZE_TIMEOUT_MS = 120_000;
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Pick the screen capture out of what the recorder reported.
+ *
+ * A v2 recording with the webcam enabled reports two entries. Match on the
+ * output path rather than trusting order, and fall back to the role so an
+ * older build that only reports one still works.
+ */
+/**
+ * The recorder reports the temp path it wrote to; by the time anyone consumes
+ * this, the file has been moved into the recording folder.
+ */
+function mediaAtFinalPath(
+  media: RecordingMediaInfo | null,
+  finalPath: string,
+): RecordingMediaInfo | undefined {
+  if (!media) {
+    return undefined;
+  }
+  return { ...media, outputPath: finalPath };
+}
+
+function findScreenMedia(
+  reported: RecordingMediaInfo[] | undefined,
+  tempPath: string,
+): RecordingMediaInfo | null {
+  if (!reported?.length) {
+    return null;
+  }
+
+  const normalize = (value: string) => path.resolve(value).toLowerCase();
+  const wanted = normalize(tempPath);
+
+  return (
+    reported.find((info) => normalize(info.outputPath) === wanted) ??
+    reported.find((info) => info.role === 'screen') ??
+    null
+  );
 }
 
 async function hasReadableVideoTrack(filePath: string): Promise<boolean> {
@@ -1012,6 +1069,8 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
       status: 'recording',
       tempPath,
       finalPath: null,
+      // Not knowable until the recorder stops and reports.
+      mediaInfo: null,
       outputDir: config.outputDir,
       fileName: config.fileName,
       sourceId: config.sourceId,
@@ -1107,8 +1166,12 @@ export function writeChunk(
 
 /**
  * Stop active recording and persist outputs.
+ *
+ * Never call this directly — go through `stopRecording`, which makes the pass
+ * shareable so concurrent callers join it rather than starting a second one.
  */
-export async function stopRecording(recordingId: string): Promise<StopRecordingResult> {
+
+async function finalizeRecording(recordingId: string): Promise<StopRecordingResult> {
   if (!activeRecording || activeRecording.id !== recordingId) {
     return { success: false, error: 'No active recording with this ID' };
   }
@@ -1116,7 +1179,22 @@ export async function stopRecording(recordingId: string): Promise<StopRecordingR
   const currentRecording = activeRecording;
 
   try {
-    currentRecording.stopper.stop();
+    // The recorder describes what it wrote. This is the only place that
+    // information exists without reopening the file, so hold on to it: it
+    // answers duration, geometry, frame count, real fps and whether the audio
+    // track carries anything, all of which used to cost a demux pass.
+    const reported = currentRecording.stopper.stop();
+    const screenMedia = findScreenMedia(reported, currentRecording.tempPath);
+
+    if (screenMedia) {
+      console.log(
+        `[RecorderService] Recorder reported ${screenMedia.frames} frames, ` +
+          `${screenMedia.width}x${screenMedia.height}, ` +
+          `${(screenMedia.durationMs / 1000).toFixed(2)}s, ` +
+          `${screenMedia.fps.toFixed(2)} fps measured (asked for ${screenMedia.configuredFps}), ` +
+          `audio=${screenMedia.hasAudio}`,
+      );
+    }
 
     // Wait for the native capture loop to flush and close its output file before touching it.
     const finalizeStartedAtMs = Date.now();
@@ -1216,16 +1294,30 @@ export async function stopRecording(recordingId: string): Promise<StopRecordingR
       if (desktopAudioStats.size === 0) {
         fs.unlinkSync(desktopAudioStream.tempPath);
       } else {
-        const nativeAudioAvailable = currentRecording.nativeSystemAudioRequested
-          ? await hasPrimaryAudioTrack(finalScreenPath)
-          : false;
+        // The recorder counted the audio bytes it actually captured, so this no
+        // longer needs a demux pass to tell real audio from the empty AAC track
+        // windows-capture always writes. Fall back to the old probe only when
+        // the native side did not report anything.
+        const nativeAudioAvailable = !currentRecording.nativeSystemAudioRequested
+          ? false
+          : screenMedia
+            ? screenMedia.hasAudio
+            : await hasPrimaryAudioTrack(finalScreenPath);
 
         if (nativeAudioAvailable) {
           fs.unlinkSync(desktopAudioStream.tempPath);
           console.log('[RecorderService] Native system audio was embedded by velocity.');
-          completeRecording(recordingId, finalScreenPath);
+          completeRecording(
+            recordingId,
+            finalScreenPath,
+            mediaAtFinalPath(screenMedia, finalScreenPath),
+          );
           activeRecording = null;
-          return { success: true, filePath: finalScreenPath };
+          return {
+            success: true,
+            filePath: finalScreenPath,
+            media: mediaAtFinalPath(screenMedia, finalScreenPath),
+          };
         }
 
         const muxed = await muxDesktopAudioIntoVideo(
@@ -1251,10 +1343,14 @@ export async function stopRecording(recordingId: string): Promise<StopRecordingR
       }
     }
 
-    completeRecording(recordingId, finalScreenPath);
+    completeRecording(recordingId, finalScreenPath, mediaAtFinalPath(screenMedia, finalScreenPath));
     activeRecording = null;
 
-    return { success: true, filePath: finalScreenPath };
+    return {
+      success: true,
+      filePath: finalScreenPath,
+      media: mediaAtFinalPath(screenMedia, finalScreenPath),
+    };
   } catch (error) {
     console.error('[RecorderService] Failed to stop recording:', error);
     return {
@@ -1262,6 +1358,56 @@ export async function stopRecording(recordingId: string): Promise<StopRecordingR
       error: error instanceof Error ? error.message : 'Unknown error',
     };
   }
+}
+
+/**
+ * Stop the active recording and wait for its outputs to be written.
+ *
+ * Calling this while a finalize is already running returns that same pass, so
+ * a second stop trigger resolves when the real work finishes instead of
+ * reporting a success the recording has not reached yet.
+ */
+export function stopRecording(recordingId: string): Promise<StopRecordingResult> {
+  const inFlight = finalizingRecordings.get(recordingId);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const pass = finalizeRecording(recordingId).finally(() => {
+    finalizingRecordings.delete(recordingId);
+  });
+
+  finalizingRecordings.set(recordingId, pass);
+  return pass;
+}
+
+/**
+ * Resolve once `recordingId` is no longer being finalized.
+ *
+ * Returns immediately when nothing is in flight — either the recording already
+ * finished or it was never being finalized here (say, after a restart). Callers
+ * still have to check what they actually need afterwards; this only guarantees
+ * they are not reading the database mid-write.
+ */
+export async function whenFinalized(recordingId: string): Promise<void> {
+  const inFlight = finalizingRecordings.get(recordingId);
+  if (!inFlight) {
+    return;
+  }
+
+  // Worth a line: reaching here means something asked for this recording while
+  // it was still being written, which is the race this registry exists to
+  // absorb. Silence would make it look like it never happened.
+  const waitStartedAtMs = Date.now();
+  console.log('[RecorderService] Waiting on in-flight finalize for:', recordingId);
+
+  // A failed finalize is still a finished one. Whatever went wrong is reported
+  // to whoever called stopRecording; here we only care that writing is over.
+  await inFlight.catch(() => undefined);
+
+  console.log(
+    `[RecorderService] Finalize wait for ${recordingId} took ${Date.now() - waitStartedAtMs}ms`,
+  );
 }
 
 /**

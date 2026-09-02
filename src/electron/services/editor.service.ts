@@ -40,6 +40,7 @@ import * as mediaMetadataService from './media-metadata.service.js';
 import { type MouseEvent, mouseTrackerService } from './mouse-tracker.service.js';
 import * as projectStorage from './project-storage.service.js';
 import { upsertRecentProject } from './recent-projects.service.js';
+import { whenFinalized } from './recorder.service.js';
 
 // Active project (only one at a time)
 let activeProject: Project | null = null;
@@ -358,6 +359,11 @@ function createDefaultWebcamOverlay(rawVideoPath: string): Project['webcamOverla
  * Create a new editing project from a recording
  */
 export async function createProject(recordingId: string): Promise<Project | null> {
+  // Stopping a recording writes `final_path` only after the video has been
+  // muxed, which takes seconds on a long take. Join that pass if it is still
+  // running so we read a finished row rather than racing it to a null path.
+  await whenFinalized(recordingId);
+
   const recording = getRecording(recordingId);
   if (!recording) {
     console.error('[EditorService] Recording not found:', recordingId);
@@ -382,15 +388,33 @@ export async function createProject(recordingId: string): Promise<Project | null
     console.warn('[EditorService] Failed to load existing project, creating new one');
   }
 
-  // Probe video for metadata
-  let metadata;
-  try {
-    metadata = await mediaMetadataService.probeVideoMetadata(recording.finalPath);
-    console.log('[EditorService] Probed video metadata (MediaBunny):', metadata);
-  } catch (err) {
-    console.error('[EditorService] Failed to probe video:', err);
-    // Fallback to defaults if probe fails
-    metadata = { width: 1920, height: 1080, duration: 0 };
+  // Video metadata.
+  //
+  // The recorder reports geometry, duration and the measured frame rate when it
+  // stops, so the common path needs no probe at all -- that used to mean
+  // reading the whole file into memory to demux it, and it still could not
+  // produce an fps (this code hardcoded 30).
+  //
+  // Probing stays as the fallback for recordings made before the recorder
+  // reported, and for files recovered after a crash.
+  let metadata: mediaMetadataService.VideoMetadata;
+
+  if (recording.mediaInfo?.usable) {
+    const { width, height, durationMs, fps, frames } = recording.mediaInfo;
+    metadata = { width, height, duration: durationMs / 1000, fps };
+    console.log(
+      `[EditorService] Using recorder metadata: ${width}x${height}, ` +
+        `${(durationMs / 1000).toFixed(2)}s, ${frames} frames, ${fps.toFixed(2)} fps`,
+    );
+  } else {
+    try {
+      metadata = await mediaMetadataService.probeVideoMetadata(recording.finalPath);
+      console.log('[EditorService] Probed video metadata (MediaBunny):', metadata);
+    } catch (err) {
+      console.error('[EditorService] Failed to probe video:', err);
+      // Fallback to defaults if probe fails
+      metadata = { width: 1920, height: 1080, duration: 0, fps: 30 };
+    }
   }
 
   // Get the recording directory and init .recso folder
