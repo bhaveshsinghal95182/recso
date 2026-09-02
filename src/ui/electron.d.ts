@@ -42,6 +42,234 @@ export interface RecentProject {
   createdAt: number;
 }
 
+/** Everything the GPU video engine surfaces to the renderer. */
+export interface EngineStatus {
+  available: boolean;
+  /** Why it is unavailable. Null when it loaded. */
+  error: string | null;
+  version: string | null;
+  gpu: { engine: string; chromium: string; matched: boolean } | null;
+}
+
+export interface EngineVideoInfo {
+  width: number;
+  height: number;
+  codedWidth: number;
+  codedHeight: number;
+  /** Milliseconds. */
+  duration: number;
+  fps: number;
+}
+
+export interface EnginePlayerStats {
+  queueDepth: number;
+  decoded: number;
+  dropped: number;
+  skippedNoTexture: number;
+  skippedRenderError: number;
+  maxQueueWaitUs: number;
+  avgDecodeMs: number;
+  lastSeekMs: number;
+  lastSeekDecoded: number;
+  endOfStream: boolean;
+  playing: boolean;
+  currentTime: number;
+  rate: number;
+}
+
+/** What a tick reports back, whether or not it produced a frame. */
+export interface EngineTickResult {
+  presented: boolean;
+  pts?: number;
+  sendMs?: number;
+  currentTime: number;
+  playing: boolean;
+  rate: number;
+  queueDepth: number;
+  decoded: number;
+  dropped: number;
+  avgDecodeMs: number;
+  lastSeekMs: number;
+  lastSeekDecoded: number;
+  endOfStream: boolean;
+}
+
+export interface EngineExportOptions {
+  output: string;
+  bitrate: number;
+  start?: number;
+  end?: number;
+  brightness?: number;
+  contrast?: number;
+  saturation?: number;
+}
+
+export interface EngineExportProgress {
+  framesDone: number;
+  framesTotal: number;
+  finished: boolean;
+  cancelled: boolean;
+  error?: string;
+  fps: number;
+  steadyFps: number;
+  setupMs: number;
+  avgDecodeMs: number;
+  avgRenderMs: number;
+  avgEncodeMs: number;
+  elapsedMs: number;
+  output: string | null;
+}
+
+export interface EngineFrameInfo {
+  frame: {
+    format: string;
+    codedWidth: number;
+    codedHeight: number;
+    displayWidth: number;
+    displayHeight: number;
+    timestamp: number;
+  } | null;
+  painted: number;
+}
+
+export interface EngineSinkInspection {
+  pixels?: number;
+  nonBlackPct?: number;
+  distinctColours?: number;
+  centrePixel?: number[];
+  error?: string;
+}
+
+/** What the engine opened, reconciled against what the recorder reported. */
+export interface EngineOpenedVideo {
+  width: number;
+  height: number;
+  codedWidth: number;
+  codedHeight: number;
+  /** Milliseconds, from the container: what the decoder produces and seeking is bounded by. */
+  duration: number;
+  /** Wall-clock length of the capture session, when the recorder reported it. */
+  captureDuration?: number;
+  /**
+   * From the recorder when available, where it is a measured average rather
+   * than the container's nominal rate. Screen capture is variable-rate, so for
+   * anything frame-exact use `frames` and `duration` instead.
+   */
+  fps: number;
+  source: 'recorder' | 'container';
+  frames?: number;
+  hasAudio?: boolean;
+  codec?: string;
+  container: EngineVideoInfo;
+  /** Notes wherever the recorder and the container disagreed. */
+  disagreements: string[];
+}
+
+/** Where the webcam overlay sits, in the screen recording's own pixels. */
+export interface EngineWebcamOverlay {
+  x: number;
+  y: number;
+  /** Zero width or height hides the overlay and costs nothing to render. */
+  width: number;
+  height: number;
+  shape?: 'rect' | 'ellipse';
+  /** Corner radius in pixels. Ignored for an ellipse. */
+  cornerRadius?: number;
+  opacity?: number;
+}
+
+export interface EngineCursorBitmap {
+  width: number;
+  height: number;
+  /** Tightly packed RGBA8. */
+  pixels: ArrayBuffer;
+  /**
+   * The pointer's tip within the image. Without it an arrow lands below and
+   * right of the place that was clicked.
+   */
+  hotspotX?: number;
+  hotspotY?: number;
+}
+
+export interface EngineCursorPoint {
+  timestampMs: number;
+  /** 0..1 across the source frame, so it survives the video being scaled. */
+  x: number;
+  y: number;
+  /** Defaults to true. A hidden sample hides the cursor until the next one. */
+  visible?: boolean;
+}
+
+export interface EngineAPI {
+  /** Safe to call unconditionally; never throws. */
+  status: () => Promise<EngineStatus>;
+  diagnostics: () => Promise<{
+    adapters: string[];
+    decoders: string[];
+    gpuProfiles: string[];
+    memory: { used: number; budget: number };
+  }>;
+  /** What Media Foundation sees in a file, before committing to opening it. */
+  probe: (path: string) => Promise<{ opened: boolean; error: string; nativeTypes: string[] }>;
+  gpuMemory: () => Promise<{ used: number; budget: number }>;
+
+  /**
+   * Bind the canvas frames get painted into. Takes a selector because DOM
+   * nodes cannot cross the contextBridge.
+   */
+  bindFrameSink: (selector: string) => boolean;
+  unbindFrameSink: () => void;
+  frameInfo: () => EngineFrameInfo;
+  /** Reads the sink back, so an all-black canvas is distinguishable from success. */
+  inspectFrameSink: () => EngineSinkInspection;
+
+  player: {
+    open: (path: string) => Promise<EngineOpenedVideo>;
+    /** Open a recording by id, using the metadata stored with it. No probe. */
+    openRecording: (recordingId: string) => Promise<EngineOpenedVideo>;
+    close: () => Promise<void>;
+    warm: () => Promise<{ warmMs: number }>;
+    play: () => Promise<void>;
+    pause: () => Promise<void>;
+    setRate: (rate: number) => Promise<void>;
+    /** `exact: false` while dragging a scrubber, `true` on release. */
+    seek: (ms: number, exact?: boolean) => Promise<void>;
+    tick: () => Promise<EngineTickResult>;
+    setEffects: (brightness: number, contrast: number, saturation: number) => Promise<void>;
+    stats: () => Promise<EnginePlayerStats>;
+
+    /**
+     * Place the webcam box, in the screen recording's own pixels.
+     *
+     * The anchor grid and size ratios are resolved here and passed flattened,
+     * so there is one placement formula in the app rather than two.
+     */
+    setWebcamLayout: (layout: EngineWebcamOverlay) => Promise<void>;
+    /** False when the recording had no camera track, or its sidecar would not open. */
+    hasWebcam: () => Promise<boolean>;
+
+    /** `pixels` must be an ArrayBuffer of tightly packed RGBA8. */
+    setCursorImage: (image: EngineCursorBitmap | null) => Promise<void>;
+    setCursorTrack: (samples: EngineCursorPoint[]) => Promise<void>;
+    /** Cursor height in destination pixels, and opacity. Size 0 hides it. */
+    setCursorStyle: (size: number, opacity: number) => Promise<void>;
+    /** Applied asynchronously, so this reads 0 for a moment after setCursorTrack. */
+    cursorSampleCount: () => Promise<number>;
+
+    /**
+     * The composited frame as raw BGRA -- grading, webcam and cursor included.
+     * Stalls the GPU; for stills and verification, not playback.
+     */
+    snapshot: () => Promise<{ width: number; height: number; pixels: ArrayBuffer } | null>;
+  };
+
+  export: {
+    start: (input: string, options: EngineExportOptions) => Promise<{ output: string }>;
+    progress: () => Promise<EngineExportProgress | null>;
+    cancel: () => Promise<void>;
+  };
+}
+
 interface ElectronAPI {
   window: {
     close: () => void;
@@ -396,6 +624,13 @@ interface ElectronAPI {
     error: (...args: unknown[]) => void;
     debug: (...args: unknown[]) => void;
   };
+
+  /**
+   * GPU video engine. Always present as an object, but check
+   * `status().available` before using it -- a checkout where the Rust was
+   * never built reports false and every call below will throw.
+   */
+  engine: EngineAPI;
 }
 
 declare global {

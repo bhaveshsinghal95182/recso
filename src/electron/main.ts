@@ -10,11 +10,23 @@ import path from 'path';
 
 import { initializeWithWindow, registerAllIpcHandlers } from './ipc/index.js';
 import { initializeDatabase } from './services/database.service.js';
+import { checkGpuMatch } from './services/engine/gpu.service.js';
 import { initializeTelemetry } from './services/telemetry/telemetry.service.js';
 import { createTray } from './services/tray.service.js';
 import { initializeLogging } from './utils/logger.js';
 import { getPreloadPath } from './path-resolver.js';
 import { isDevelopment } from './util.js';
+
+// Shared textures cannot cross adapters. The engine builds its D3D11 device on
+// the high-performance GPU, so Chromium's GPU process has to be there too, or
+// every importSharedTexture is handed a handle from a device it cannot open.
+//
+// Must be set before the app is ready; afterwards the GPU process is already
+// up. Harmless when the engine is absent -- Chromium just prefers the discrete
+// GPU, which is what a recorder and video editor want anyway.
+if (process.env.RECSO_ENGINE_GPU !== 'integrated') {
+  app.commandLine.appendSwitch('force_high_performance_gpu');
+}
 
 app.on('ready', () => {
   initializeLogging({ mirrorConsole: isDevelopment() });
@@ -36,6 +48,19 @@ app.on('ready', () => {
     webPreferences: {
       preload: getPreloadPath(),
       webSecurity: false,
+      // The GPU engine's preview needs this.
+      //
+      // A `VideoFrame` cannot cross a contextBridge, so the shared texture has
+      // to be received and drawn inside preload. `sharedTexture` is not part
+      // of the polyfilled electron module a sandboxed preload gets, and a
+      // sandboxed preload cannot require a relative file either -- so with the
+      // default (`sandbox: true`) the engine bridge cannot load at all.
+      //
+      // This is much weaker than what the original prototype needed, which was
+      // `nodeIntegration: true` plus `contextIsolation: false`. Context
+      // isolation stays on: the main world still has no Node, and still only
+      // sees what the contextBridge exposes.
+      sandbox: false,
     },
     frame: false,
   });
@@ -72,4 +97,8 @@ app.on('ready', () => {
 
   // Create system tray
   createTray(mainWindow);
+
+  // Fire-and-forget: reports which adapter the engine and Chromium each landed
+  // on, and warns if they diverge. Only meaningful once the GPU process is up.
+  void checkGpuMatch();
 });

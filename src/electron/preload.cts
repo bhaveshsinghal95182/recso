@@ -1,5 +1,51 @@
 const electron = require('electron');
 import type { IpcRendererEvent } from 'electron';
+import type { engineBridge as EngineBridge } from './preload-engine.cjs';
+
+/**
+ * The GPU engine bridge, or a stub if it could not load.
+ *
+ * Kept in its own module because it installs the shared-texture receiver at
+ * load time and paints frames inside the isolated world -- see that file's
+ * header. Loaded defensively on purpose: it is an optional path, and an
+ * exception escaping it here would take the whole `window.electron` bridge
+ * down with it, breaking recording and editing along with the preview.
+ */
+function loadEngineBridge(): typeof EngineBridge {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require('./preload-engine.cjs').engineBridge as typeof EngineBridge;
+  } catch (error) {
+    const message = 'engine bridge failed to load: ' + (error as Error).message;
+    const unavailable = () => Promise.reject(new Error(message));
+
+    return {
+      status: () => Promise.resolve({ available: false, error: message, version: null, gpu: null }),
+      diagnostics: unavailable,
+      probe: unavailable,
+      gpuMemory: unavailable,
+      bindFrameSink: () => false,
+      unbindFrameSink: () => {},
+      frameInfo: () => ({ frame: null, painted: 0 }),
+      inspectFrameSink: () => ({ error: message }),
+      player: {
+        open: unavailable,
+        close: unavailable,
+        warm: unavailable,
+        play: unavailable,
+        pause: unavailable,
+        setRate: unavailable,
+        seek: unavailable,
+        tick: unavailable,
+        setEffects: unavailable,
+        stats: unavailable,
+      },
+      export: { start: unavailable, progress: unavailable, cancel: unavailable },
+    } as unknown as typeof EngineBridge;
+  }
+}
+
+const engineBridge = loadEngineBridge();
 import type {
   DesktopSource,
   RecordingConfig,
@@ -532,6 +578,9 @@ electron.contextBridge.exposeInMainWorld('electron', {
     error: (...args: unknown[]): void => writeRendererLog('error', ...args),
     debug: (...args: unknown[]): void => writeRendererLog('debug', ...args),
   },
+
+  // GPU video engine. Optional: check `engine.status().available` first.
+  engine: engineBridge,
 });
 
 // Helper to create a subscription that returns an unsubscribe function
