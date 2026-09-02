@@ -5,10 +5,28 @@ import { ExportProgressToast } from '@/components/export-progress-toast';
 import { Toaster } from '@/components/ui/sonner';
 import { RootLayout } from '@/layouts/root-layout';
 import { EditorScreen } from '@/screens/editor';
+import { EngineHarnessScreen } from '@/screens/engine-harness';
 import ScreenRecorder from '@/screens/screen-recorder';
 import { WelcomeScreen } from '@/screens/welcome/welcome-screen';
 
-type Screen = 'welcome' | 'recorder' | 'editor';
+type Screen = 'welcome' | 'recorder' | 'editor' | 'engine';
+
+/**
+ * The GPU engine harness is a dev tool, not a feature. It is reachable by
+ * loading the app with `#engine`, and only in a dev build -- a production
+ * bundle has no route to it at all.
+ */
+function initialScreen(): Screen {
+  if (!import.meta.env.DEV) {
+    return 'welcome';
+  }
+  // VITE_ENGINE_AUTORUN implies the harness -- the check it runs is the whole
+  // reason the process was started.
+  if (window.location.hash === '#engine' || import.meta.env.VITE_ENGINE_AUTORUN) {
+    return 'engine';
+  }
+  return 'welcome';
+}
 
 interface AppState {
   screen: Screen;
@@ -17,7 +35,7 @@ interface AppState {
 
 function App() {
   const [state, setState] = useState<AppState>({
-    screen: 'welcome',
+    screen: initialScreen(),
     recordingId: null,
   });
 
@@ -76,6 +94,22 @@ function App() {
   };
 
   switch (state.screen) {
+    case 'engine':
+      return (
+        <RootLayout>
+          <button
+            onClick={goHome}
+            className="fixed top-12 left-2 z-1000 bg-black/50 hover:bg-black/70 text-white border-0 rounded px-3 py-1.5 cursor-pointer text-xs backdrop-blur-sm transition-colors"
+          >
+            ← Home
+          </button>
+          <div className="pt-20">
+            <EngineHarnessScreen />
+          </div>
+          <Toaster />
+        </RootLayout>
+      );
+
     case 'welcome':
       return (
         <RootLayout>
