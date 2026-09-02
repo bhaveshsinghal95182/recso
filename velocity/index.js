@@ -700,12 +700,25 @@ if (!nativeBinding) {
 }
 
 module.exports = nativeBinding
+module.exports.PatternEncoder = nativeBinding.PatternEncoder
+module.exports.Pipeline = nativeBinding.Pipeline
 module.exports.Stopper = nativeBinding.Stopper
+module.exports.TestPatternSource = nativeBinding.TestPatternSource
+module.exports.VideoDecoder = nativeBinding.VideoDecoder
+module.exports.VideoExporter = nativeBinding.VideoExporter
+module.exports.VideoPlayer = nativeBinding.VideoPlayer
+module.exports.adapterInfo = nativeBinding.adapterInfo
+module.exports.borderlessCaptureAllowed = nativeBinding.borderlessCaptureAllowed
 module.exports.captureCursorSamplesJson = nativeBinding.captureCursorSamplesJson
 module.exports.captureCursorSnapshotJson = nativeBinding.captureCursorSnapshotJson
+module.exports.engineVersion = nativeBinding.engineVersion
+module.exports.gpuDecoderProfiles = nativeBinding.gpuDecoderProfiles
+module.exports.gpuMemory = nativeBinding.gpuMemory
 module.exports.isCursorSettingsSupported = nativeBinding.isCursorSettingsSupported
 module.exports.listAvailableWindows = nativeBinding.listAvailableWindows
+module.exports.listDecoders = nativeBinding.listDecoders
 module.exports.listWebcamDevices = nativeBinding.listWebcamDevices
+module.exports.probeVideo = nativeBinding.probeVideo
 module.exports.startMonitorRecording = nativeBinding.startMonitorRecording
 module.exports.startMonitorRecordingV2 = nativeBinding.startMonitorRecordingV2
 module.exports.startWindowRecording = nativeBinding.startWindowRecording

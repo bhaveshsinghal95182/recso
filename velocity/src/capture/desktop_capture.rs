@@ -1,3 +1,5 @@
+use crate::capture::borderless::ensure_borderless_access;
+use crate::capture::recording_info::{RecordingMediaInfo, RecordingStats};
 use crate::singular_clock::{delta_100ns_or_default, expected_audio_bytes};
 use napi_derive::napi;
 use std::collections::VecDeque;
@@ -9,6 +11,9 @@ use std::sync::Arc;
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::Duration;
+use wasapi::{
+  deinitialize, initialize_mta, DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat,
+};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
   IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE,
@@ -16,6 +21,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows_capture::capture::{Context, GraphicsCaptureApiHandler};
 use windows_capture::encoder::{
   AudioSettingsBuilder, ContainerSettingsBuilder, VideoEncoder, VideoSettingsBuilder,
+  VideoSettingsSubType,
 };
 use windows_capture::frame::Frame;
 use windows_capture::graphics_capture_api::InternalCaptureControl;
@@ -25,9 +31,6 @@ use windows_capture::settings::{
   MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
 };
 use windows_capture::window::Window;
-use wasapi::{
-  deinitialize, initialize_mta, DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat,
-};
 
 const AUDIO_SAMPLE_RATE: usize = 48_000;
 const AUDIO_CHANNEL_COUNT: usize = 2;
@@ -38,11 +41,16 @@ const AUDIO_CHUNK_MS: usize = 10;
 const AUDIO_CHUNK_BYTES: usize =
   (AUDIO_BYTES_PER_SECOND * AUDIO_CHUNK_MS / 1000 / AUDIO_BLOCK_ALIGN) * AUDIO_BLOCK_ALIGN;
 const DEFAULT_FRAME_DURATION_100NS: i64 = 166_667;
+/// What windows-capture asks for when no interval is set.
+const DEFAULT_CAPTURE_FPS: u32 = 60;
 
 #[napi]
 pub struct Stopper {
   stop_txs: Vec<Sender<()>>,
   done_rxs: Vec<Receiver<()>>,
+  /// One per capture this Stopper owns -- a v2 recording appends the webcam's
+  /// to the screen's, and `stop` reports both.
+  stats: Vec<Arc<RecordingStats>>,
 }
 
 impl Stopper {
@@ -50,19 +58,44 @@ impl Stopper {
     Self {
       stop_txs: vec![stop_tx],
       done_rxs: vec![done_rx],
+      stats: Vec::new(),
+    }
+  }
+
+  pub(crate) fn with_stats(
+    stop_tx: Sender<()>,
+    done_rx: Receiver<()>,
+    stats: Arc<RecordingStats>,
+  ) -> Self {
+    Self {
+      stop_txs: vec![stop_tx],
+      done_rxs: vec![done_rx],
+      stats: vec![stats],
     }
   }
 
   pub(crate) fn append(&mut self, mut other: Stopper) {
     self.stop_txs.append(&mut other.stop_txs);
     self.done_rxs.append(&mut other.done_rxs);
+    self.stats.append(&mut other.stats);
   }
 }
 
 #[napi]
 impl Stopper {
+  /// Stop every capture and describe what was written.
+  ///
+  /// Only meaningful once the encoders have been finalised, which is what the
+  /// `done_rx` wait below is for -- the snapshot reads file sizes, and a file
+  /// still being muxed reports the wrong one.
   #[napi]
-  pub fn stop(&mut self) {
+  pub fn stop(&mut self) -> Vec<RecordingMediaInfo> {
+    // Before waiting on anything: the duration is measured to this instant, and
+    // finalising an MP4 takes long enough to distort it.
+    for stats in &self.stats {
+      stats.mark_stopped();
+    }
+
     for stop_tx in self.stop_txs.drain(..) {
       let _ = stop_tx.send(());
     }
@@ -70,6 +103,8 @@ impl Stopper {
     for done_rx in self.done_rxs.drain(..) {
       let _ = done_rx.recv_timeout(Duration::from_secs(8));
     }
+
+    self.stats.iter().map(|stats| stats.snapshot()).collect()
   }
 }
 
@@ -85,6 +120,7 @@ struct Capture {
   pending_audio_bytes: VecDeque<u8>,
   audio_fractional_bytes: f64,
   last_frame_timestamp_100ns: Option<i64>,
+  stats: Arc<RecordingStats>,
 }
 
 impl Capture {
@@ -137,7 +173,9 @@ impl Capture {
     };
 
     let encoder = VideoEncoder::new(
-      VideoSettingsBuilder::new(width, height).bitrate(self.bitrate),
+      VideoSettingsBuilder::new(width, height)
+        .bitrate(self.bitrate)
+        .sub_type(VideoSettingsSubType::H264),
       audio_settings,
       ContainerSettingsBuilder::default(),
       &self.output_path,
@@ -203,14 +241,21 @@ impl Capture {
     );
     self.audio_fractional_bytes = next_fraction;
 
+    // The buffer is sized to the frame cadence and zero-padded when capture has
+    // not produced enough yet. Only the bytes that actually came off the device
+    // count as audio -- the padding is silence we invented, and a file made
+    // entirely of it must not report itself as having sound.
     let mut audio = vec![0u8; expected_bytes];
+    let mut captured = 0u64;
     for sample in &mut audio {
       if let Some(value) = self.pending_audio_bytes.pop_front() {
         *sample = value;
+        captured += 1;
       } else {
         break;
       }
     }
+    self.stats.note_captured_audio_bytes(captured);
 
     audio
   }
@@ -315,11 +360,11 @@ fn spawn_loopback_audio_capture(
 }
 
 impl GraphicsCaptureApiHandler for Capture {
-  type Flags = (String, u32, bool);
+  type Flags = (String, u32, bool, Arc<RecordingStats>);
   type Error = Box<dyn std::error::Error + Send + Sync>;
 
   fn new(ctx: Context<Self::Flags>) -> Result<Self, Self::Error> {
-    let (output_path, bitrate, enable_system_audio) = ctx.flags;
+    let (output_path, bitrate, enable_system_audio, stats) = ctx.flags;
     Ok(Self {
       encoder: None,
       output_path,
@@ -332,6 +377,7 @@ impl GraphicsCaptureApiHandler for Capture {
       pending_audio_bytes: VecDeque::new(),
       audio_fractional_bytes: 0.0,
       last_frame_timestamp_100ns: None,
+      stats,
     })
   }
 
@@ -343,17 +389,22 @@ impl GraphicsCaptureApiHandler for Capture {
     // Initialize the VideoEncoder on the very first frame so its width/height exactly matches the dimensions.
     if self.encoder.is_none() {
       self.initialize_encoder(frame.width(), frame.height())?;
+      self.stats.set_dimensions(frame.width(), frame.height());
     }
+
+    let timestamp_100ns = frame.timestamp()?.Duration;
 
     if self.native_audio_active {
       self.drain_audio_channel();
-      let audio_buffer = self.build_audio_buffer_for_frame(frame.timestamp()?.Duration);
+      let audio_buffer = self.build_audio_buffer_for_frame(timestamp_100ns);
       if let Some(encoder) = self.encoder.as_mut() {
         let _ = encoder.send_frame_with_audio(frame, &audio_buffer);
       }
     } else if let Some(encoder) = self.encoder.as_mut() {
       let _ = encoder.send_frame(frame);
     }
+
+    self.stats.note_frame(timestamp_100ns);
 
     Ok(())
   }
@@ -379,6 +430,7 @@ pub fn start_monitor_recording(
     bitrate,
     include_system_audio,
     MinimumUpdateIntervalSettings::Default,
+    DEFAULT_CAPTURE_FPS,
   )
 }
 
@@ -387,6 +439,7 @@ fn start_monitor_recording_internal(
   bitrate: u32,
   include_system_audio: Option<bool>,
   minimum_update_interval_settings: MinimumUpdateIntervalSettings,
+  target_fps: u32,
 ) -> napi::Result<Stopper> {
   let (stop_tx, stop_rx) = channel();
   let (done_tx, done_rx) = channel();
@@ -394,6 +447,17 @@ fn start_monitor_recording_internal(
 
   let primary_monitor = Monitor::primary()
     .map_err(|e| napi::Error::from_reason(format!("Failed to get primary monitor: {:?}", e)))?;
+
+  // WithoutBorder below is ignored unless this has been granted first.
+  ensure_borderless_access();
+
+  let stats = Arc::new(RecordingStats::new(
+    output_path.clone(),
+    "screen",
+    target_fps,
+    bitrate,
+    "h264",
+  ));
 
   let settings = Settings::new(
     primary_monitor,
@@ -403,7 +467,7 @@ fn start_monitor_recording_internal(
     minimum_update_interval_settings,
     DirtyRegionSettings::Default,
     ColorFormat::Bgra8,
-    (output_path, bitrate, enable_system_audio),
+    (output_path, bitrate, enable_system_audio, stats.clone()),
   );
 
   thread::spawn(move || {
@@ -420,7 +484,7 @@ fn start_monitor_recording_internal(
     let _ = done_tx.send(());
   });
 
-  Ok(Stopper::from_channels(stop_tx, done_rx))
+  Ok(Stopper::with_stats(stop_tx, done_rx, stats))
 }
 
 #[napi]
@@ -436,6 +500,7 @@ pub fn start_window_recording(
     bitrate,
     include_system_audio,
     MinimumUpdateIntervalSettings::Default,
+    DEFAULT_CAPTURE_FPS,
   )
 }
 
@@ -445,13 +510,15 @@ fn start_window_recording_internal(
   bitrate: u32,
   include_system_audio: Option<bool>,
   minimum_update_interval_settings: MinimumUpdateIntervalSettings,
+  target_fps: u32,
 ) -> napi::Result<Stopper> {
   let (stop_tx, stop_rx) = channel();
   let (done_tx, done_rx) = channel();
   let enable_system_audio = include_system_audio.unwrap_or(false);
 
-  let window = Window::from_contains_name(&window_title)
-    .map_err(|e| napi::Error::from_reason(format!("Failed to find window '{}': {:?}", window_title, e)))?;
+  let window = Window::from_contains_name(&window_title).map_err(|e| {
+    napi::Error::from_reason(format!("Failed to find window '{}': {:?}", window_title, e))
+  })?;
 
   // WGC won't deliver frames for occluded/minimized windows.
   // Bring the target window to the foreground so the compositor renders it.
@@ -464,6 +531,17 @@ fn start_window_recording_internal(
     let _ = SetForegroundWindow(hwnd);
   }
 
+  // WithoutBorder below is ignored unless this has been granted first.
+  ensure_borderless_access();
+
+  let stats = Arc::new(RecordingStats::new(
+    output_path.clone(),
+    "screen",
+    target_fps,
+    bitrate,
+    "h264",
+  ));
+
   let settings = Settings::new(
     window,
     CursorCaptureSettings::WithoutCursor,
@@ -472,7 +550,7 @@ fn start_window_recording_internal(
     minimum_update_interval_settings,
     DirtyRegionSettings::Default,
     ColorFormat::Bgra8,
-    (output_path, bitrate, enable_system_audio),
+    (output_path, bitrate, enable_system_audio, stats.clone()),
   );
 
   thread::spawn(move || {
@@ -489,14 +567,15 @@ fn start_window_recording_internal(
     let _ = done_tx.send(());
   });
 
-  Ok(Stopper::from_channels(stop_tx, done_rx))
+  Ok(Stopper::with_stats(stop_tx, done_rx, stats))
 }
 
-fn minimum_update_interval_for_target_fps(
-  target_fps: Option<u32>,
-  api_name: &str,
-) -> MinimumUpdateIntervalSettings {
-  let fps = match target_fps {
+/// The capture rate we will actually ask Windows for.
+///
+/// Split out from the interval so a caller can record the number without
+/// triggering the fallback warning a second time.
+fn resolved_capture_fps(target_fps: Option<u32>, api_name: &str) -> u32 {
+  match target_fps {
     Some(30) => 30,
     Some(60) | None => 60,
     Some(other) => {
@@ -505,11 +584,14 @@ fn minimum_update_interval_for_target_fps(
       );
       60
     }
-  };
+  }
+}
 
-  let interval_nanos = (1_000_000_000u64 / fps as u64).max(1);
+fn minimum_update_interval_for_fps(fps: u32) -> MinimumUpdateIntervalSettings {
+  let interval_nanos = (1_000_000_000u64 / fps.max(1) as u64).max(1);
   MinimumUpdateIntervalSettings::Custom(Duration::from_nanos(interval_nanos))
 }
+
 
 pub(crate) fn start_monitor_recording_with_target_fps(
   output_path: String,
@@ -517,11 +599,13 @@ pub(crate) fn start_monitor_recording_with_target_fps(
   include_system_audio: Option<bool>,
   target_fps: Option<u32>,
 ) -> napi::Result<Stopper> {
+  let fps = resolved_capture_fps(target_fps, "start_monitor_recording_v2");
   start_monitor_recording_internal(
     output_path,
     bitrate,
     include_system_audio,
-    minimum_update_interval_for_target_fps(target_fps, "start_monitor_recording_v2"),
+    minimum_update_interval_for_fps(fps),
+    fps,
   )
 }
 
@@ -532,12 +616,14 @@ pub(crate) fn start_window_recording_with_target_fps(
   include_system_audio: Option<bool>,
   target_fps: Option<u32>,
 ) -> napi::Result<Stopper> {
+  let fps = resolved_capture_fps(target_fps, "start_window_recording_v2");
   start_window_recording_internal(
     window_title,
     output_path,
     bitrate,
     include_system_audio,
-    minimum_update_interval_for_target_fps(target_fps, "start_window_recording_v2"),
+    minimum_update_interval_for_fps(fps),
+    fps,
   )
 }
 
@@ -552,34 +638,44 @@ mod tests {
 
   #[test]
   fn minimum_update_interval_defaults_to_60fps_when_none() {
-    let settings = minimum_update_interval_for_target_fps(None, "test");
+    let settings = minimum_update_interval_for_fps(resolved_capture_fps(None, "test"));
     assert_eq!(settings, custom_interval_for_fps(60));
   }
 
   #[test]
   fn minimum_update_interval_supports_30_and_60fps() {
     assert_eq!(
-      minimum_update_interval_for_target_fps(Some(30), "test"),
+      minimum_update_interval_for_fps(resolved_capture_fps(Some(30), "test")),
       custom_interval_for_fps(30)
     );
     assert_eq!(
-      minimum_update_interval_for_target_fps(Some(60), "test"),
+      minimum_update_interval_for_fps(resolved_capture_fps(Some(60), "test")),
       custom_interval_for_fps(60)
     );
+  }
+
+  /// The resolved rate is reported as `configuredFps`, so it has to be the
+  /// rate we actually asked Windows for -- not what the caller passed.
+  #[test]
+  fn resolved_capture_fps_is_what_gets_reported() {
+    assert_eq!(resolved_capture_fps(Some(30), "test"), 30);
+    assert_eq!(resolved_capture_fps(Some(60), "test"), 60);
+    assert_eq!(resolved_capture_fps(None, "test"), 60);
+    assert_eq!(resolved_capture_fps(Some(144), "test"), 60);
   }
 
   #[test]
   fn minimum_update_interval_falls_back_to_60fps_for_unsupported_values() {
     assert_eq!(
-      minimum_update_interval_for_target_fps(Some(24), "test"),
+      minimum_update_interval_for_fps(resolved_capture_fps(Some(24), "test")),
       custom_interval_for_fps(60)
     );
     assert_eq!(
-      minimum_update_interval_for_target_fps(Some(0), "test"),
+      minimum_update_interval_for_fps(resolved_capture_fps(Some(0), "test")),
       custom_interval_for_fps(60)
     );
     assert_eq!(
-      minimum_update_interval_for_target_fps(Some(144), "test"),
+      minimum_update_interval_for_fps(resolved_capture_fps(Some(144), "test")),
       custom_interval_for_fps(60)
     );
   }

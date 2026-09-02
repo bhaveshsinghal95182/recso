@@ -1,9 +1,13 @@
+mod borderless;
 mod desktop_capture;
+mod recording_info;
 mod webcam_capture;
 
 use napi_derive::napi;
 
 pub use desktop_capture::{start_monitor_recording, start_window_recording, Stopper};
+pub use borderless::borderless_capture_allowed;
+pub use recording_info::{RecordingMediaInfo, RecordingStats};
 pub use webcam_capture::{list_webcam_devices, WebcamDeviceInfo};
 
 #[napi(object)]
