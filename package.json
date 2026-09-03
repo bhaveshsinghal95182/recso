@@ -20,6 +20,7 @@
     "engine:check": "node velocity/scripts/engine-check.mjs",
     "engine:pipeline": "node velocity/scripts/pipeline-check.mjs",
     "engine:composition": "node velocity/scripts/composition-check.mjs",
+    "engine:export-composition": "node velocity/scripts/export-composition-check.mjs",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier . --write",
