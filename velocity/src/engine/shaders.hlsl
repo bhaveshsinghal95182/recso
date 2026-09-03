@@ -48,30 +48,19 @@ float4 ps_nv12_to_bgra(VSOut i) : SV_Target {
 }
 
 // ---------------------------------------------------------------------------
-// The adjustable pass. One filter for now; a chain is this, repeated.
+// Constants for the fullscreen passes.
+//
+// Grading does not live here. It used to: one fullscreen pass over the finished
+// frame, which is why it could only ever apply to one layer. It now rides in the
+// overlay constant buffer instead, so every layer carries its own -- see
+// `apply_grade` below.
 // ---------------------------------------------------------------------------
 cbuffer Params : register(b0) {
-  float  brightness;   // added, -1..1
-  float  contrast;     // multiplier about mid grey
-  float  saturation;   // 0 = grey, 1 = unchanged
-  float  _pad0;
   float2 texel;        // 1/width, 1/height of the source
-  float2 _pad1;
+  float2 _pad0;
 };
 
 Texture2D<float4> Source : register(t0);
-
-float4 ps_effect(VSOut i) : SV_Target {
-  float3 c = Source.Sample(samp, i.uv).rgb;
-
-  c = (c - 0.5) * contrast + 0.5 + brightness;
-
-  // Rec.709 luma, so desaturating does not shift perceived brightness.
-  float l = dot(c, float3(0.2126, 0.7152, 0.0722));
-  c = lerp(float3(l, l, l), c, saturation);
-
-  return float4(saturate(c), 1.0);
-}
 
 // ---------------------------------------------------------------------------
 // BGRA -> NV12
@@ -132,7 +121,22 @@ cbuffer Overlay : register(b1) {
   float  corner_radius_px; // 0 for a hard rectangle
   float  shape;            // 0 = rounded rect, 1 = ellipse
   float  opacity;          // 0..1, multiplied into alpha
-  float3 _pad2;
+  /// This quad's own grade. Per-layer rather than one pass over the finished
+  /// frame: the screen recording and the camera are two different sensors with
+  /// two different exposures, and a single grade can only trade one against the
+  /// other. Identity is (0, 1, 1).
+  float  brightness;
+  float  contrast;
+  float  saturation;
+  /// Sub-rectangle of the source to draw: xy scales the quad's uv, zw offsets
+  /// it. Identity is (1, 1, 0, 0). This is how the webcam is fitted to a box
+  /// whose aspect ratio does not match the camera's -- the quad stays the size
+  /// it was asked for and the *source* is cropped, so nothing is stretched.
+  /// It is also how the video layer leaves its macroblock padding behind.
+  float4 uv_rect;
+  /// Fill colour for `ps_solid`, which draws borders. Ignored by the textured
+  /// shaders.
+  float4 tint;
 };
 
 struct QuadOut {
@@ -145,7 +149,7 @@ QuadOut vs_quad(uint id : SV_VertexID) {
   QuadOut o;
   // Strip order: (0,0), (1,0), (0,1), (1,1).
   float2 uv = float2(id & 1, (id >> 1) & 1);
-  o.uv = uv;
+  o.uv = uv * uv_rect.xy + uv_rect.zw;
   o.pos = float4(lerp(rect_ndc.x, rect_ndc.z, uv.x),
                  lerp(rect_ndc.y, rect_ndc.w, uv.y), 0.0, 1.0);
   // -half..+half across the quad.
@@ -173,8 +177,17 @@ float overlay_distance(float2 local) {
 }
 
 /// Webcam overlay: opaque source, shape comes from the mask.
+/// The grade, shared by every layer that has one.
+float3 apply_grade(float3 c) {
+  c = (c - 0.5) * contrast + 0.5 + brightness;
+
+  // Rec.709 luma, so desaturating does not shift perceived brightness.
+  float l = dot(c, float3(0.2126, 0.7152, 0.0722));
+  return saturate(lerp(float3(l, l, l), c, saturation));
+}
+
 float4 ps_overlay(QuadOut i) : SV_Target {
-  float3 c = OverlaySource.Sample(samp, i.uv).rgb;
+  float3 c = apply_grade(OverlaySource.Sample(samp, i.uv).rgb);
 
   // One pixel of feather. Without it a circular webcam has visibly stepped
   // edges at any size the user would actually pick.
@@ -182,6 +195,15 @@ float4 ps_overlay(QuadOut i) : SV_Target {
   float a = opacity * saturate(0.5 - d);
 
   return float4(c, a);
+}
+
+/// An untextured quad in a flat colour, masked to the same shape.
+///
+/// This is the border under the video and the webcam: the same rounded rect,
+/// grown by the border width and filled, with the layer drawn over the top.
+float4 ps_solid(QuadOut i) : SV_Target {
+  float d = overlay_distance(i.local);
+  return float4(tint.rgb, tint.a * opacity * saturate(0.5 - d));
 }
 
 /// Cursor sprite: alpha comes from the image, no mask.

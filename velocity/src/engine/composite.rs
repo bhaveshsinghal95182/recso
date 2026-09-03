@@ -31,6 +31,29 @@ impl Rect {
     self.width <= 0.0 || self.height <= 0.0
   }
 
+  /// Grow by `amount` on every side. Negative shrinks.
+  ///
+  /// This is how a border is drawn: the same rounded rect, expanded by the
+  /// border width and filled, with the layer drawn over the top of it.
+  pub fn expanded(self, amount: f32) -> Self {
+    Self {
+      x: self.x - amount,
+      y: self.y - amount,
+      width: self.width + amount * 2.0,
+      height: self.height + amount * 2.0,
+    }
+  }
+
+  /// The whole of a `width` x `height` surface.
+  pub fn covering(width: u32, height: u32) -> Self {
+    Self {
+      x: 0.0,
+      y: 0.0,
+      width: width as f32,
+      height: height as f32,
+    }
+  }
+
   /// To clip space. D3D's y runs up and the destination's runs down, so y flips.
   fn to_ndc(self, dst_width: u32, dst_height: u32) -> [f32; 4] {
     let w = dst_width.max(1) as f32;
@@ -52,6 +75,123 @@ pub enum OverlayShape {
   Ellipse,
 }
 
+/// How a source that does not match its box's aspect ratio is reconciled.
+///
+/// The engine owns this rather than the caller, because the engine is the only
+/// side that knows the camera's real resolution -- the caller would have to
+/// open the sidecar to find it out, which is exactly the demux the recorder
+/// metadata work exists to avoid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FitMode {
+  /// Fill the box exactly. Distorts when the aspect ratios differ; only right
+  /// when the caller has already sized the box from the source.
+  Stretch,
+  /// Fill the box and crop the overflow. No distortion, no empty edges, some
+  /// of the source is not shown. The only sane choice inside a circle.
+  Cover,
+  /// Fit the whole source inside the box and centre it. No distortion, nothing
+  /// cropped; the box is drawn smaller than asked in one axis.
+  Contain,
+}
+
+impl FitMode {
+  /// `cover` | `contain` | `stretch` | `fill`, anything else falls back to the
+  /// default.
+  pub fn parse(name: &str) -> Self {
+    match name {
+      "stretch" | "fill" => Self::Stretch,
+      "contain" => Self::Contain,
+      _ => Self::Cover,
+    }
+  }
+}
+
+impl Default for FitMode {
+  /// Cover, because it is the only mode that can never be visibly wrong: it
+  /// distorts nothing and leaves no gap. Stretch is opt-in.
+  fn default() -> Self {
+    Self::Cover
+  }
+}
+
+/// Where a quad reads its source from: `scale` of the texture, from `offset`.
+///
+/// Identity is scale (1, 1) at offset (0, 0). Cover shrinks the scale to crop;
+/// contain leaves it at identity and shrinks the destination rect instead.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UvRect {
+  pub scale: [f32; 2],
+  pub offset: [f32; 2],
+}
+
+impl Default for UvRect {
+  fn default() -> Self {
+    Self {
+      scale: [1.0, 1.0],
+      offset: [0.0, 0.0],
+    }
+  }
+}
+
+/// Resolve a source of `src_width` x `src_height` into `rect` under `fit`.
+///
+/// Returns the rectangle to actually draw and the part of the source to read.
+/// Cover crops the source and keeps the rect; contain keeps the source and
+/// shrinks the rect. Doing cover through UVs rather than by growing the quad
+/// matters because the shape mask is evaluated against the quad -- grow it and
+/// a circular webcam would be clipped by the box instead of filling it.
+pub fn fit_source(rect: Rect, src_width: u32, src_height: u32, fit: FitMode) -> (Rect, UvRect) {
+  let src_w = src_width.max(1) as f32;
+  let src_h = src_height.max(1) as f32;
+
+  if fit == FitMode::Stretch || rect.is_empty() {
+    return (rect, UvRect::default());
+  }
+
+  // How much wider the source is than the box. 1.0 means they already agree
+  // and both modes collapse to a plain stretch.
+  let ratio = (src_w / src_h) / (rect.width / rect.height);
+  if !ratio.is_finite() || (ratio - 1.0).abs() < 1e-4 {
+    return (rect, UvRect::default());
+  }
+
+  match fit {
+    FitMode::Stretch => (rect, UvRect::default()),
+    FitMode::Cover => {
+      // Crop the long axis of the source down to the box's aspect ratio.
+      let (sx, sy) = if ratio > 1.0 {
+        (1.0 / ratio, 1.0)
+      } else {
+        (1.0, ratio)
+      };
+      (
+        rect,
+        UvRect {
+          scale: [sx, sy],
+          offset: [(1.0 - sx) * 0.5, (1.0 - sy) * 0.5],
+        },
+      )
+    }
+    FitMode::Contain => {
+      // Shrink the box's short axis until the whole source fits, then recentre.
+      let (w, h) = if ratio > 1.0 {
+        (rect.width, rect.height / ratio)
+      } else {
+        (rect.width * ratio, rect.height)
+      };
+      (
+        Rect {
+          x: rect.x + (rect.width - w) * 0.5,
+          y: rect.y + (rect.height - h) * 0.5,
+          width: w,
+          height: h,
+        },
+        UvRect::default(),
+      )
+    }
+  }
+}
+
 /// Where the webcam goes and what shape it is.
 ///
 /// Pixel coordinates in the destination, matching what the editor's compositor
@@ -64,6 +204,10 @@ pub struct WebcamLayout {
   pub shape: OverlayShape,
   pub corner_radius: f32,
   pub opacity: f32,
+  pub fit: FitMode,
+  /// Border thickness in canvas pixels, drawn outside the rect. Zero is none.
+  pub border_width: f32,
+  pub border_colour: [f32; 4],
 }
 
 impl Default for WebcamLayout {
@@ -78,6 +222,9 @@ impl Default for WebcamLayout {
       shape: OverlayShape::Rect,
       corner_radius: 0.0,
       opacity: 1.0,
+      fit: FitMode::Cover,
+      border_width: 0.0,
+      border_colour: [0.0, 0.0, 0.0, 1.0],
     }
   }
 }
@@ -86,6 +233,27 @@ impl WebcamLayout {
   pub fn is_visible(&self) -> bool {
     !self.rect.is_empty() && self.opacity > 0.0
   }
+
+  /// Force the values into the ranges the shader assumes.
+  ///
+  /// Opacity above 1 does not brighten the overlay in any useful way -- it
+  /// multiplies into the blend's source alpha and burns the feathered edge --
+  /// and a negative radius makes the rounded-rect distance function fold
+  /// inside out. Applied on the way in so no caller can produce either.
+  pub fn sanitized(mut self) -> Self {
+    self.opacity = self.opacity.clamp(0.0, 1.0);
+    self.corner_radius = self.corner_radius.max(0.0);
+    self.border_width = self.border_width.max(0.0);
+    if !self.rect.x.is_finite() || !self.rect.y.is_finite() {
+      self.rect.x = 0.0;
+      self.rect.y = 0.0;
+    }
+    if !self.rect.width.is_finite() || !self.rect.height.is_finite() {
+      self.rect.width = 0.0;
+      self.rect.height = 0.0;
+    }
+    self
+  }
 }
 
 /// The shaders, blend state and constant buffer the overlay passes need.
@@ -93,8 +261,60 @@ pub struct Overlays {
   vs: ID3D11VertexShader,
   ps_overlay: ID3D11PixelShader,
   ps_sprite: ID3D11PixelShader,
+  ps_solid: ID3D11PixelShader,
   blend: ID3D11BlendState,
   constants: ID3D11Buffer,
+}
+
+/// One overlay draw, gathered up rather than passed as nine positional
+/// arguments that are easy to transpose.
+#[derive(Clone, Copy, Debug)]
+pub struct Quad {
+  /// Destination rectangle, in the render target's pixels.
+  pub rect: Rect,
+  pub shape: OverlayShape,
+  pub corner_radius: f32,
+  pub opacity: f32,
+  /// Which part of the source to read. Default reads all of it.
+  pub uv: UvRect,
+  /// This quad's own colour adjustment. Identity leaves it alone.
+  pub grade: Grade,
+  /// Which shader draws it.
+  pub fill: Fill,
+}
+
+/// A quad's colour adjustment, in the form the shader wants it.
+///
+/// Deliberately not `render::EffectParams`: that is the napi-facing type and
+/// this module does not depend on the render layer. They hold the same three
+/// numbers and `EffectParams` converts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Grade {
+  pub brightness: f32,
+  pub contrast: f32,
+  pub saturation: f32,
+}
+
+impl Default for Grade {
+  fn default() -> Self {
+    Self {
+      brightness: 0.0,
+      contrast: 1.0,
+      saturation: 1.0,
+    }
+  }
+}
+
+/// How a quad gets its colour.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Fill {
+  /// Sample the texture, apply the grade, take the edge from the shape mask.
+  /// The video and the webcam.
+  Texture,
+  /// Sample the texture and take alpha from the image itself. The cursor.
+  Sprite,
+  /// A flat colour, no texture. Borders.
+  Solid([f32; 4]),
 }
 
 impl Overlays {
@@ -103,6 +323,7 @@ impl Overlays {
     vs: ID3D11VertexShader,
     ps_overlay: ID3D11PixelShader,
     ps_sprite: ID3D11PixelShader,
+    ps_solid: ID3D11PixelShader,
   ) -> Result<Self> {
     // Straight alpha over the destination. The overlays are drawn after the
     // base is already opaque, so there is nothing to preserve in the
@@ -123,12 +344,14 @@ impl Overlays {
     let mut blend = None;
     unsafe { gpu.device.CreateBlendState(&desc, Some(&mut blend))? };
 
-    let constants = super::render::create_constant_buffer(gpu, 16 * 4)?;
+    // 20 floats: the rect, the mask, the grade, the uv sub-rect and the tint.
+    let constants = super::render::create_constant_buffer(gpu, 20 * 4)?;
 
     Ok(Self {
       vs,
       ps_overlay,
       ps_sprite,
+      ps_solid,
       blend: blend.unwrap(),
       constants,
     })
@@ -136,13 +359,13 @@ impl Overlays {
 
   /// Draw one textured quad into `dst_rtv`.
   ///
-  /// `sprite` picks the pixel shader: sprites take their alpha from the image
-  /// (the cursor is a PNG with transparency), overlays are opaque sources that
-  /// get their edge from the shape mask.
+  /// `quad.fill` picks the pixel shader: a sprite takes its alpha from the image
+  /// (the cursor is a PNG with transparency), a texture is an opaque source that
+  /// gets its edge from the shape mask, and a solid is a flat colour used for
+  /// borders.
   ///
   /// Caller holds the render lock and owns viewport/topology restoration -- this
   /// sets what it needs and leaves nothing bound.
-  #[allow(clippy::too_many_arguments)]
   pub fn draw(
     &self,
     ctx: &ID3D11DeviceContext,
@@ -150,27 +373,16 @@ impl Overlays {
     source: &ID3D11ShaderResourceView,
     dst_width: u32,
     dst_height: u32,
-    rect: Rect,
-    shape: OverlayShape,
-    corner_radius: f32,
-    opacity: f32,
-    sprite: bool,
+    quad: Quad,
   ) -> Result<()> {
-    if rect.is_empty() || opacity <= 0.0 {
+    if quad.rect.is_empty() || quad.opacity <= 0.0 {
       return Ok(());
     }
 
-    let ndc = rect.to_ndc(dst_width, dst_height);
+    let ndc = quad.rect.to_ndc(dst_width, dst_height);
 
     unsafe {
-      self.upload(
-        ctx,
-        ndc,
-        [rect.width * 0.5, rect.height * 0.5],
-        corner_radius,
-        shape,
-        opacity,
-      )?;
+      self.upload(ctx, ndc, quad)?;
 
       ctx.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
       ctx.IASetInputLayout(None);
@@ -181,13 +393,16 @@ impl Overlays {
       ctx.VSSetConstantBuffers(1, Some(&[Some(self.constants.clone())]));
       ctx.PSSetConstantBuffers(1, Some(&[Some(self.constants.clone())]));
       ctx.PSSetShader(
-        if sprite {
-          &self.ps_sprite
-        } else {
-          &self.ps_overlay
+        match quad.fill {
+          Fill::Texture => &self.ps_overlay,
+          Fill::Sprite => &self.ps_sprite,
+          Fill::Solid(_) => &self.ps_solid,
         },
         None,
       );
+      // A solid quad still gets a bound source: leaving t0 pointing at whatever
+      // the last draw used is how you get a device-removed on some drivers, and
+      // the shader simply does not read it.
       ctx.PSSetShaderResources(0, Some(&[Some(source.clone())]));
       ctx.OMSetRenderTargets(Some(&[Some(dst_rtv.clone())]), None);
       ctx.OMSetBlendState(&self.blend, None, 0xffff_ffff);
@@ -203,31 +418,36 @@ impl Overlays {
     Ok(())
   }
 
-  unsafe fn upload(
-    &self,
-    ctx: &ID3D11DeviceContext,
-    ndc: [f32; 4],
-    half_size: [f32; 2],
-    corner_radius: f32,
-    shape: OverlayShape,
-    opacity: f32,
-  ) -> Result<()> {
+  unsafe fn upload(&self, ctx: &ID3D11DeviceContext, ndc: [f32; 4], quad: Quad) -> Result<()> {
+    let tint = match quad.fill {
+      Fill::Solid(colour) => colour,
+      _ => [0.0, 0.0, 0.0, 0.0],
+    };
+
     let values = [
       ndc[0],
       ndc[1],
       ndc[2],
       ndc[3],
-      half_size[0],
-      half_size[1],
-      corner_radius,
-      match shape {
+      quad.rect.width * 0.5,
+      quad.rect.height * 0.5,
+      quad.corner_radius,
+      match quad.shape {
         OverlayShape::Rect => 0.0,
         OverlayShape::Ellipse => 1.0,
       },
-      opacity,
-      0.0,
-      0.0,
-      0.0,
+      quad.opacity,
+      quad.grade.brightness,
+      quad.grade.contrast,
+      quad.grade.saturation,
+      quad.uv.scale[0],
+      quad.uv.scale[1],
+      quad.uv.offset[0],
+      quad.uv.offset[1],
+      tint[0],
+      tint[1],
+      tint[2],
+      tint[3],
     ];
 
     let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
@@ -309,7 +529,11 @@ impl SpriteTexture {
     let texture = texture.unwrap();
 
     let mut srv = None;
-    unsafe { gpu.device.CreateShaderResourceView(&texture, None, Some(&mut srv))? };
+    unsafe {
+      gpu
+        .device
+        .CreateShaderResourceView(&texture, None, Some(&mut srv))?
+    };
 
     Ok(Self {
       texture,
@@ -366,7 +590,9 @@ impl CursorTrack {
 
     // Index of the first sample strictly after the time; the one before it is
     // the one in effect.
-    let upper = self.samples.partition_point(|s| s.timestamp_ms <= timestamp_ms);
+    let upper = self
+      .samples
+      .partition_point(|s| s.timestamp_ms <= timestamp_ms);
     if upper == 0 {
       return None;
     }
@@ -428,6 +654,146 @@ mod tests {
     assert!(!layout.is_visible());
   }
 
+  fn box_16_9() -> Rect {
+    Rect {
+      x: 100.0,
+      y: 100.0,
+      width: 320.0,
+      height: 180.0,
+    }
+  }
+
+  #[test]
+  fn a_matching_aspect_ratio_needs_no_fitting() {
+    // 640x360 is 16:9, same as the box, so every mode is a plain stretch.
+    for fit in [FitMode::Stretch, FitMode::Cover, FitMode::Contain] {
+      let (rect, uv) = fit_source(box_16_9(), 640, 360, fit);
+      assert_eq!(rect, box_16_9());
+      assert_eq!(uv, UvRect::default());
+    }
+  }
+
+  #[test]
+  fn stretch_leaves_the_source_alone_however_wrong_it_is() {
+    // 4:3 into a 16:9 box. This is the distortion; stretch is opting into it.
+    let (rect, uv) = fit_source(box_16_9(), 640, 480, FitMode::Stretch);
+    assert_eq!(rect, box_16_9());
+    assert_eq!(uv, UvRect::default());
+  }
+
+  #[test]
+  fn cover_crops_a_wide_source_horizontally() {
+    // 2:1 into 16:9. The source is wider, so the sides are cropped and the
+    // rectangle is untouched.
+    let (rect, uv) = fit_source(box_16_9(), 640, 320, FitMode::Cover);
+    assert_eq!(rect, box_16_9());
+    assert_eq!(uv.scale[1], 1.0, "the full height is still shown");
+    assert!(uv.scale[0] < 1.0, "the width is cropped");
+    // Centred: whatever is cropped is split evenly between the two sides.
+    assert!((uv.offset[0] - (1.0 - uv.scale[0]) / 2.0).abs() < 1e-5);
+    assert_eq!(uv.offset[1], 0.0);
+  }
+
+  #[test]
+  fn cover_crops_a_tall_source_vertically() {
+    // 4:3 into 16:9. The source is taller, so top and bottom go.
+    let (rect, uv) = fit_source(box_16_9(), 640, 480, FitMode::Cover);
+    assert_eq!(rect, box_16_9());
+    assert_eq!(uv.scale[0], 1.0);
+    assert!(uv.scale[1] < 1.0);
+    // 4:3 in a 16:9 box keeps 3/4 of the height.
+    assert!((uv.scale[1] - 0.75).abs() < 1e-5, "kept {}", uv.scale[1]);
+  }
+
+  #[test]
+  fn contain_shrinks_the_box_instead_of_the_source() {
+    // 4:3 into 16:9: the whole camera is shown, so the box narrows.
+    let (rect, uv) = fit_source(box_16_9(), 640, 480, FitMode::Contain);
+    assert_eq!(uv, UvRect::default(), "nothing is cropped");
+    assert_eq!(rect.height, 180.0, "the height is already the limit");
+    assert!((rect.width - 240.0).abs() < 1e-4, "width {}", rect.width);
+    // And it stays centred in the box it was given.
+    assert!((rect.x - (100.0 + (320.0 - 240.0) / 2.0)).abs() < 1e-4);
+    assert_eq!(rect.y, 100.0);
+  }
+
+  #[test]
+  fn contain_and_cover_both_preserve_the_source_aspect_ratio() {
+    // The point of both modes, stated as the property rather than the numbers.
+    for (w, h) in [(640u32, 480u32), (640, 320), (480, 640)] {
+      let source_ratio = w as f32 / h as f32;
+
+      // Contain shrinks the rect, so the rect itself has to take the source's
+      // shape.
+      let (contained, _) = fit_source(box_16_9(), w, h, FitMode::Contain);
+      assert!((contained.width / contained.height - source_ratio).abs() < 1e-3);
+
+      // Cover keeps the rect, so it is the *visible slice* of the source that
+      // has to take the rect's shape instead.
+      let (covered, uv) = fit_source(box_16_9(), w, h, FitMode::Cover);
+      let shown_ratio = (w as f32 * uv.scale[0]) / (h as f32 * uv.scale[1]);
+      assert!((shown_ratio - covered.width / covered.height).abs() < 1e-3);
+    }
+  }
+
+  #[test]
+  fn an_empty_box_survives_fitting() {
+    // Zero size is the off switch, and contain divides by the box's ratio.
+    let empty = Rect {
+      x: 0.0,
+      y: 0.0,
+      width: 0.0,
+      height: 0.0,
+    };
+    for fit in [FitMode::Stretch, FitMode::Cover, FitMode::Contain] {
+      let (rect, uv) = fit_source(empty, 640, 480, fit);
+      assert!(rect.is_empty());
+      assert_eq!(uv, UvRect::default());
+    }
+  }
+
+  #[test]
+  fn opacity_above_one_is_clamped_rather_than_multiplied_in() {
+    // It reaches the blend as source alpha, so 2.0 burns the feathered edge
+    // instead of doing nothing.
+    let layout = WebcamLayout {
+      opacity: 2.0,
+      corner_radius: -8.0,
+      ..Default::default()
+    }
+    .sanitized();
+
+    assert_eq!(layout.opacity, 1.0);
+    assert_eq!(layout.corner_radius, 0.0);
+  }
+
+  #[test]
+  fn a_non_finite_rect_is_flattened_to_nothing() {
+    // NaN width would sail past `is_empty` and reach `to_ndc`.
+    let layout = WebcamLayout {
+      rect: Rect {
+        x: 0.0,
+        y: 0.0,
+        width: f32::NAN,
+        height: 100.0,
+      },
+      ..Default::default()
+    }
+    .sanitized();
+
+    assert!(!layout.is_visible());
+  }
+
+  #[test]
+  fn fit_names_fall_back_to_cover() {
+    assert_eq!(FitMode::parse("stretch"), FitMode::Stretch);
+    assert_eq!(FitMode::parse("fill"), FitMode::Stretch);
+    assert_eq!(FitMode::parse("contain"), FitMode::Contain);
+    assert_eq!(FitMode::parse("cover"), FitMode::Cover);
+    // An unknown name gets the mode that cannot look visibly wrong.
+    assert_eq!(FitMode::parse("banana"), FitMode::Cover);
+  }
+
   #[test]
   fn a_track_holds_the_last_sample_rather_than_interpolating() {
     let track = CursorTrack::new(vec![sample(0.0, 0.0), sample(100.0, 1.0)]);
@@ -465,7 +831,11 @@ mod tests {
 
   #[test]
   fn samples_are_sorted_on_the_way_in() {
-    let track = CursorTrack::new(vec![sample(200.0, 1.0), sample(0.0, 0.0), sample(100.0, 0.5)]);
+    let track = CursorTrack::new(vec![
+      sample(200.0, 1.0),
+      sample(0.0, 0.0),
+      sample(100.0, 0.5),
+    ]);
     assert_eq!(track.len(), 3);
     assert_eq!(track.sample_at(150.0).unwrap().x, 0.5);
   }

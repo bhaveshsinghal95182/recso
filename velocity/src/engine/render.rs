@@ -28,9 +28,11 @@ use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::engine::composite::{
-  CursorTrack, OverlayShape, Overlays, Rect, SpriteTexture, WebcamLayout,
+  fit_source, CursorTrack, Fill, Grade, OverlayShape, Overlays, Quad, Rect, SpriteTexture, UvRect,
+  WebcamLayout,
 };
 use crate::engine::d3d::{gpu, Gpu};
+use crate::engine::zoom::{ZoomState, ZoomTrack};
 
 const HLSL: &str = include_str!("shaders.hlsl");
 
@@ -60,8 +62,135 @@ impl Default for EffectParams {
 }
 
 impl EffectParams {
+  /// Whether this grade would change anything.
+  ///
+  /// No longer gates a render pass -- the grade rides in every quad's constant
+  /// buffer now, so skipping it saves nothing -- but callers still want to ask.
+  #[allow(dead_code)]
   pub fn is_identity(&self) -> bool {
     self.brightness == 0.0 && self.contrast == 1.0 && self.saturation == 1.0
+  }
+}
+
+impl From<EffectParams> for Grade {
+  fn from(params: EffectParams) -> Self {
+    Grade {
+      brightness: params.brightness,
+      contrast: params.contrast,
+      saturation: params.saturation,
+    }
+  }
+}
+
+/// What fills the canvas behind the video.
+///
+/// An image rather than a family of shaders on purpose. The editor's
+/// backgrounds are solid colours, two kinds of gradient, a cross-hatch pattern
+/// and arbitrary images -- and every one of them is static for the whole
+/// export. Reimplementing four generators in HLSL buys nothing over letting the
+/// caller rasterise once and upload the result, and it would be four more
+/// things that have to match the Canvas2D versions pixel for pixel.
+pub enum Background {
+  /// A flat colour. Straight to `ClearRenderTargetView`, so it costs nothing.
+  Solid([f32; 4]),
+  /// A pre-rendered image stretched over the canvas, over `clear` where it is
+  /// transparent.
+  Image {
+    clear: [f32; 4],
+    texture: SpriteTexture,
+  },
+}
+
+impl Default for Background {
+  /// Opaque black. Only visible at all once something insets the video.
+  fn default() -> Self {
+    Self::Solid([0.0, 0.0, 0.0, 1.0])
+  }
+}
+
+impl Background {
+  fn clear_colour(&self) -> [f32; 4] {
+    match self {
+      Self::Solid(colour) => *colour,
+      Self::Image { clear, .. } => *clear,
+    }
+  }
+
+  /// Upload a request, turning its pixels into a texture.
+  ///
+  /// Call this on the thread that renders. `SpriteTexture::new` only touches
+  /// the device, which is multithread-protected and so safe to call from
+  /// anywhere -- but keeping every texture this chain owns created on one
+  /// thread is one less thing to reason about, and it is what the cursor
+  /// bitmap already does.
+  pub fn build(request: BackgroundRequest) -> Result<Self> {
+    let Some(image) = request.image else {
+      return Ok(Self::Solid(request.clear));
+    };
+
+    Ok(Self::Image {
+      clear: request.clear,
+      texture: SpriteTexture::new(image.width, image.height, &image.pixels, 0.0, 0.0)?,
+    })
+  }
+}
+
+/// Tightly packed RGBA8, before it is a texture.
+pub struct RgbaImage {
+  pub width: u32,
+  pub height: u32,
+  pub pixels: Vec<u8>,
+}
+
+/// A background as the caller describes it.
+///
+/// Separate from `Background` because this is the form that crosses a thread
+/// boundary: the player's command channel carries one of these and the decode
+/// thread turns it into a texture, the same way the cursor bitmap travels as
+/// pixels rather than as an uploaded sprite.
+pub struct BackgroundRequest {
+  pub clear: [f32; 4],
+  pub image: Option<RgbaImage>,
+}
+
+/// Where the recording sits on the canvas, and what shape it is.
+///
+/// Pixel coordinates in the canvas, like `WebcamLayout` -- the padding
+/// fraction, the scale and the centring are all resolved by the caller, so
+/// there is one layout formula in the app rather than two that have to agree.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VideoLayout {
+  pub rect: Rect,
+  pub corner_radius: f32,
+  pub border_width: f32,
+  pub border_colour: [f32; 4],
+}
+
+impl VideoLayout {
+  /// The video filling the whole canvas, square corners, no border. What the
+  /// chain does before anyone sets a layout, and what a project with no
+  /// background enabled wants.
+  pub fn covering(width: u32, height: u32) -> Self {
+    Self {
+      rect: Rect::covering(width, height),
+      corner_radius: 0.0,
+      border_width: 0.0,
+      border_colour: [0.0, 0.0, 0.0, 1.0],
+    }
+  }
+
+  fn sanitized(mut self) -> Self {
+    self.corner_radius = self.corner_radius.max(0.0);
+    self.border_width = self.border_width.max(0.0);
+    if !self.rect.x.is_finite() || !self.rect.y.is_finite() {
+      self.rect.x = 0.0;
+      self.rect.y = 0.0;
+    }
+    if !self.rect.width.is_finite() || !self.rect.height.is_finite() {
+      self.rect.width = 0.0;
+      self.rect.height = 0.0;
+    }
+    self
   }
 }
 
@@ -97,12 +226,33 @@ struct WebcamLayer {
 }
 
 pub struct RenderChain {
-  width: u32,
-  height: u32,
+  /// Coded size of the *source*: what the NV12 textures are, macroblock padding
+  /// included.
+  source_width: u32,
+  source_height: u32,
+
+  /// Visible size of the source: the sub-rectangle of the coded frame that is
+  /// real picture.
+  ///
+  /// Kept apart from the coded size because the two are used for different
+  /// things and silently swapping them is a whole class of bug. Anything
+  /// addressing texture memory uses the coded size; the video quad reads only
+  /// this much of it, which is where the padding gets left behind.
+  display_width: u32,
+  display_height: u32,
+
+  /// The canvas: what this chain actually outputs, and what every render target
+  /// below is sized to.
+  ///
+  /// Fixed at construction rather than settable, because the player's pool is
+  /// this size and its handles have already been handed to Chromium -- resizing
+  /// would mean tearing down and re-doing that handshake. The *video's rect
+  /// within* the canvas is what moves.
+  canvas_width: u32,
+  canvas_height: u32,
 
   vs: ID3D11VertexShader,
   ps_convert: ID3D11PixelShader,
-  ps_effect: ID3D11PixelShader,
   ps_to_y: ID3D11PixelShader,
   ps_to_uv: ID3D11PixelShader,
   sampler: ID3D11SamplerState,
@@ -111,6 +261,21 @@ pub struct RenderChain {
   /// One NV12 source per destination slot, so any frame the player still holds
   /// can be re-rendered without going back to the decoder.
   sources: Vec<Source>,
+
+  /// The converted video, at the *source's* resolution, before it is placed on
+  /// the canvas.
+  ///
+  /// One scratch rather than one per slot: a render composites a single slot
+  /// and consumes this immediately. The per-slot state that has to survive is
+  /// the NV12 above, not this.
+  video_bgra_rtv: ID3D11RenderTargetView,
+  video_bgra_srv: ID3D11ShaderResourceView,
+  #[allow(dead_code)]
+  video_bgra: ID3D11Texture2D,
+
+  /// Where the video sits on the canvas, and the background behind it.
+  layout: VideoLayout,
+  background: Background,
 
   /// The webcam layer, when a recording has one.
   ///
@@ -131,11 +296,15 @@ pub struct RenderChain {
   cursor_opacity: f32,
   slot_cursor: Vec<Option<Rect>>,
 
-  overlays: Overlays,
+  /// The zoom timeline, and where each staged slot sat on it.
+  ///
+  /// Remembered per slot for the same reason the cursor rect is: a re-render
+  /// -- a grading change, a webcam move -- has to put the frame back at the
+  /// zoom *it* had, not the zoom the playhead has since moved to.
+  zoom_track: ZoomTrack,
+  slot_zoom: Vec<ZoomState>,
 
-  /// Ping-pong target, only used when at least one adjustable pass runs.
-  intermediate_rtv: ID3D11RenderTargetView,
-  intermediate_srv: ID3D11ShaderResourceView,
+  overlays: Overlays,
 
   /// Chain output in BGRA, for consumers without their own destination. The
   /// exporter reads it through the NV12 passes; preview skips it entirely and
@@ -151,27 +320,66 @@ pub struct RenderChain {
   rtv_y: ID3D11RenderTargetView,
   rtv_uv: ID3D11RenderTargetView,
 
+  /// The video layer's grade, and the webcam's. Per-layer because they are two
+  /// different sensors with two different exposures; the cursor has none
+  /// because it is a bitmap of a pointer.
   params: EffectParams,
+  webcam_params: EffectParams,
 }
 
 impl RenderChain {
+  /// `coded` is the decoder's frame size, which is what the textures are
+  /// allocated at. `display` is the visible sub-rectangle inside it -- equal to
+  /// `coded` on most files, smaller on anything H.264 padded to macroblock
+  /// alignment (a 1080-tall recording is usually coded at 1088).
+  ///
+  /// `canvas` is what the chain outputs. Pass the source's display size for a
+  /// project with no background, or the project's canvas size for one with --
+  /// the video is then inset into it by `set_layout`.
+  ///
   /// `slots` is how many decoded frames the chain can hold at once. The player
   /// passes its pool size; the exporter only ever needs one.
-  pub fn new(width: u32, height: u32, slots: usize) -> Result<Self> {
+  pub fn new(
+    coded: (u32, u32),
+    display: (u32, u32),
+    canvas: (u32, u32),
+    slots: usize,
+  ) -> Result<Self> {
+    let (source_width, source_height) = coded;
+    // A file that reports no aperture, or a nonsense one, gets the coded size:
+    // being wrong by the padding beats rendering into a zero-sized target.
+    let display_width = if display.0 == 0 || display.0 > source_width {
+      source_width
+    } else {
+      display.0
+    };
+    let display_height = if display.1 == 0 || display.1 > source_height {
+      source_height
+    } else {
+      display.1
+    };
+    // NV12 output needs even dimensions, and a zero-sized target is not a
+    // recoverable state, so the canvas is forced into something renderable here
+    // rather than trusted.
+    let canvas_width = if canvas.0 < 2 { display_width } else { canvas.0 } & !1;
+    let canvas_height = if canvas.1 < 2 {
+      display_height
+    } else {
+      canvas.1
+    } & !1;
     let gpu = gpu()?;
 
     let vs_blob = compile(HLSL, "vs_fullscreen", "vs_5_0")?;
     let convert_blob = compile(HLSL, "ps_nv12_to_bgra", "ps_5_0")?;
-    let effect_blob = compile(HLSL, "ps_effect", "ps_5_0")?;
     let to_y_blob = compile(HLSL, "ps_bgra_to_y", "ps_5_0")?;
     let to_uv_blob = compile(HLSL, "ps_bgra_to_uv", "ps_5_0")?;
     let quad_blob = compile(HLSL, "vs_quad", "vs_5_0")?;
     let overlay_blob = compile(HLSL, "ps_overlay", "ps_5_0")?;
     let sprite_blob = compile(HLSL, "ps_sprite", "ps_5_0")?;
+    let solid_blob = compile(HLSL, "ps_solid", "ps_5_0")?;
 
     let mut vs = None;
     let mut ps_convert = None;
-    let mut ps_effect = None;
     let mut ps_to_y = None;
     let mut ps_to_uv = None;
     unsafe {
@@ -181,9 +389,6 @@ impl RenderChain {
       gpu
         .device
         .CreatePixelShader(blob(&convert_blob), None, Some(&mut ps_convert))?;
-      gpu
-        .device
-        .CreatePixelShader(blob(&effect_blob), None, Some(&mut ps_effect))?;
       gpu
         .device
         .CreatePixelShader(blob(&to_y_blob), None, Some(&mut ps_to_y))?;
@@ -212,6 +417,7 @@ impl RenderChain {
     let mut vs_quad = None;
     let mut ps_overlay = None;
     let mut ps_sprite = None;
+    let mut ps_solid = None;
     unsafe {
       gpu
         .device
@@ -222,6 +428,9 @@ impl RenderChain {
       gpu
         .device
         .CreatePixelShader(blob(&sprite_blob), None, Some(&mut ps_sprite))?;
+      gpu
+        .device
+        .CreatePixelShader(blob(&solid_blob), None, Some(&mut ps_solid))?;
     }
 
     let overlays = Overlays::new(
@@ -229,6 +438,7 @@ impl RenderChain {
       vs_quad.expect("quad vertex shader"),
       ps_overlay.expect("overlay shader"),
       ps_sprite.expect("sprite shader"),
+      ps_solid.expect("solid shader"),
     )?;
 
     // Three effect floats plus a texel size, padded to a 16-byte multiple.
@@ -238,8 +448,8 @@ impl RenderChain {
     for _ in 0..slots.max(1) {
       let texture = create_texture(
         gpu,
-        width,
-        height,
+        source_width,
+        source_height,
         DXGI_FORMAT_NV12,
         D3D11_BIND_SHADER_RESOURCE.0 as u32,
       )?;
@@ -254,32 +464,59 @@ impl RenderChain {
 
     let bgra_bind = (D3D11_BIND_SHADER_RESOURCE.0 | D3D11_BIND_RENDER_TARGET.0) as u32;
 
-    let intermediate = create_texture(gpu, width, height, DXGI_FORMAT_B8G8R8A8_UNORM, bgra_bind)?;
-    let intermediate_rtv = create_rtv(gpu, &intermediate)?;
-    let intermediate_srv = create_srv(gpu, &intermediate, DXGI_FORMAT_B8G8R8A8_UNORM)?;
+    // At the source's size, not the canvas's: this is the decoded picture before
+    // anything decides where on the canvas it goes.
+    let video_bgra = create_texture(
+      gpu,
+      source_width,
+      source_height,
+      DXGI_FORMAT_B8G8R8A8_UNORM,
+      bgra_bind,
+    )?;
+    let video_bgra_rtv = create_rtv(gpu, &video_bgra)?;
+    let video_bgra_srv = create_srv(gpu, &video_bgra, DXGI_FORMAT_B8G8R8A8_UNORM)?;
 
-    let output = create_texture(gpu, width, height, DXGI_FORMAT_B8G8R8A8_UNORM, bgra_bind)?;
+    let output = create_texture(
+      gpu,
+      canvas_width,
+      canvas_height,
+      DXGI_FORMAT_B8G8R8A8_UNORM,
+      bgra_bind,
+    )?;
     let output_rtv = create_rtv(gpu, &output)?;
     let output_srv = create_srv(gpu, &output, DXGI_FORMAT_B8G8R8A8_UNORM)?;
 
-    // NV12 needs even dimensions; the chroma plane is exactly half in each axis.
-    let nv12_out = create_texture(gpu, width & !1, height & !1, DXGI_FORMAT_NV12, bgra_bind)?;
+    // The canvas is already even, and the source's macroblock padding was left
+    // behind by the video quad's UVs long before this point.
+    let nv12_out = create_texture(
+      gpu,
+      canvas_width,
+      canvas_height,
+      DXGI_FORMAT_NV12,
+      bgra_bind,
+    )?;
     let rtv_y = create_planar_rtv(gpu, &nv12_out, DXGI_FORMAT_R8_UNORM)?;
     let rtv_uv = create_planar_rtv(gpu, &nv12_out, DXGI_FORMAT_R8G8_UNORM)?;
 
     Ok(Self {
-      width,
-      height,
+      source_width,
+      source_height,
+      display_width,
+      display_height,
+      canvas_width,
+      canvas_height,
       vs: vs.expect("vertex shader"),
       ps_convert: ps_convert.expect("convert shader"),
-      ps_effect: ps_effect.expect("effect shader"),
       ps_to_y: ps_to_y.expect("to-y shader"),
       ps_to_uv: ps_to_uv.expect("to-uv shader"),
       sampler: sampler.expect("sampler"),
       constants,
       sources,
-      intermediate_rtv,
-      intermediate_srv,
+      video_bgra,
+      video_bgra_rtv,
+      video_bgra_srv,
+      layout: VideoLayout::covering(canvas_width, canvas_height),
+      background: Background::default(),
       output,
       output_rtv,
       output_srv,
@@ -287,6 +524,7 @@ impl RenderChain {
       rtv_y,
       rtv_uv,
       params: EffectParams::default(),
+      webcam_params: EffectParams::default(),
       webcam: None,
       webcam_layout: WebcamLayout::default(),
       cursor: None,
@@ -294,8 +532,54 @@ impl RenderChain {
       cursor_size: DEFAULT_CURSOR_SIZE_PX,
       cursor_opacity: 1.0,
       slot_cursor: vec![None; slots.max(1)],
+      zoom_track: ZoomTrack::default(),
+      slot_zoom: vec![ZoomState::default(); slots.max(1)],
       overlays,
     })
+  }
+
+  /// Size of the frame the encoder receives from `process_to_nv12`.
+  ///
+  /// The canvas, which is not necessarily what the caller asked to open -- so
+  /// the encoder has to be created from this rather than from the decoder, or
+  /// the sink writer gets a size its input does not match.
+  pub fn output_size(&self) -> (u32, u32) {
+    (self.canvas_width, self.canvas_height)
+  }
+
+  /// Place the recording on the canvas.
+  ///
+  /// Pixel coordinates, resolved by the caller: the padding fraction, the scale
+  /// and the centring live on the JS side alongside the webcam's anchor grid,
+  /// so there is one layout formula in the app.
+  pub fn set_layout(&mut self, layout: VideoLayout) {
+    self.layout = layout.sanitized();
+  }
+
+  /// What fills the canvas behind the video. Only visible once something insets
+  /// the video, so this costs nothing on a project with no background.
+  pub fn set_background(&mut self, background: Background) {
+    self.background = background;
+  }
+
+  /// The webcam's own grade, separate from the video's.
+  pub fn set_webcam_params(&mut self, params: EffectParams) {
+    self.webcam_params = params;
+  }
+
+  /// Which part of the video's own texture is real picture.
+  ///
+  /// The macroblock padding is cropped here, on the quad that places the video,
+  /// rather than on the way to the encoder -- so preview and export leave the
+  /// same rows behind.
+  fn video_uv(&self) -> UvRect {
+    UvRect {
+      scale: [
+        self.display_width as f32 / self.source_width.max(1) as f32,
+        self.display_height as f32 / self.source_height.max(1) as f32,
+      ],
+      offset: [0.0, 0.0],
+    }
   }
 
   /// Attach a webcam layer at the camera's own resolution.
@@ -348,7 +632,9 @@ impl RenderChain {
   }
 
   pub fn set_webcam_layout(&mut self, layout: WebcamLayout) {
-    self.webcam_layout = layout;
+    // Sanitised here rather than at the napi boundary so every caller gets it,
+    // the exporter included.
+    self.webcam_layout = layout.sanitized();
   }
 
   /// Copy a decoded webcam frame into a slot.
@@ -441,19 +727,32 @@ impl RenderChain {
     self.cursor_track = track;
   }
 
+  /// Set the zoom/pan timeline.
+  pub fn set_zoom_track(&mut self, track: ZoomTrack) {
+    self.zoom_track = track;
+  }
+
+
   pub fn set_cursor_style(&mut self, size: f32, opacity: f32) {
     self.cursor_size = size.max(0.0);
     self.cursor_opacity = opacity.clamp(0.0, 1.0);
   }
 
-  /// Resolve where the cursor sits for a frame, and remember it against the slot.
+  /// Resolve everything that depends on *this frame's* timestamp, and remember
+  /// it against the slot: where the cursor sits, and how far the zoom is in.
   ///
   /// Done at stage time rather than render time so a later re-render -- a
-  /// grading change, a webcam move -- puts the cursor back where that frame had
-  /// it instead of where the playhead is now.
-  pub fn stage_cursor(&mut self, slot: usize, timestamp_ms: f64) {
+  /// grading change, a webcam move -- puts the frame back the way it was
+  /// instead of the way the playhead is now. Getting this wrong is subtle: the
+  /// preview looks right until you drag a slider, and then every queued frame
+  /// snaps to the playhead's zoom.
+  pub fn stage_timeline(&mut self, slot: usize, timestamp_ms: f64) {
     let index = slot % self.slot_cursor.len();
+    // Against the unzoomed video rect: the zoom is applied to the resolved
+    // rectangle at draw time, exactly as the compositor draws the cursor inside
+    // the zoom transform rather than pre-multiplying its position.
     self.slot_cursor[index] = self.resolve_cursor_rect(timestamp_ms);
+    self.slot_zoom[index] = self.zoom_track.state_at(timestamp_ms, self.layout.rect);
   }
 
   fn resolve_cursor_rect(&self, timestamp_ms: f64) -> Option<Rect> {
@@ -472,9 +771,14 @@ impl RenderChain {
     // Normalised position is the cursor's *point*, so the image is offset by
     // its hotspot. Skipping this puts an arrow's tip below and right of the
     // place the user actually clicked.
+    // Against the video's rect on the canvas, not the canvas and not the coded
+    // frame. The track's positions are a fraction of the picture the user saw,
+    // so they follow the video when it is inset, scaled or moved -- and the
+    // macroblock padding was never part of that picture either.
+    let video = self.layout.rect;
     Some(Rect {
-      x: sample.x * self.width as f32 - sprite.hotspot_x * scale,
-      y: sample.y * self.height as f32 - sprite.hotspot_y * scale,
+      x: video.x + sample.x * video.width - sprite.hotspot_x * scale,
+      y: video.y + sample.y * video.height - sprite.hotspot_y * scale,
       width,
       height,
     })
@@ -484,7 +788,8 @@ impl RenderChain {
     self.params = params;
   }
 
-  /// Copy a decoded frame into a slot's own NV12 texture.
+  /// Copy a decoded frame into a slot's own NV12 texture. Source-sized, like
+  /// the textures it lands in.
   ///
   /// Separate from rendering so the same pixels can be rendered again later
   /// under different settings without touching the decoder.
@@ -535,7 +840,11 @@ impl RenderChain {
     let gpu = gpu()?;
     let ctx = &gpu.context;
 
+    let (out_width, out_height) = self.output_size();
+
     unsafe {
+      // Straight through: the chain output is already the canvas, and the
+      // source's macroblock padding was cropped by the video quad.
       self.upload_params(ctx)?;
       ctx.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
       ctx.IASetInputLayout(None);
@@ -545,14 +854,14 @@ impl RenderChain {
       ctx.PSSetShaderResources(0, Some(&[Some(self.output_srv.clone())]));
 
       // Luma at full resolution into plane 0.
-      set_viewport(ctx, self.width, self.height);
+      set_viewport(ctx, out_width, out_height);
       ctx.OMSetRenderTargets(Some(&[Some(self.rtv_y.clone())]), None);
       ctx.PSSetShader(&self.ps_to_y, None);
       ctx.Draw(3, 0);
 
       // Chroma at half resolution into plane 1. This is where the 4:2:0
       // subsampling actually happens.
-      set_viewport(ctx, self.width / 2, self.height / 2);
+      set_viewport(ctx, out_width / 2, out_height / 2);
       ctx.OMSetRenderTargets(Some(&[Some(self.rtv_uv.clone())]), None);
       ctx.PSSetShader(&self.ps_to_uv, None);
       ctx.Draw(3, 0);
@@ -576,29 +885,43 @@ impl RenderChain {
     Ok(())
   }
 
+  /// Compose one slot onto the canvas.
+  ///
+  /// Every layer is a quad now, including the video. That is what lets the
+  /// canvas be bigger than the recording: the video is placed into a rectangle
+  /// rather than being the frame, so there is somewhere for a background to be
+  /// and something for a border to go around. It also means the grade is
+  /// per-layer, because each quad carries its own.
+  ///
+  /// ```text
+  ///   background  ClearRenderTargetView, then an optional image quad
+  ///   video       NV12 -> BGRA at source size, then a quad into the video rect
+  ///   webcam      NV12 -> BGRA at camera size, then a quad into its box
+  ///   cursor      a sprite, alpha from the image
+  /// ```
   fn render_locked(&self, slot: usize, dst_rtv: &ID3D11RenderTargetView) -> Result<()> {
     let gpu = gpu()?;
     let ctx = &gpu.context;
     let source = &self.sources[slot % self.sources.len()];
 
     unsafe {
-      set_viewport(ctx, self.width, self.height);
       ctx.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
       // No vertex or index buffers: the VS builds the triangle from SV_VertexID.
       ctx.IASetInputLayout(None);
       ctx.VSSetShader(&self.vs, None);
       ctx.PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
 
-      let identity = self.params.is_identity();
+      // ---- background -----------------------------------------------------
+      //
+      // A clear rather than a shader. It has to happen unconditionally even for
+      // an opaque full-canvas video: the destination is a pool slot that held a
+      // different frame a moment ago, and anything the video does not cover
+      // would still be showing it.
+      ctx.ClearRenderTargetView(dst_rtv, &self.background.clear_colour());
 
-      // Pass 1: NV12 -> BGRA. With no effects this writes straight to dst and
-      // the whole chain is a single pass.
-      let first_target = if identity {
-        dst_rtv.clone()
-      } else {
-        self.intermediate_rtv.clone()
-      };
-      ctx.OMSetRenderTargets(Some(&[Some(first_target)]), None);
+      // ---- video: NV12 -> BGRA, at the source's own resolution -------------
+      set_viewport(ctx, self.source_width, self.source_height);
+      ctx.OMSetRenderTargets(Some(&[Some(self.video_bgra_rtv.clone())]), None);
       ctx.PSSetShader(&self.ps_convert, None);
       ctx.PSSetShaderResources(
         0,
@@ -606,38 +929,119 @@ impl RenderChain {
       );
       ctx.Draw(3, 0);
 
-      if !identity {
-        // Unbind the intermediate as a source before binding it as a target, or
-        // D3D11 silently drops one of the two bindings.
-        ctx.PSSetShaderResources(0, Some(&[None, None]));
+      // Unbind before it is read as a source, or D3D11 silently drops one of
+      // the two bindings.
+      ctx.PSSetShaderResources(0, Some(&[None, None]));
+      ctx.OMSetRenderTargets(Some(&[None]), None);
 
-        self.upload_params(ctx)?;
+      // ---- everything else is a quad on the canvas -------------------------
+      set_viewport(ctx, self.canvas_width, self.canvas_height);
 
-        ctx.OMSetRenderTargets(Some(&[Some(dst_rtv.clone())]), None);
-        ctx.PSSetShader(&self.ps_effect, None);
-        ctx.PSSetConstantBuffers(0, Some(&[Some(self.constants.clone())]));
-        ctx.PSSetShaderResources(0, Some(&[Some(self.intermediate_srv.clone())]));
-        ctx.Draw(3, 0);
+      if let Background::Image { texture, .. } = &self.background {
+        self.draw_quad_locked(
+          ctx,
+          dst_rtv,
+          &texture.srv,
+          Quad {
+            rect: Rect::covering(self.canvas_width, self.canvas_height),
+            shape: OverlayShape::Rect,
+            corner_radius: 0.0,
+            opacity: 1.0,
+            uv: UvRect::default(),
+            grade: Grade::default(),
+            fill: Fill::Texture,
+          },
+        )?;
       }
 
-      // Unbind the base source before the overlays start binding their own.
-      ctx.PSSetShaderResources(0, Some(&[None, None]));
+      // The zoom this frame was staged at, not the playhead's.
+      let zoom = self.slot_zoom[slot % self.slot_zoom.len()];
 
-      // ---- overlays -------------------------------------------------------
-      //
-      // These run here, inside the chain, rather than in whatever consumes the
-      // result. That is the same reason the effects sit before the
-      // preview/export fork: one implementation, so the webcam cannot be in a
-      // different place on screen than it is in the exported file.
-
+      self.composite_video_locked(ctx, dst_rtv, zoom)?;
+      // The webcam is deliberately not zoomed: a zoom is about the recording,
+      // and the camera box is furniture on top of it. Same split the
+      // compositor makes with its `base` and `zoomed` layer spaces.
       self.composite_webcam_locked(ctx, slot, dst_rtv)?;
-      self.composite_cursor_locked(ctx, slot, dst_rtv)?;
+      self.composite_cursor_locked(ctx, slot, dst_rtv, zoom)?;
 
       // Leave nothing bound: a slot's source becomes a copy destination again on
       // a later frame, and D3D11 refuses that while it is still an SRV.
       ctx.PSSetShaderResources(0, Some(&[None, None]));
       ctx.OMSetRenderTargets(Some(&[None]), None);
       ctx.Flush();
+    }
+
+    Ok(())
+  }
+
+  /// One overlay draw, with the viewport already set to the canvas.
+  unsafe fn draw_quad_locked(
+    &self,
+    ctx: &ID3D11DeviceContext,
+    dst_rtv: &ID3D11RenderTargetView,
+    source: &ID3D11ShaderResourceView,
+    quad: Quad,
+  ) -> Result<()> {
+    self
+      .overlays
+      .draw(ctx, dst_rtv, source, self.canvas_width, self.canvas_height, quad)
+  }
+
+  /// Place the converted video on the canvas, with its border under it.
+  unsafe fn composite_video_locked(
+    &self,
+    ctx: &ID3D11DeviceContext,
+    dst_rtv: &ID3D11RenderTargetView,
+    zoom: ZoomState,
+  ) -> Result<()> {
+    let layout = self.layout;
+    if layout.rect.is_empty() {
+      return Ok(());
+    }
+
+    // The zoom scales the rect about its pivot, and the radius and border with
+    // it -- under a canvas transform they would scale too, and a border that
+    // stayed 4px while the video doubled would read as a bug.
+    let rect = zoom.apply(layout.rect);
+    let corner_radius = layout.corner_radius * zoom.scale;
+    let border_width = layout.border_width * zoom.scale;
+
+    unsafe {
+      // The border is the same rounded rect grown by its width and filled, drawn
+      // first so the video lands on top of it. Its radius grows too, or the
+      // corners of the border and the corners of the video would not be
+      // concentric.
+      if border_width > 0.0 {
+        self.draw_quad_locked(
+          ctx,
+          dst_rtv,
+          &self.video_bgra_srv,
+          Quad {
+            rect: rect.expanded(border_width),
+            shape: OverlayShape::Rect,
+            corner_radius: corner_radius + border_width,
+            opacity: 1.0,
+            uv: UvRect::default(),
+            grade: Grade::default(),
+            fill: Fill::Solid(layout.border_colour),
+          },
+        )?;
+      }
+
+      self.draw_quad_locked(
+        ctx,
+        dst_rtv,
+        &self.video_bgra_srv,
+        Quad {
+          rect,
+          shape: OverlayShape::Rect,
+          corner_radius,
+          opacity: 1.0,
+          uv: self.video_uv(),
+          grade: self.params.into(),
+          fill: Fill::Texture,
+        },
+      )?;
     }
 
     Ok(())
@@ -669,6 +1073,16 @@ impl RenderChain {
 
     let source = &webcam.sources[index];
 
+    // The camera almost never matches the box the caller asked for, and a
+    // stretched face is more obviously wrong than a cropped one. Resolved here
+    // because this is the only place that knows the camera's real resolution.
+    let (rect, uv) = fit_source(
+      self.webcam_layout.rect,
+      webcam.width,
+      webcam.height,
+      self.webcam_layout.fit,
+    );
+
     unsafe {
       // Pass 1: NV12 -> BGRA, at the camera's resolution.
       set_viewport(ctx, webcam.width, webcam.height);
@@ -687,18 +1101,39 @@ impl RenderChain {
       ctx.OMSetRenderTargets(Some(&[None]), None);
 
       // Pass 2: blend it into the frame, back at canvas resolution.
-      set_viewport(ctx, self.width, self.height);
-      self.overlays.draw(
+      set_viewport(ctx, self.canvas_width, self.canvas_height);
+
+      // Border first, under the camera, same as the video layer.
+      if self.webcam_layout.border_width > 0.0 {
+        self.draw_quad_locked(
+          ctx,
+          dst_rtv,
+          &webcam.bgra_srv,
+          Quad {
+            rect: rect.expanded(self.webcam_layout.border_width),
+            shape: self.webcam_layout.shape,
+            corner_radius: self.webcam_layout.corner_radius + self.webcam_layout.border_width,
+            opacity: self.webcam_layout.opacity,
+            uv: UvRect::default(),
+            grade: Grade::default(),
+            fill: Fill::Solid(self.webcam_layout.border_colour),
+          },
+        )?;
+      }
+
+      self.draw_quad_locked(
         ctx,
         dst_rtv,
         &webcam.bgra_srv,
-        self.width,
-        self.height,
-        self.webcam_layout.rect,
-        self.webcam_layout.shape,
-        self.webcam_layout.corner_radius,
-        self.webcam_layout.opacity,
-        false,
+        Quad {
+          rect,
+          shape: self.webcam_layout.shape,
+          corner_radius: self.webcam_layout.corner_radius,
+          opacity: self.webcam_layout.opacity,
+          uv,
+          grade: self.webcam_params.into(),
+          fill: Fill::Texture,
+        },
       )?;
     }
 
@@ -711,6 +1146,7 @@ impl RenderChain {
     ctx: &ID3D11DeviceContext,
     slot: usize,
     dst_rtv: &ID3D11RenderTargetView,
+    zoom: ZoomState,
   ) -> Result<()> {
     let Some(sprite) = self.cursor.as_ref() else {
       return Ok(());
@@ -719,25 +1155,37 @@ impl RenderChain {
       return Ok(());
     };
 
+    // In zoomed space with the video, so it grows and moves with it -- the
+    // compositor draws the cursor inside the same transform.
+    let rect = zoom.apply(rect);
+
     unsafe {
-      set_viewport(ctx, self.width, self.height);
-      self.overlays.draw(
+      set_viewport(ctx, self.canvas_width, self.canvas_height);
+      self.draw_quad_locked(
         ctx,
         dst_rtv,
         &sprite.srv,
-        self.width,
-        self.height,
-        rect,
-        OverlayShape::Rect,
-        0.0,
-        self.cursor_opacity,
-        true,
+        Quad {
+          rect,
+          shape: OverlayShape::Rect,
+          corner_radius: 0.0,
+          opacity: self.cursor_opacity,
+          // The rect was already derived from the sprite's aspect ratio, so
+          // there is nothing to fit.
+          uv: UvRect::default(),
+          // No grade: this is a bitmap of a pointer, not picture.
+          grade: Grade::default(),
+          fill: Fill::Sprite,
+        },
       )?;
     }
 
     Ok(())
   }
 
+  /// The only thing left in the fullscreen constant buffer is the texel size,
+  /// which the chroma pass uses to average a 2x2 block. The grade moved to the
+  /// overlay buffer when it became per-layer.
   unsafe fn upload_params(&self, ctx: &ID3D11DeviceContext) -> Result<()> {
     let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
     unsafe {
@@ -749,12 +1197,8 @@ impl RenderChain {
         Some(&mut mapped),
       )?;
       let values = [
-        self.params.brightness,
-        self.params.contrast,
-        self.params.saturation,
-        0.0f32,
-        1.0 / self.width as f32,
-        1.0 / self.height as f32,
+        1.0f32 / self.canvas_width.max(1) as f32,
+        1.0 / self.canvas_height.max(1) as f32,
         0.0,
         0.0,
       ];
@@ -842,7 +1286,11 @@ fn create_texture(
     MiscFlags: 0,
   };
   let mut texture = None;
-  unsafe { gpu.device.CreateTexture2D(&desc, None, Some(&mut texture))? };
+  unsafe {
+    gpu
+      .device
+      .CreateTexture2D(&desc, None, Some(&mut texture))?
+  };
   Ok(texture.expect("texture"))
 }
 

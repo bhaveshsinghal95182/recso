@@ -39,3 +39,5 @@ mod pattern;
 mod player;
 #[cfg(windows)]
 mod render;
+#[cfg(windows)]
+pub mod zoom;

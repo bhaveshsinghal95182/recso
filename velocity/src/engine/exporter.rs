@@ -18,9 +18,12 @@ use std::time::Instant;
 
 use windows::core::Result;
 
+use crate::engine::composite::{CursorSample, CursorTrack, SpriteTexture, WebcamLayout};
 use crate::engine::decode::Decoder;
 use crate::engine::encode::Encoder;
-use crate::engine::render::{EffectParams, RenderChain};
+use crate::engine::player::{advance_webcam, CursorImage, WebcamSync};
+use crate::engine::render::{Background, BackgroundRequest, EffectParams, RenderChain, VideoLayout};
+use crate::engine::zoom::{ZoomRegion, ZoomTrack};
 
 pub struct Options {
   pub input: String,
@@ -32,6 +35,32 @@ pub struct Options {
   /// Must match what the preview is showing, or the export is not what the
   /// user approved. The caller is responsible for passing the live values.
   pub effects: EffectParams,
+  /// The canvas to compose onto. `None` is the recording's own visible size.
+  pub canvas: Option<(u32, u32)>,
+  /// Where the recording sits on that canvas. `None` fills it.
+  pub layout: Option<VideoLayout>,
+  /// What is behind the video. Only visible if `layout` insets it. Uploaded on
+  /// the export thread, like the cursor bitmap beside it.
+  pub background: Option<BackgroundRequest>,
+  /// The webcam's own grade, separate from the video's.
+  pub webcam_effects: EffectParams,
+  /// The camera sidecar, if the recording has one.
+  ///
+  /// The exporter opens its own decoder for it, the same way it opens its own
+  /// decoder for the screen track: a Media Foundation source reader has one
+  /// consumer, so sharing the player's would mean the preview and the export
+  /// fighting over the read position.
+  pub webcam_path: Option<String>,
+  /// Where the camera goes. `None` leaves the overlay out.
+  pub webcam_layout: Option<WebcamLayout>,
+  /// The pointer bitmap. `None` leaves the cursor out.
+  pub cursor_image: Option<CursorImage>,
+  pub cursor_track: Vec<CursorSample>,
+  /// Cursor height in destination pixels, and its opacity.
+  pub cursor_size: f32,
+  pub cursor_opacity: f32,
+  /// The zoom/pan timeline. Empty exports unzoomed.
+  pub zoom_regions: Vec<ZoomRegion>,
 }
 
 pub struct Shared {
@@ -193,8 +222,20 @@ fn run(shared: &Arc<Shared>, options: Options) -> Result<()> {
   stage("open input");
   let mut decoder = Decoder::open(&options.input)?;
 
-  let width = decoder.display_width;
-  let height = decoder.display_height;
+  // Same tolerance as the player: a camera sidecar that will not open costs the
+  // overlay, not the export. Refusing to write the file at all would be worse.
+  stage("open webcam");
+  let mut webcam = options
+    .webcam_path
+    .as_deref()
+    .and_then(|path| match Decoder::open(path) {
+      Ok(decoder) => Some(decoder),
+      Err(error) => {
+        eprintln!("[engine] export webcam sidecar {path} did not open: {error:?}");
+        None
+      }
+    });
+
   let fps = decoder.fps_num as f64 / decoder.fps_den.max(1) as f64;
 
   let end_ms = if options.end_ms > 0.0 {
@@ -211,25 +252,77 @@ fn run(shared: &Arc<Shared>, options: Options) -> Result<()> {
   // run the same chain, so what you see is what lands in the file.
   stage("create render chain");
   // One slot: export never needs to re-render a frame it has already written.
-  let mut chain = RenderChain::new(width, height, 1)?;
+  let mut chain = RenderChain::new(
+    decoder.coded_size(),
+    decoder.display_size(),
+    options.canvas.unwrap_or_else(|| decoder.display_size()),
+    1,
+  )?;
   chain.set_params(options.effects);
+  chain.set_webcam_params(options.webcam_effects);
+  if let Some(layout) = options.layout {
+    chain.set_layout(layout);
+  }
+  if let Some(request) = options.background {
+    stage("upload background");
+    chain.set_background(Background::build(request)?);
+  }
+
+  // Every layer the player has, or the engine's central claim -- preview and
+  // export cannot drift, because they are the same chain -- is only true for
+  // the grading pass and quietly false for the two the user can see moving.
+  if let Some(webcam) = webcam.as_ref() {
+    stage("attach webcam");
+    let (webcam_width, webcam_height) = webcam.coded_size();
+    chain.attach_webcam(webcam_width, webcam_height)?;
+  }
+  if let Some(layout) = options.webcam_layout {
+    chain.set_webcam_layout(layout);
+  }
+
+  if let Some(image) = options.cursor_image.as_ref() {
+    stage("upload cursor");
+    chain.set_cursor_image(Some(SpriteTexture::new(
+      image.width,
+      image.height,
+      &image.pixels,
+      image.hotspot_x,
+      image.hotspot_y,
+    )?));
+  }
+  chain.set_cursor_track(CursorTrack::new(options.cursor_track));
+  chain.set_cursor_style(options.cursor_size, options.cursor_opacity);
+  chain.set_zoom_track(ZoomTrack::new(options.zoom_regions));
 
   stage("create encoder");
 
+  // From the chain, not the decoder: the chain crops the macroblock padding off
+  // on the way to NV12, so its output is what the sink writer has to be told
+  // about. Handing it the decoder's frame size would describe a texture two to
+  // eight rows taller than the one it is actually given.
+  let (out_width, out_height) = chain.output_size();
   let mut encoder = Encoder::create(
     &options.output,
-    width,
-    height,
+    out_width,
+    out_height,
     decoder.fps_num,
     decoder.fps_den,
     options.bitrate,
   )?;
+
+  let mut webcam_sync = WebcamSync::default();
 
   // Media Foundation seeks to a keyframe, so skip the pre-roll frames by pts
   // rather than trusting the seek to land exactly.
   if options.start_ms > 0.0 {
     stage("seek");
     decoder.seek((options.start_ms * 10_000.0) as i64)?;
+    // The camera has to move with it. Left where it was, the overlay would
+    // start the export showing whatever the camera was doing at t=0 and catch
+    // up over the following seconds.
+    if let Some(webcam) = webcam.as_mut() {
+      webcam.seek((options.start_ms * 10_000.0) as i64)?;
+    }
   }
 
   loop {
@@ -260,6 +353,16 @@ fn run(shared: &Arc<Shared>, options: Options) -> Result<()> {
 
     stage("render");
     let t_render = Instant::now();
+
+    // One slot, so there is no previous slot to inherit from -- and none is
+    // needed: with a single slot the last camera frame simply stays staged
+    // until a newer one replaces it, which is the carry-forward behaviour the
+    // player gets from `inherit_webcam`.
+    advance_webcam(&mut chain, &mut webcam, &mut webcam_sync, None, 0, pts_ms);
+    // Resolved against this frame's own pts, not a playhead, so a cursor in the
+    // file lands where it landed on screen.
+    chain.stage_timeline(0, pts_ms);
+
     // Clone the COM reference so the borrow on the chain ends before the
     // encoder call; it is a refcount bump, not a copy.
     let encoded = chain.process_to_nv12(source, sample.subresource)?.clone();

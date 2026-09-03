@@ -23,10 +23,14 @@ use windows::core::Result;
 use windows::Win32::Graphics::Direct3D11::ID3D11RenderTargetView;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 
+use crate::engine::composite::{CursorSample, CursorTrack, SpriteTexture, WebcamLayout};
 use crate::engine::d3d::{gpu, SharedTexture, Sharing};
 use crate::engine::decode::Decoder;
-use crate::engine::composite::{CursorSample, CursorTrack, SpriteTexture, WebcamLayout};
-use crate::engine::render::{create_rtv, EffectParams, RenderChain};
+use crate::engine::render::{
+  create_rtv, Background, BackgroundRequest, EffectParams, RenderChain,
+  VideoLayout as RenderVideoLayout,
+};
+use crate::engine::zoom::{ZoomRegion, ZoomTrack};
 
 /// How far ahead of the playhead we decode.
 ///
@@ -117,6 +121,7 @@ pub struct Shared {
   /// Pointer samples currently loaded, published once the decode thread has
   /// taken the track on.
   cursor_samples: AtomicU64,
+  zoom_regions: AtomicU64,
   /// Present the next available frame regardless of the clock. Set after a
   /// seek and at startup, so a paused player still shows where it landed.
   force_present: AtomicBool,
@@ -183,6 +188,10 @@ pub struct CursorImage {
 enum Command {
   Seek(f64, SeekMode),
   SetEffects(EffectParams),
+  SetWebcamEffects(EffectParams),
+  SetLayout(RenderVideoLayout),
+  SetBackground(BackgroundRequest),
+  SetZoomRegions(Vec<ZoomRegion>),
   SetWebcamLayout(WebcamLayout),
   SetCursorImage(Option<CursorImage>),
   SetCursorTrack(Vec<CursorSample>),
@@ -219,7 +228,7 @@ pub struct Stats {
 
 impl Player {
   pub fn open(path: &str) -> Result<Self> {
-    Self::open_with_webcam(path, None)
+    Self::open_with_webcam(path, None, None)
   }
 
   /// Open a screen recording, optionally with its camera sidecar.
@@ -232,7 +241,17 @@ impl Player {
   /// A webcam that fails to open is not fatal -- the recording is still
   /// editable without its overlay, and refusing to open at all would be a worse
   /// outcome than a missing camera.
-  pub fn open_with_webcam(path: &str, webcam_path: Option<&str>) -> Result<Self> {
+  /// `canvas` is what the chain composes onto, and therefore the size of every
+  /// texture handed to Chromium. `None` means the recording's own visible size,
+  /// which is what a project with no background wants. It is fixed for the life
+  /// of the player: the pool handles have been imported by the time anyone
+  /// could want to change it, and re-doing that handshake is not worth it when
+  /// the video's *rect within* the canvas moves freely instead.
+  pub fn open_with_webcam(
+    path: &str,
+    webcam_path: Option<&str>,
+    canvas: Option<(u32, u32)>,
+  ) -> Result<Self> {
     let decoder = Decoder::open(path)?;
     let webcam = webcam_path.and_then(|webcam_path| match Decoder::open(webcam_path) {
       Ok(decoder) => Some(decoder),
@@ -243,8 +262,18 @@ impl Player {
     });
     let gpu = gpu()?;
 
-    let (width, height) = (decoder.display_width, decoder.display_height);
     let (coded_width, coded_height) = decoder.coded_size();
+    // What the chain outputs, and so what the pool textures are. Even, because
+    // the NV12 conversion on the export path needs it and a player and an
+    // exporter on the same project must agree on the size.
+    let canvas = match canvas {
+      Some((w, h)) if w >= 2 && h >= 2 => (w & !1, h & !1),
+      _ => (decoder.display_width & !1, decoder.display_height & !1),
+    };
+    // The pool has no macroblock padding in it -- the chain crops that when it
+    // places the video -- so the coded and visible sizes it reports are the
+    // same, and both are the canvas.
+    let (width, height) = canvas;
 
     // The pool holds the render layer's *output*, not decoder output, so it is
     // BGRA now. Electron requires bgra handles to carry no keyed mutex, which
@@ -255,8 +284,8 @@ impl Player {
     for _ in 0..QUEUE_CAPACITY + POOL_SLACK {
       let texture = SharedTexture::new(
         gpu,
-        coded_width,
-        coded_height,
+        canvas.0,
+        canvas.1,
         DXGI_FORMAT_B8G8R8A8_UNORM,
         Sharing::Plain,
         None,
@@ -287,13 +316,14 @@ impl Player {
       // will not appear.
       has_webcam: AtomicBool::new(webcam.is_some()),
       cursor_samples: AtomicU64::new(0),
+      zoom_regions: AtomicU64::new(0),
       current: Mutex::new(None),
       repaint: AtomicBool::new(false),
       duration_ms: decoder.duration_100ns as f64 / 10_000.0,
       width,
       height,
-      coded_width,
-      coded_height,
+      coded_width: canvas.0,
+      coded_height: canvas.1,
       fps_num: decoder.fps_num,
       fps_den: decoder.fps_den,
       pool_handles,
@@ -311,7 +341,13 @@ impl Player {
     // and only one thread should be issuing a pass sequence at a time. It keeps
     // one NV12 source per pool slot so any frame still in flight can be
     // re-rendered without decoding it again.
-    let mut chain = RenderChain::new(coded_width, coded_height, pool.len())?;
+    let mut chain = RenderChain::new(
+      (coded_width, coded_height),
+      decoder.display_size(),
+      canvas,
+      pool.len(),
+    )?;
+    chain.set_layout(RenderVideoLayout::covering(canvas.0, canvas.1));
 
     if let Some(webcam) = webcam.as_ref() {
       // Its own resolution, not the canvas's -- the camera is composited as a
@@ -367,6 +403,40 @@ impl Player {
   pub fn set_effects(&self, params: EffectParams) {
     let _ = self.tx.send(Command::SetEffects(params));
     self.shared.space.notify_all();
+  }
+
+  /// The webcam's own grade. Separate from the video's because the camera and
+  /// the screen are two different sensors with two different exposures.
+  pub fn set_webcam_effects(&self, params: EffectParams) {
+    let _ = self.tx.send(Command::SetWebcamEffects(params));
+    self.shared.space.notify_all();
+  }
+
+  /// Place the recording on the canvas: its rect, corner radius and border.
+  pub fn set_layout(&self, layout: RenderVideoLayout) {
+    let _ = self.tx.send(Command::SetLayout(layout));
+    self.shared.space.notify_all();
+  }
+
+  /// What fills the canvas behind the video.
+  ///
+  /// The image travels as pixels and is uploaded on the decode thread, so this
+  /// does no GPU work on the caller's.
+  pub fn set_background(&self, request: BackgroundRequest) {
+    let _ = self.tx.send(Command::SetBackground(request));
+    self.shared.space.notify_all();
+  }
+
+  /// Set the zoom/pan timeline.
+  pub fn set_zoom_regions(&self, regions: Vec<ZoomRegion>) {
+    let _ = self.tx.send(Command::SetZoomRegions(regions));
+    self.shared.space.notify_all();
+  }
+
+  /// Zoom regions the decode thread has loaded. Applied asynchronously, so
+  /// this reads zero for a moment after `set_zoom_regions`.
+  pub fn zoom_region_count(&self) -> u64 {
+    self.shared.zoom_regions.load(Ordering::Acquire)
   }
 
   /// Move or reshape the webcam box.
@@ -567,7 +637,7 @@ fn make_frame(shared: &Shared, slot_index: usize, slot: &SharedTexture, pts_ms: 
 /// not even constant. This tracks the one frame we have read but not yet
 /// reached, so it is not decoded twice.
 #[derive(Default)]
-struct WebcamSync {
+pub(crate) struct WebcamSync {
   /// Timestamp of the most recently read camera frame, when it is ahead of the
   /// screen frame being composed.
   ahead_ms: Option<f64>,
@@ -583,7 +653,7 @@ struct WebcamSync {
 /// it costs at most one camera interval of lead (~33ms at 30fps, invisible on
 /// an overlay), and the alternative is discarding camera frames whenever the
 /// screen ticks faster than the camera.
-fn advance_webcam(
+pub(crate) fn advance_webcam(
   chain: &mut RenderChain,
   webcam: &mut Option<Decoder>,
   sync: &mut WebcamSync,
@@ -658,6 +728,10 @@ fn decode_loop(
     // drag emits a change per pixel of travel; applying every one of them in
     // turn is pure backlog, and only the final value is ever seen.
     let mut pending_effects: Option<EffectParams> = None;
+    let mut pending_webcam_effects: Option<EffectParams> = None;
+    let mut pending_layout: Option<RenderVideoLayout> = None;
+    let mut pending_background: Option<BackgroundRequest> = None;
+    let mut pending_zoom: Option<Vec<ZoomRegion>> = None;
     let mut pending_seek: Option<(f64, SeekMode)> = None;
     let mut pending_webcam_layout: Option<WebcamLayout> = None;
     let mut pending_cursor_image: Option<Option<CursorImage>> = None;
@@ -672,6 +746,10 @@ fn decode_loop(
         }
         Ok(Command::Seek(target, mode)) => pending_seek = Some((target, mode)),
         Ok(Command::SetEffects(params)) => pending_effects = Some(params),
+        Ok(Command::SetWebcamEffects(params)) => pending_webcam_effects = Some(params),
+        Ok(Command::SetLayout(layout)) => pending_layout = Some(layout),
+        Ok(Command::SetBackground(background)) => pending_background = Some(background),
+        Ok(Command::SetZoomRegions(regions)) => pending_zoom = Some(regions),
         Ok(Command::SetWebcamLayout(layout)) => pending_webcam_layout = Some(layout),
         Ok(Command::SetCursorImage(image)) => pending_cursor_image = Some(image),
         Ok(Command::SetCursorTrack(samples)) => pending_cursor_track = Some(samples),
@@ -701,6 +779,40 @@ fn decode_loop(
     if let Some(params) = pending_effects {
       chain.set_params(params);
       needs_repaint = true;
+    }
+
+    if let Some(params) = pending_webcam_effects {
+      chain.set_webcam_params(params);
+      needs_repaint = true;
+    }
+
+    if let Some(layout) = pending_layout {
+      chain.set_layout(layout);
+      needs_repaint = true;
+    }
+
+    if let Some(regions) = pending_zoom {
+      let track = ZoomTrack::new(regions);
+      shared.zoom_regions.store(track.len() as u64, Ordering::Release);
+      chain.set_zoom_track(track);
+      // `repaint_slots` re-stages every queued frame before re-rendering it,
+      // which is exactly what a zoom change needs: the state is resolved per
+      // frame from its own timestamp, so a re-render alone would redraw them
+      // all at whatever zoom they were staged with.
+      needs_repaint = true;
+    }
+
+    if let Some(request) = pending_background {
+      // Uploaded here rather than by the caller: this is the thread that owns
+      // every other texture in the chain. A background that fails to upload
+      // leaves the previous one in place, which beats blanking the canvas.
+      match Background::build(request) {
+        Ok(background) => {
+          chain.set_background(background);
+          needs_repaint = true;
+        }
+        Err(error) => eprintln!("[engine] background did not upload: {error:?}"),
+      }
     }
 
     if let Some(layout) = pending_webcam_layout {
@@ -812,7 +924,7 @@ fn decode_loop(
       slot_index,
       pts_ms,
     );
-    chain.stage_cursor(slot_index, pts_ms);
+    chain.stage_timeline(slot_index, pts_ms);
     previous_slot = Some(slot_index);
 
     // Decode output goes through the render layer on its way to the pool, so
@@ -869,7 +981,7 @@ fn repaint_slots(
       // what just changed, and a slot remembers the rect it was staged with --
       // so without this, hiding the cursor or resizing it leaves every frame
       // already in flight showing the old one.
-      chain.stage_cursor(slot, pts_ms);
+      chain.stage_timeline(slot, pts_ms);
       let _ = chain.render_slot(slot, &pool_rtvs[slot]);
     }
     return;
@@ -877,7 +989,7 @@ fn repaint_slots(
 
   let current = *shared.current.lock().unwrap();
   if let Some(frame) = current {
-    chain.stage_cursor(frame.slot, frame.pts_ms);
+    chain.stage_timeline(frame.slot, frame.pts_ms);
     if chain
       .render_slot(frame.slot, &pool_rtvs[frame.slot])
       .is_ok()
@@ -893,7 +1005,6 @@ fn repaint_slots(
 ///
 /// Media Foundation lands on the nearest preceding keyframe, so without this
 /// step every seek would be off by up to a whole GOP.
-#[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 fn do_seek(
   shared: &Arc<Shared>,
@@ -984,7 +1095,7 @@ fn do_seek(
     // candidate would decode a GOP of camera frames to throw them away, which
     // is exactly the cost the staged-not-rendered seek path exists to avoid.
     advance_webcam(chain, webcam, webcam_sync, None, slot_index, pts_ms);
-    chain.stage_cursor(slot_index, pts_ms);
+    chain.stage_timeline(slot_index, pts_ms);
 
     if chain.render_slot(slot_index, &pool_rtvs[slot_index]).is_ok() {
       // Anchor playback to where we actually landed, not where we aimed, so

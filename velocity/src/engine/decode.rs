@@ -35,6 +35,14 @@ pub struct Decoder {
   reader: IMFSourceReader,
   /// The texture we copy each decoded frame into and share with Chromium.
   pub target: SharedTexture,
+  /// The visible picture, from the display aperture -- not the frame size.
+  ///
+  /// H.264 codes in 16x16 macroblocks, so a 1080-tall recording is coded at
+  /// 1088 and carries an aperture saying only the top 1080 rows are real. Media
+  /// Foundation reports the padded size in `MF_MT_FRAME_SIZE` and the visible
+  /// one separately, and taking the first for the second puts eight rows of
+  /// decoder scratch in every export and skews anything positioned as a
+  /// fraction of the frame. `coded_size` is the other half of this pair.
   pub display_width: u32,
   pub display_height: u32,
   /// Frame rate as the container reports it, e.g. 24000/1001 for 23.976.
@@ -86,8 +94,10 @@ impl Decoder {
 
     let actual = unsafe { reader.GetCurrentMediaType(stream)? };
     let frame_size = unsafe { actual.GetUINT64(&MF_MT_FRAME_SIZE)? };
-    let display_width = (frame_size >> 32) as u32;
-    let display_height = (frame_size & 0xFFFF_FFFF) as u32;
+    let coded_width = (frame_size >> 32) as u32;
+    let coded_height = (frame_size & 0xFFFF_FFFF) as u32;
+    let (display_width, display_height) =
+      display_aperture(&actual).unwrap_or((coded_width, coded_height));
 
     // Packed as num<<32 | den. Needed for exact frame stepping and for handing
     // the encoder a matching rate on export.
@@ -106,11 +116,12 @@ impl Decoder {
       }
     };
 
+    // Allocated at the coded size, because that is what the decoder writes.
     // NV12 => keyed mutex, per Electron's import rules.
     let target = SharedTexture::new(
       gpu,
-      display_width,
-      display_height,
+      coded_width,
+      coded_height,
       DXGI_FORMAT_NV12,
       Sharing::KeyedMutex,
       None,
@@ -242,15 +253,64 @@ impl Decoder {
     Ok(())
   }
 
-  /// Coded size of the shared target, which is what Electron wants for codedSize.
+  /// Allocated frame size, macroblock padding included -- what Electron wants
+  /// for codedSize, and what anything addressing texture memory has to use.
+  ///
+  /// Read back off the texture rather than remembered from the media type: D3D
+  /// may round an allocation up, and a consumer needs the size of the memory it
+  /// is importing, not the size we asked for.
   pub fn coded_size(&self) -> (u32, u32) {
     let mut desc = D3D11_TEXTURE2D_DESC::default();
     unsafe { self.target.texture.GetDesc(&mut desc) };
     (desc.Width, desc.Height)
   }
+
+  /// The visible picture inside the coded frame.
+  pub fn display_size(&self) -> (u32, u32) {
+    (self.display_width, self.display_height)
+  }
 }
 
 const GUID_NULL: windows::core::GUID = windows::core::GUID::zeroed();
+
+/// The visible sub-rectangle of a coded frame, if the media type declares one.
+///
+/// Three attributes can carry it and they are not equivalent: the *minimum*
+/// display aperture is the one that means "these pixels are real, the rest is
+/// padding", which is what we want. Pan-scan and the geometric aperture are
+/// editorial crops and would throw away picture the user recorded.
+///
+/// Returns `None` when there is no aperture, when it is offset from the origin
+/// (nothing produces that here, and honouring it would need a source rect
+/// everywhere), or when it is larger than the coded frame.
+fn display_aperture(media_type: &IMFMediaType) -> Option<(u32, u32)> {
+  let mut area = MFVideoArea::default();
+  let size = std::mem::size_of::<MFVideoArea>();
+
+  unsafe {
+    media_type
+      .GetBlob(
+        &MF_MT_MINIMUM_DISPLAY_APERTURE,
+        std::slice::from_raw_parts_mut(&mut area as *mut _ as *mut u8, size),
+        None,
+      )
+      .ok()?;
+  }
+
+  // The offsets are 16.16 fixed point. Anything but zero means the picture does
+  // not start at the top-left corner, which the rest of the engine assumes.
+  if area.OffsetX.value != 0 || area.OffsetY.value != 0 {
+    return None;
+  }
+
+  let width = area.Area.cx;
+  let height = area.Area.cy;
+  if width <= 0 || height <= 0 {
+    return None;
+  }
+
+  Some((width as u32, height as u32))
+}
 
 /// What Media Foundation thinks is in a file, before we ask for anything.
 ///

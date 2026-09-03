@@ -173,10 +173,39 @@ export declare class VideoPlayer {
   /** Cursor height in destination pixels, and its opacity. Size 0 hides it. */
   setCursorStyle(size: number, opacity: number): void
   /**
-   * Adjust the render layer. Applies to preview immediately, and the exporter
+   * Set the zoom/pan timeline.
+   *
+   * The video and the cursor move with it; the background and the webcam do
+   * not, because a zoom is about the recording and the camera box is furniture
+   * on top of it.
+   */
+  setZoomRegions(regions: Array<ZoomRegion>): void
+  /**
+   * Zoom regions the decode thread has loaded. Applied asynchronously, so this
+   * reads 0 for a moment after `setZoomRegions`.
+   */
+  zoomRegionCount(): number
+  /**
+   * Grade the video layer. Applies to preview immediately, and the exporter
    * runs the same chain, so it applies to output too.
+   *
+   * The video only. The camera is a different sensor with a different
+   * exposure, so it has its own — see `setWebcamEffects`.
    */
   setEffects(brightness: number, contrast: number, saturation: number): void
+  /** Grade the webcam layer. */
+  setWebcamEffects(brightness: number, contrast: number, saturation: number): void
+  /**
+   * Place the recording on the canvas, with an optional corner radius and
+   * border.
+   *
+   * Coordinates are canvas pixels. A rect covering the whole canvas is the
+   * default and what a project with no background wants; anything smaller
+   * leaves room for the background to show.
+   */
+  setLayout(placement: VideoPlacement): void
+  /** Set what fills the canvas behind the video. */
+  setBackground(background: BackgroundSpec): void
   stats(): PlayerStats
   /** Stop the decode thread and release the texture pool. */
   close(): void
@@ -184,6 +213,21 @@ export declare class VideoPlayer {
 
 /** Diagnostic: which GPUs exist, and which one are we actually running on? */
 export declare function adapterInfo(): Array<string>
+
+/**
+ * What fills the canvas behind the video.
+ *
+ * Gradients and patterns arrive as `image`, already rasterised. The editor's
+ * backgrounds are all static for a whole export, so letting the caller draw
+ * one to a canvas and upload the pixels beats reimplementing four generators
+ * in HLSL that would then have to match the Canvas2D versions exactly.
+ */
+export interface BackgroundSpec {
+  /** Flat fill, and what shows through a transparent image. Defaults to black. */
+  colour?: Colour
+  /** Tightly packed RGBA8, stretched over the canvas. */
+  image?: CursorBitmap
+}
 
 /**
  * Diagnostic: did Windows let us capture without the yellow border?
@@ -197,6 +241,22 @@ export declare function borderlessCaptureAllowed(): boolean
 export declare function captureCursorSamplesJson(durationMs: number, intervalMs?: number | undefined | null): string
 
 export declare function captureCursorSnapshotJson(): string
+
+/**
+ * A colour as four 0..1 channels.
+ *
+ * Not a CSS string: the shader wants floats, and parsing `#rrggbb` in Rust to
+ * hand back the numbers the caller already had is a conversion nobody needs.
+ * The JS side has the colour as a string and one place that turns it into
+ * this.
+ */
+export interface Colour {
+  r: number
+  g: number
+  b: number
+  /** Defaults to 1. */
+  a?: number
+}
 
 /** A cursor bitmap: tightly packed RGBA8, plus where its point actually is. */
 export interface CursorBitmap {
@@ -224,6 +284,14 @@ export interface CursorPoint {
 /** Sanity check that the addon loaded at all. */
 export declare function engineVersion(): string
 
+/**
+ * What to export, and everything the preview is showing on top of it.
+ *
+ * The overlay fields are not optional extras: an export that leaves them out
+ * is not the video the user approved, because the preview draws them. They are
+ * separate from the player's setters because the exporter builds its own chain
+ * on its own thread -- there is nothing to inherit from.
+ */
 export interface ExportOptions {
   output: string
   /** Target bitrate in bits per second. */
@@ -231,10 +299,44 @@ export interface ExportOptions {
   /** Milliseconds. Defaults to the whole file. */
   start?: number
   end?: number
-  /** Render settings. Pass whatever the preview is currently showing. */
+  /** The video layer's grade. Pass whatever the preview is currently showing. */
   brightness?: number
   contrast?: number
   saturation?: number
+  /** The webcam layer's own grade. */
+  webcamBrightness?: number
+  webcamContrast?: number
+  webcamSaturation?: number
+  /** The canvas to compose onto. Defaults to the recording's visible size. */
+  canvasWidth?: number
+  canvasHeight?: number
+  /** Where the recording sits on that canvas. Defaults to filling it. */
+  layout?: VideoPlacement
+  /** What is behind the video. Only visible if `layout` insets it. */
+  background?: BackgroundSpec
+  /**
+   * The camera sidecar. Omit it and the export has no webcam overlay, however
+   * the preview looks.
+   */
+  webcamPath?: string
+  /**
+   * Where the camera goes, in the screen recording's own pixels -- the same
+   * values passed to `setWebcamLayout`.
+   */
+  webcam?: WebcamOverlay
+  /** The pointer bitmap, as passed to `setCursorImage`. */
+  cursor?: CursorBitmap
+  /** The recorded pointer path, as passed to `setCursorTrack`. */
+  cursorTrack?: Array<CursorPoint>
+  /**
+   * The zoom/pan timeline. Omit it and the export is unzoomed, however the
+   * preview looks.
+   */
+  zoomRegions?: Array<ZoomRegion>
+  /** Cursor height in destination pixels. Defaults to 22, matching the editor. */
+  cursorSize?: number
+  /** Clamped to 0..1. Defaults to 1. */
+  cursorOpacity?: number
 }
 
 export interface ExportProgress {
@@ -326,6 +428,15 @@ export interface PlayerSources {
    * reported through `hasWebcam()` rather than failing the whole player.
    */
   webcamPath?: string
+  /**
+   * The canvas to compose onto. Defaults to the recording's own visible size.
+   *
+   * Fixed for the life of the player: these are the dimensions of the textures
+   * handed to Chromium, and changing them means re-importing every handle.
+   * Inset the video with `setLayout` instead — that moves freely.
+   */
+  canvasWidth?: number
+  canvasHeight?: number
 }
 
 export interface PlayerStats {
@@ -475,6 +586,25 @@ export interface VideoInfo {
   fps: number
 }
 
+/**
+ * Where the recording sits on the canvas.
+ *
+ * Canvas pixels, resolved by the caller — the padding fraction, the scale and
+ * the centring stay on the JS side next to the webcam's anchor grid, so there
+ * is one layout formula in the app rather than two that have to agree.
+ */
+export interface VideoPlacement {
+  x: number
+  y: number
+  width: number
+  height: number
+  /** Corner radius in canvas pixels. Defaults to 0. */
+  cornerRadius?: number
+  /** Border thickness, drawn outside the rect. Defaults to 0. */
+  borderWidth?: number
+  borderColour?: Colour
+}
+
 export interface WebcamDeviceInfo {
   id: string
   label: string
@@ -492,8 +622,20 @@ export interface WebcamOverlay {
   shape?: string
   /** Corner radius in pixels. Ignored for an ellipse. */
   cornerRadius?: number
-  /** Defaults to 1. */
+  /** Clamped to 0..1. Defaults to 1. */
   opacity?: number
+  /**
+   * How a camera whose aspect ratio does not match the box is reconciled:
+   * `cover` (default) crops it, `contain` letterboxes it inside the box,
+   * `stretch` distorts it to fill exactly.
+   *
+   * Only pass `stretch` if the box was computed from the camera's own aspect
+   * ratio, because nothing here will notice when it was not.
+   */
+  fit?: string
+  /** Border thickness in canvas pixels, drawn outside the box. Defaults to 0. */
+  borderWidth?: number
+  borderColour?: Colour
 }
 
 export interface WindowInfo {
@@ -504,4 +646,30 @@ export interface WindowInfo {
   y: number
   width: number
   height: number
+}
+
+/** A focal point a zoom pans to while it is held. */
+export interface ZoomFocalKeyframe {
+  timestampMs: number
+  /** 0..1 across the recording, not the canvas. */
+  x: number
+  y: number
+}
+
+/** One span of the timeline that is zoomed in. */
+export interface ZoomRegion {
+  startMs: number
+  endMs: number
+  /** 1 is no zoom. */
+  zoomLevel: number
+  /**
+   * Where it zooms to, 0..1 across the recording. Mapped through the video's
+   * placement, so a zoom stays on its subject when the video is inset.
+   */
+  focalX: number
+  focalY: number
+  /** How long the ease in and the ease out each take. 0 snaps. */
+  easeDurationMs?: number
+  /** Extra focal points to pan between while the zoom is held. */
+  focalKeyframes?: Array<ZoomFocalKeyframe>
 }

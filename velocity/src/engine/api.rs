@@ -4,8 +4,8 @@
 //! exists, which keeps the Windows code testable from `cargo test` and keeps
 //! the class wrappers thin enough to read in one pass.
 
-use super::composite::{CursorSample, OverlayShape, Rect, WebcamLayout};
-use super::{d3d, decode, encode, exporter, pattern, player, render};
+use super::composite::{CursorSample, FitMode, OverlayShape, Rect, WebcamLayout};
+use super::{d3d, decode, encode, exporter, pattern, player, render, zoom};
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
@@ -571,6 +571,84 @@ pub struct PresentedFrame {
   pub pts: f64,
 }
 
+/// A colour as four 0..1 channels.
+///
+/// Not a CSS string: the shader wants floats, and parsing `#rrggbb` in Rust to
+/// hand back the numbers the caller already had is a conversion nobody needs.
+/// The JS side has the colour as a string and one place that turns it into
+/// this.
+#[napi(object)]
+pub struct Colour {
+  pub r: f64,
+  pub g: f64,
+  pub b: f64,
+  /// Defaults to 1.
+  pub a: Option<f64>,
+}
+
+impl Colour {
+  fn to_array(&self) -> [f32; 4] {
+    [
+      (self.r as f32).clamp(0.0, 1.0),
+      (self.g as f32).clamp(0.0, 1.0),
+      (self.b as f32).clamp(0.0, 1.0),
+      (self.a.unwrap_or(1.0) as f32).clamp(0.0, 1.0),
+    ]
+  }
+}
+
+fn colour_or(colour: Option<&Colour>, fallback: [f32; 4]) -> [f32; 4] {
+  colour.map(Colour::to_array).unwrap_or(fallback)
+}
+
+/// Where the recording sits on the canvas.
+///
+/// Canvas pixels, resolved by the caller — the padding fraction, the scale and
+/// the centring stay on the JS side next to the webcam's anchor grid, so there
+/// is one layout formula in the app rather than two that have to agree.
+#[napi(object)]
+pub struct VideoPlacement {
+  pub x: f64,
+  pub y: f64,
+  pub width: f64,
+  pub height: f64,
+  /// Corner radius in canvas pixels. Defaults to 0.
+  pub corner_radius: Option<f64>,
+  /// Border thickness, drawn outside the rect. Defaults to 0.
+  pub border_width: Option<f64>,
+  pub border_colour: Option<Colour>,
+}
+
+impl From<VideoPlacement> for render::VideoLayout {
+  fn from(placement: VideoPlacement) -> Self {
+    render::VideoLayout {
+      rect: Rect {
+        x: placement.x as f32,
+        y: placement.y as f32,
+        width: placement.width as f32,
+        height: placement.height as f32,
+      },
+      corner_radius: placement.corner_radius.unwrap_or(0.0) as f32,
+      border_width: placement.border_width.unwrap_or(0.0) as f32,
+      border_colour: colour_or(placement.border_colour.as_ref(), [0.0, 0.0, 0.0, 1.0]),
+    }
+  }
+}
+
+/// What fills the canvas behind the video.
+///
+/// Gradients and patterns arrive as `image`, already rasterised. The editor's
+/// backgrounds are all static for a whole export, so letting the caller draw
+/// one to a canvas and upload the pixels beats reimplementing four generators
+/// in HLSL that would then have to match the Canvas2D versions exactly.
+#[napi(object)]
+pub struct BackgroundSpec {
+  /// Flat fill, and what shows through a transparent image. Defaults to black.
+  pub colour: Option<Colour>,
+  /// Tightly packed RGBA8, stretched over the canvas.
+  pub image: Option<CursorBitmap>,
+}
+
 /// Where the webcam overlay sits, in the screen recording's own pixels.
 #[napi(object)]
 pub struct WebcamOverlay {
@@ -583,8 +661,49 @@ pub struct WebcamOverlay {
   pub shape: Option<String>,
   /// Corner radius in pixels. Ignored for an ellipse.
   pub corner_radius: Option<f64>,
-  /// Defaults to 1.
+  /// Clamped to 0..1. Defaults to 1.
   pub opacity: Option<f64>,
+  /// How a camera whose aspect ratio does not match the box is reconciled:
+  /// `cover` (default) crops it, `contain` letterboxes it inside the box,
+  /// `stretch` distorts it to fill exactly.
+  ///
+  /// Only pass `stretch` if the box was computed from the camera's own aspect
+  /// ratio, because nothing here will notice when it was not.
+  pub fit: Option<String>,
+  /// Border thickness in canvas pixels, drawn outside the box. Defaults to 0.
+  pub border_width: Option<f64>,
+  pub border_colour: Option<Colour>,
+}
+
+impl From<WebcamOverlay> for WebcamLayout {
+  fn from(layout: WebcamOverlay) -> Self {
+    WebcamLayout {
+      rect: Rect {
+        x: layout.x as f32,
+        y: layout.y as f32,
+        width: layout.width as f32,
+        height: layout.height as f32,
+      },
+      shape: if layout.shape.as_deref() == Some("ellipse") {
+        OverlayShape::Ellipse
+      } else {
+        OverlayShape::Rect
+      },
+      corner_radius: layout.corner_radius.unwrap_or(0.0) as f32,
+      opacity: layout.opacity.unwrap_or(1.0) as f32,
+      fit: layout
+        .fit
+        .as_deref()
+        .map(FitMode::parse)
+        .unwrap_or_default(),
+      border_width: layout.border_width.unwrap_or(0.0) as f32,
+      border_colour: colour_or(layout.border_colour.as_ref(), [0.0, 0.0, 0.0, 1.0]),
+    }
+    // Ranges enforced on the way in rather than trusted: an opacity above 1
+    // multiplies into the blend's source alpha and burns the overlay's edge
+    // instead of doing nothing.
+    .sanitized()
+  }
 }
 
 /// A cursor bitmap: tightly packed RGBA8, plus where its point actually is.
@@ -599,6 +718,31 @@ pub struct CursorBitmap {
   pub hotspot_y: Option<f64>,
 }
 
+impl CursorBitmap {
+  /// Validate the buffer and convert. The length check is the whole point: a
+  /// short buffer would be read past the end on upload.
+  fn into_image(self) -> Result<player::CursorImage> {
+    let expected = self.width as usize * self.height as usize * 4;
+    if self.pixels.len() < expected {
+      return Err(Error::from_reason(format!(
+        "cursor bitmap is {} bytes, expected {} for {}x{} RGBA",
+        self.pixels.len(),
+        expected,
+        self.width,
+        self.height
+      )));
+    }
+
+    Ok(player::CursorImage {
+      width: self.width,
+      height: self.height,
+      pixels: self.pixels.to_vec(),
+      hotspot_x: self.hotspot_x.unwrap_or(0.0) as f32,
+      hotspot_y: self.hotspot_y.unwrap_or(0.0) as f32,
+    })
+  }
+}
+
 /// One recorded pointer position, normalised against the source video.
 #[napi(object)]
 pub struct CursorPoint {
@@ -610,6 +754,66 @@ pub struct CursorPoint {
   pub visible: Option<bool>,
 }
 
+impl From<CursorPoint> for CursorSample {
+  fn from(point: CursorPoint) -> Self {
+    CursorSample {
+      timestamp_ms: point.timestamp_ms,
+      x: point.x as f32,
+      y: point.y as f32,
+      visible: point.visible.unwrap_or(true),
+    }
+  }
+}
+
+/// A focal point a zoom pans to while it is held.
+#[napi(object)]
+pub struct ZoomFocalKeyframe {
+  pub timestamp_ms: f64,
+  /// 0..1 across the recording, not the canvas.
+  pub x: f64,
+  pub y: f64,
+}
+
+/// One span of the timeline that is zoomed in.
+#[napi(object)]
+pub struct ZoomRegion {
+  pub start_ms: f64,
+  pub end_ms: f64,
+  /// 1 is no zoom.
+  pub zoom_level: f64,
+  /// Where it zooms to, 0..1 across the recording. Mapped through the video's
+  /// placement, so a zoom stays on its subject when the video is inset.
+  pub focal_x: f64,
+  pub focal_y: f64,
+  /// How long the ease in and the ease out each take. 0 snaps.
+  pub ease_duration_ms: Option<f64>,
+  /// Extra focal points to pan between while the zoom is held.
+  pub focal_keyframes: Option<Vec<ZoomFocalKeyframe>>,
+}
+
+impl From<ZoomRegion> for zoom::ZoomRegion {
+  fn from(region: ZoomRegion) -> Self {
+    zoom::ZoomRegion {
+      start_ms: region.start_ms,
+      end_ms: region.end_ms,
+      level: region.zoom_level as f32,
+      focal_x: region.focal_x as f32,
+      focal_y: region.focal_y as f32,
+      ease_duration_ms: region.ease_duration_ms.unwrap_or(0.0),
+      focal_keyframes: region
+        .focal_keyframes
+        .unwrap_or_default()
+        .into_iter()
+        .map(|point| zoom::FocalKeyframe {
+          timestamp_ms: point.timestamp_ms,
+          x: point.x as f32,
+          y: point.y as f32,
+        })
+        .collect(),
+    }
+  }
+}
+
 /// What to open, when a recording is more than one file.
 #[napi(object)]
 pub struct PlayerSources {
@@ -617,6 +821,13 @@ pub struct PlayerSources {
   /// The camera sidecar, if the recording has one. A file that fails to open is
   /// reported through `hasWebcam()` rather than failing the whole player.
   pub webcam_path: Option<String>,
+  /// The canvas to compose onto. Defaults to the recording's own visible size.
+  ///
+  /// Fixed for the life of the player: these are the dimensions of the textures
+  /// handed to Chromium, and changing them means re-importing every handle.
+  /// Inset the video with `setLayout` instead — that moves freely.
+  pub canvas_width: Option<u32>,
+  pub canvas_height: Option<u32>,
 }
 
 #[cfg(windows)]
@@ -641,7 +852,12 @@ impl VideoPlayer {
   /// has. Two players would each own a clock and the two would drift.
   #[napi(factory)]
   pub fn open(sources: PlayerSources) -> Result<Self> {
-    let inner = player::Player::open_with_webcam(&sources.path, sources.webcam_path.as_deref())
+    let canvas = match (sources.canvas_width, sources.canvas_height) {
+      (Some(width), Some(height)) => Some((width, height)),
+      _ => None,
+    };
+    let inner =
+      player::Player::open_with_webcam(&sources.path, sources.webcam_path.as_deref(), canvas)
       .map_err(win_err)?;
     Ok(Self { inner })
   }
@@ -742,21 +958,7 @@ impl VideoPlayer {
   /// it applies to output too.
   #[napi]
   pub fn set_webcam_layout(&self, layout: WebcamOverlay) {
-    self.inner.set_webcam_layout(WebcamLayout {
-      rect: Rect {
-        x: layout.x as f32,
-        y: layout.y as f32,
-        width: layout.width as f32,
-        height: layout.height as f32,
-      },
-      shape: if layout.shape.as_deref() == Some("ellipse") {
-        OverlayShape::Ellipse
-      } else {
-        OverlayShape::Rect
-      },
-      corner_radius: layout.corner_radius.unwrap_or(0.0) as f32,
-      opacity: layout.opacity.unwrap_or(1.0) as f32,
-    });
+    self.inner.set_webcam_layout(layout.into());
   }
 
   /// Whether this player has a camera track at all.
@@ -794,33 +996,9 @@ impl VideoPlayer {
   /// of the place that was clicked. Pass `None` to remove the cursor.
   #[napi]
   pub fn set_cursor_image(&self, image: Option<CursorBitmap>) -> Result<()> {
-    let image = match image {
-      None => {
-        self.inner.set_cursor_image(None);
-        return Ok(());
-      }
-      Some(image) => image,
-    };
-
-    let expected = image.width as usize * image.height as usize * 4;
-    if image.pixels.len() < expected {
-      return Err(Error::from_reason(format!(
-        "cursor bitmap is {} bytes, expected {} for {}x{} RGBA",
-        image.pixels.len(),
-        expected,
-        image.width,
-        image.height
-      )));
-    }
-
-    self.inner.set_cursor_image(Some(player::CursorImage {
-      width: image.width,
-      height: image.height,
-      pixels: image.pixels.to_vec(),
-      hotspot_x: image.hotspot_x.unwrap_or(0.0) as f32,
-      hotspot_y: image.hotspot_y.unwrap_or(0.0) as f32,
-    }));
-
+    self
+      .inner
+      .set_cursor_image(image.map(CursorBitmap::into_image).transpose()?);
     Ok(())
   }
 
@@ -832,17 +1010,9 @@ impl VideoPlayer {
   /// would invent motion that never happened.
   #[napi]
   pub fn set_cursor_track(&self, samples: Vec<CursorPoint>) {
-    self.inner.set_cursor_track(
-      samples
-        .into_iter()
-        .map(|point| CursorSample {
-          timestamp_ms: point.timestamp_ms,
-          x: point.x as f32,
-          y: point.y as f32,
-          visible: point.visible.unwrap_or(true),
-        })
-        .collect(),
-    );
+    self
+      .inner
+      .set_cursor_track(samples.into_iter().map(CursorSample::from).collect());
   }
 
   /// Cursor height in destination pixels, and its opacity. Size 0 hides it.
@@ -851,8 +1021,30 @@ impl VideoPlayer {
     self.inner.set_cursor_style(size as f32, opacity as f32);
   }
 
-  /// Adjust the render layer. Applies to preview immediately, and the exporter
+  /// Set the zoom/pan timeline.
+  ///
+  /// The video and the cursor move with it; the background and the webcam do
+  /// not, because a zoom is about the recording and the camera box is furniture
+  /// on top of it.
+  #[napi]
+  pub fn set_zoom_regions(&self, regions: Vec<ZoomRegion>) {
+    self
+      .inner
+      .set_zoom_regions(regions.into_iter().map(zoom::ZoomRegion::from).collect());
+  }
+
+  /// Zoom regions the decode thread has loaded. Applied asynchronously, so this
+  /// reads 0 for a moment after `setZoomRegions`.
+  #[napi]
+  pub fn zoom_region_count(&self) -> f64 {
+    self.inner.zoom_region_count() as f64
+  }
+
+  /// Grade the video layer. Applies to preview immediately, and the exporter
   /// runs the same chain, so it applies to output too.
+  ///
+  /// The video only. The camera is a different sensor with a different
+  /// exposure, so it has its own — see `setWebcamEffects`.
   #[napi]
   pub fn set_effects(&self, brightness: f64, contrast: f64, saturation: f64) {
     self.inner.set_effects(render::EffectParams {
@@ -860,6 +1052,34 @@ impl VideoPlayer {
       contrast: contrast as f32,
       saturation: saturation as f32,
     });
+  }
+
+  /// Grade the webcam layer.
+  #[napi]
+  pub fn set_webcam_effects(&self, brightness: f64, contrast: f64, saturation: f64) {
+    self.inner.set_webcam_effects(render::EffectParams {
+      brightness: brightness as f32,
+      contrast: contrast as f32,
+      saturation: saturation as f32,
+    });
+  }
+
+  /// Place the recording on the canvas, with an optional corner radius and
+  /// border.
+  ///
+  /// Coordinates are canvas pixels. A rect covering the whole canvas is the
+  /// default and what a project with no background wants; anything smaller
+  /// leaves room for the background to show.
+  #[napi]
+  pub fn set_layout(&self, placement: VideoPlacement) {
+    self.inner.set_layout(placement.into());
+  }
+
+  /// Set what fills the canvas behind the video.
+  #[napi]
+  pub fn set_background(&self, background: BackgroundSpec) -> Result<()> {
+    self.inner.set_background(build_background(background)?);
+    Ok(())
   }
 
   #[napi]
@@ -893,6 +1113,12 @@ impl VideoPlayer {
 // Exporter: decode -> render -> encode -> MP4, on its own thread.
 // ---------------------------------------------------------------------------
 
+/// What to export, and everything the preview is showing on top of it.
+///
+/// The overlay fields are not optional extras: an export that leaves them out
+/// is not the video the user approved, because the preview draws them. They are
+/// separate from the player's setters because the exporter builds its own chain
+/// on its own thread -- there is nothing to inherit from.
 #[napi(object)]
 pub struct ExportOptions {
   pub output: String,
@@ -901,10 +1127,38 @@ pub struct ExportOptions {
   /// Milliseconds. Defaults to the whole file.
   pub start: Option<f64>,
   pub end: Option<f64>,
-  /// Render settings. Pass whatever the preview is currently showing.
+  /// The video layer's grade. Pass whatever the preview is currently showing.
   pub brightness: Option<f64>,
   pub contrast: Option<f64>,
   pub saturation: Option<f64>,
+  /// The webcam layer's own grade.
+  pub webcam_brightness: Option<f64>,
+  pub webcam_contrast: Option<f64>,
+  pub webcam_saturation: Option<f64>,
+  /// The canvas to compose onto. Defaults to the recording's visible size.
+  pub canvas_width: Option<u32>,
+  pub canvas_height: Option<u32>,
+  /// Where the recording sits on that canvas. Defaults to filling it.
+  pub layout: Option<VideoPlacement>,
+  /// What is behind the video. Only visible if `layout` insets it.
+  pub background: Option<BackgroundSpec>,
+  /// The camera sidecar. Omit it and the export has no webcam overlay, however
+  /// the preview looks.
+  pub webcam_path: Option<String>,
+  /// Where the camera goes, in the screen recording's own pixels -- the same
+  /// values passed to `setWebcamLayout`.
+  pub webcam: Option<WebcamOverlay>,
+  /// The pointer bitmap, as passed to `setCursorImage`.
+  pub cursor: Option<CursorBitmap>,
+  /// The recorded pointer path, as passed to `setCursorTrack`.
+  pub cursor_track: Option<Vec<CursorPoint>>,
+  /// The zoom/pan timeline. Omit it and the export is unzoomed, however the
+  /// preview looks.
+  pub zoom_regions: Option<Vec<ZoomRegion>>,
+  /// Cursor height in destination pixels. Defaults to 22, matching the editor.
+  pub cursor_size: Option<f64>,
+  /// Clamped to 0..1. Defaults to 1.
+  pub cursor_opacity: Option<f64>,
 }
 
 #[napi(object)]
@@ -926,6 +1180,39 @@ pub struct ExportProgress {
   pub elapsed_ms: f64,
 }
 
+/// Validate the JS-facing background and hand back the chain's request form.
+///
+/// No GPU work: the texture is uploaded by whichever thread renders. Shared by
+/// the player and the exporter so an export cannot end up with a different
+/// background from the preview it was approved in.
+fn build_background(spec: BackgroundSpec) -> Result<render::BackgroundRequest> {
+  let clear = colour_or(spec.colour.as_ref(), [0.0, 0.0, 0.0, 1.0]);
+
+  let Some(image) = spec.image else {
+    return Ok(render::BackgroundRequest { clear, image: None });
+  };
+
+  let expected = image.width as usize * image.height as usize * 4;
+  if image.pixels.len() < expected {
+    return Err(Error::from_reason(format!(
+      "background image is {} bytes, expected {} for {}x{} RGBA",
+      image.pixels.len(),
+      expected,
+      image.width,
+      image.height
+    )));
+  }
+
+  Ok(render::BackgroundRequest {
+    clear,
+    image: Some(render::RgbaImage {
+      width: image.width,
+      height: image.height,
+      pixels: image.pixels.to_vec(),
+    }),
+  })
+}
+
 /// A running export. Poll `progress`; call `cancel` to stop early.
 ///
 /// Cancelling still finalises the MP4, so the partial file is playable.
@@ -939,8 +1226,13 @@ pub struct VideoExporter {
 #[napi]
 impl VideoExporter {
   #[napi(constructor)]
-  pub fn new(input: String, options: ExportOptions) -> Self {
-    Self {
+  pub fn new(input: String, options: ExportOptions) -> Result<Self> {
+    // Fallible now, because a malformed cursor bitmap is worth refusing up
+    // front rather than discovering as a silent missing layer minutes into an
+    // export.
+    let cursor_image = options.cursor.map(CursorBitmap::into_image).transpose()?;
+
+    Ok(Self {
       inner: exporter::Exporter::start(exporter::Options {
         input,
         output: options.output,
@@ -952,8 +1244,36 @@ impl VideoExporter {
           contrast: options.contrast.unwrap_or(1.0) as f32,
           saturation: options.saturation.unwrap_or(1.0) as f32,
         },
+        webcam_effects: render::EffectParams {
+          brightness: options.webcam_brightness.unwrap_or(0.0) as f32,
+          contrast: options.webcam_contrast.unwrap_or(1.0) as f32,
+          saturation: options.webcam_saturation.unwrap_or(1.0) as f32,
+        },
+        canvas: match (options.canvas_width, options.canvas_height) {
+          (Some(width), Some(height)) => Some((width, height)),
+          _ => None,
+        },
+        layout: options.layout.map(render::VideoLayout::from),
+        background: options.background.map(build_background).transpose()?,
+        webcam_path: options.webcam_path,
+        webcam_layout: options.webcam.map(WebcamLayout::from),
+        cursor_image,
+        cursor_track: options
+          .cursor_track
+          .unwrap_or_default()
+          .into_iter()
+          .map(CursorSample::from)
+          .collect(),
+        zoom_regions: options
+          .zoom_regions
+          .unwrap_or_default()
+          .into_iter()
+          .map(zoom::ZoomRegion::from)
+          .collect(),
+        cursor_size: options.cursor_size.unwrap_or(22.0) as f32,
+        cursor_opacity: options.cursor_opacity.unwrap_or(1.0).clamp(0.0, 1.0) as f32,
       }),
-    }
+    })
   }
 
   #[napi]
