@@ -1,10 +1,12 @@
-import { Crop, Maximize2, Minimize2, Pause, Play } from 'lucide-react';
+import { Cpu, Crop, Maximize2, Minimize2, Pause, Play, Zap } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { usePlaybackStore } from '@/store/playback-store';
 import { useProjectStore } from '@/store/project-store';
-import { useTimelineStore } from '@/store/timeline-store';
+import { focusedZoomId, isEditingFocalPoint, useTimelineStore } from '@/store/timeline-store';
 
+import { useGpuPreview } from './gpu-preview/session';
+import { unsupportedFeatures } from './gpu-preview/unsupported';
 import { resolveOverlayVideoLayout, resolvePreviewDisplaySize } from './preview-runtime/display';
 import {
   syncPausedPreviewPosition,
@@ -29,16 +31,17 @@ import {
 import { useEnginePreviewConfigMapper } from './preview-config-mapper.ts';
 import type { CompositionConfig } from './types';
 
+/**
+ * The canvas the main process pushes engine textures into.
+ *
+ * A selector rather than a ref because `importSharedTexture` is applied in the
+ * main process, which can only address the element by name.
+ */
+const GPU_CANVAS_SELECTOR = '#gpu-preview-canvas';
+
 export function EnginePreview() {
   const { project, mouseEvents, updateWebcamOverlay } = useProjectStore();
-  const {
-    zoomRegions,
-    zoomRegionsBySource,
-    cuts,
-    isEditingFocalPoint,
-    selectedZoomId,
-    updateZoom,
-  } = useTimelineStore();
+  const { zoomRegions, zoomRegionsBySource, cuts, focus, updateZoom } = useTimelineStore();
   const { isPlaying, currentTime, play, pause, setDuration } = usePlaybackStore();
   const screenZoomRegions = zoomRegionsBySource.screen;
   const webcamZoomRegions = zoomRegionsBySource.webcam;
@@ -46,6 +49,7 @@ export function EnginePreview() {
   const previewViewportRef = useRef<HTMLDivElement>(null);
   const fullscreenContainerRef = useRef<HTMLDivElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
+  const gpuCanvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const webcamVideoRef = useRef<HTMLVideoElement>(null);
   const previewContextRef = useRef<CanvasFrameContext | null>(null);
@@ -56,6 +60,14 @@ export function EnginePreview() {
   const engineRef = useRef<CompositionEngine>(new CompositionEngine(defaultConfig));
   const compositionConfigRef = useRef<CompositionConfig>(defaultConfig);
   const [isExportPreviewFullscreen, setIsExportPreviewFullscreen] = useState(false);
+  /**
+   * Which compositor is driving the preview.
+   *
+   * Off by default, and deliberately a toggle rather than a swap: the engine is
+   * not at parity yet, so the only honest way to use it is beside the thing it
+   * is replacing. `unsupportedFeatures` names what this project would lose.
+   */
+  const [useGpuEngine, setUseGpuEngine] = useState(false);
   const [isCropDialogOpen, setIsCropDialogOpen] = useState(false);
   const {
     canvasSize,
@@ -95,6 +107,8 @@ export function EnginePreview() {
     };
   }, [compositionConfig, isExportPreviewFullscreen, screenCuts, webcamCuts]);
 
+  const selectedZoomId = focusedZoomId(focus);
+  const editingFocalPoint = isEditingFocalPoint(focus);
   const selectedZoom = useMemo(
     () => zoomRegions.find((region) => region.id === selectedZoomId) ?? null,
     [zoomRegions, selectedZoomId],
@@ -104,6 +118,36 @@ export function EnginePreview() {
     () => resolvePreviewDisplaySize(availableSize, canvasSize),
     [availableSize.height, availableSize.width, canvasSize.height, canvasSize.width],
   );
+
+  // The engine's playhead is in composition time, which is what the editor's
+  // store holds while previewing an export and what the timeline shows.
+  const gpuSeekMs = useGpuEngine && !isPlaying ? currentTime : null;
+
+  const gpu = useGpuPreview({
+    enabled: useGpuEngine,
+    canvasRef: gpuCanvasRef,
+    canvasSelector: GPU_CANVAS_SELECTOR,
+    project,
+    config: compositionConfig,
+    canvasSize,
+    isPlaying,
+    seekToMs: gpuSeekMs,
+    webcamPath: project?.webcamOverlay?.sourcePath ?? undefined,
+  });
+
+  const gpuGaps = useMemo(
+    () => (useGpuEngine ? unsupportedFeatures(compositionConfig) : []),
+    [useGpuEngine, compositionConfig],
+  );
+
+  // While the engine drives the preview it owns the clock, so the playhead has
+  // to follow it rather than the `<video>` element.
+  useEffect(() => {
+    if (!useGpuEngine || !isPlaying) {
+      return;
+    }
+    usePlaybackStore.setState({ currentTime: gpu.currentTimeMs });
+  }, [useGpuEngine, isPlaying, gpu.currentTimeMs]);
 
   const overlayVideoLayout = useMemo(
     () => resolveOverlayVideoLayout(layout, previewDisplaySize.scale),
@@ -308,7 +352,15 @@ export function EnginePreview() {
             </div>
           )}
 
-          <canvas ref={previewCanvasRef} className="absolute inset-0 w-full h-full" />
+          <canvas
+            ref={previewCanvasRef}
+            className={`absolute inset-0 w-full h-full ${useGpuEngine ? 'hidden' : ''}`}
+          />
+          <canvas
+            id="gpu-preview-canvas"
+            ref={gpuCanvasRef}
+            className={`absolute inset-0 w-full h-full ${useGpuEngine ? '' : 'hidden'}`}
+          />
 
           <video ref={videoRef} src={videoSrc} className="hidden" playsInline preload="auto" />
           <video
@@ -320,7 +372,7 @@ export function EnginePreview() {
           />
 
           {!isExportPreviewFullscreen &&
-            !isEditingFocalPoint &&
+            !editingFocalPoint &&
             webcamLayout &&
             project.webcamOverlay?.enabled && (
               <WebcamResizeOverlay
@@ -332,7 +384,7 @@ export function EnginePreview() {
               />
             )}
 
-          {isEditingFocalPoint && selectedZoomId && selectedZoom && project.videoDimensions && (
+          {editingFocalPoint && selectedZoom && project.videoDimensions && (
             <FocalPointOverlay
               videoWidth={project.videoDimensions.width}
               videoHeight={project.videoDimensions.height}
@@ -361,6 +413,22 @@ export function EnginePreview() {
       </button>
 
       <div className="bottom-toolbar absolute bottom-6 right-6 flex items-center text-white bg-black/60 backdrop-blur overflow-hidden">
+        <button
+          onClick={() => setUseGpuEngine((on) => !on)}
+          className={`px-3 py-3 border-0 cursor-pointer transition-colors flex items-center justify-center ${
+            useGpuEngine ? 'bg-emerald-500/80 hover:bg-emerald-500' : 'hover:bg-black/70'
+          }`}
+          title={
+            useGpuEngine
+              ? 'Previewing through the GPU engine. Click for the canvas compositor.'
+              : 'Previewing through the canvas compositor. Click for the GPU engine.'
+          }
+          aria-label="Toggle the GPU engine preview"
+          aria-pressed={useGpuEngine}
+        >
+          {useGpuEngine ? <Zap className="w-5 h-5" /> : <Cpu className="w-5 h-5" />}
+        </button>
+
         <button
           onClick={() => setIsCropDialogOpen(true)}
           className={`px-3 py-3 border-0 cursor-pointer hover:bg-black/70 transition-colors flex items-center justify-center`}
@@ -391,6 +459,28 @@ export function EnginePreview() {
           )}
         </button>
       </div>
+
+      {useGpuEngine && (gpu.error || gpuGaps.length > 0) && (
+        <div className="absolute top-6 left-6 max-w-sm rounded-lg bg-black/70 backdrop-blur px-4 py-3 text-white text-xs leading-relaxed">
+          {gpu.error ? (
+            <>
+              <p className="font-semibold text-red-300">The GPU engine could not start</p>
+              <p className="mt-1 opacity-80">{gpu.error}</p>
+            </>
+          ) : (
+            <>
+              <p className="font-semibold">Not drawn by the engine yet</p>
+              <ul className="mt-1 space-y-0.5 opacity-80">
+                {gpuGaps.map((gap) => (
+                  <li key={gap.label}>
+                    <span className="font-medium">{gap.label}</span> — {gap.detail}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      )}
 
       {!isExportPreviewFullscreen && <VerticalTabs />}
 

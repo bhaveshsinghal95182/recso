@@ -26,13 +26,38 @@ let player: VideoPlayerInstance | null = null;
  * get compared, so a file that is not what the recorder thinks it is says so
  * at open rather than behaving strangely later.
  */
-export function openPlayer(path: string, known?: RecordingMediaInfo | null): OpenedVideo {
+export function openPlayer(
+  path: string,
+  known?: RecordingMediaInfo | null,
+  extras?: OpenExtras,
+): OpenedVideo {
   closePlayer();
 
   const { VideoPlayer } = requireEngineBindings();
-  player = new VideoPlayer(normalizeMediaPath(path));
+  player = VideoPlayer.open({
+    path: normalizeMediaPath(path),
+    // The sidecar needs the same de-quoting as the input: Media Foundation
+    // rejects the quoted form outright.
+    webcamPath: extras?.webcamPath ? normalizeMediaPath(extras.webcamPath) : undefined,
+    canvasWidth: extras?.canvasWidth,
+    canvasHeight: extras?.canvasHeight,
+  });
 
   return reconcile(player.info(), known);
+}
+
+/**
+ * What to open beyond the file itself.
+ *
+ * The canvas size is here rather than in a setter because it is fixed for a
+ * player's life: it is the size of the textures handed to Chromium, and
+ * changing it means re-importing every handle. The video's rect *within* the
+ * canvas moves freely through `setLayout`.
+ */
+export interface OpenExtras {
+  webcamPath?: string;
+  canvasWidth?: number;
+  canvasHeight?: number;
 }
 
 /**

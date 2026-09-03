@@ -216,7 +216,15 @@ export const engineBridge = {
   }),
 
   player: {
-    open: (path: string) => invoke('engine:player:open', path),
+    /**
+     * `extras` carries the camera sidecar and the canvas to compose onto. The
+     * canvas is fixed for the player's life, because it is the size of the
+     * textures handed to Chromium.
+     */
+    open: (
+      path: string,
+      extras?: { webcamPath?: string; canvasWidth?: number; canvasHeight?: number },
+    ) => invoke('engine:player:open', path, extras),
     /**
      * Open a recording by id, using the metadata the recorder stored with it.
      * No probe, and any disagreement with the container is reported back.

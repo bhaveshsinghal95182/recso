@@ -32,6 +32,7 @@ import {
 import { normalizeMediaPath } from '../services/engine/paths.js';
 import {
   closePlayer,
+  type OpenExtras,
   openPlayer,
   presentTick,
   requirePlayer,
@@ -91,7 +92,9 @@ export function registerEngineHandlers(): void {
 
   // ---- player -------------------------------------------------------------
 
-  ipcMain.handle('engine:player:open', (_event, path: string) => openPlayer(path));
+  ipcMain.handle('engine:player:open', (_event, path: string, extras?: OpenExtras) =>
+    openPlayer(path, null, extras),
+  );
 
   /**
    * Open a recording in the engine using what the recorder said about it.

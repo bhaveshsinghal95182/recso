@@ -336,7 +336,15 @@ export interface EngineAPI {
   inspectFrameSink: () => EngineSinkInspection;
 
   player: {
-    open: (path: string) => Promise<EngineOpenedVideo>;
+    /**
+     * `extras` carries the camera sidecar and the canvas to compose onto. The
+     * canvas is fixed for the player's life -- inset the video with `setLayout`
+     * rather than reopening.
+     */
+    open: (
+      path: string,
+      extras?: { webcamPath?: string; canvasWidth?: number; canvasHeight?: number },
+    ) => Promise<EngineOpenedVideo>;
     /** Open a recording by id, using the metadata stored with it. No probe. */
     openRecording: (recordingId: string) => Promise<EngineOpenedVideo>;
     close: () => Promise<void>;
