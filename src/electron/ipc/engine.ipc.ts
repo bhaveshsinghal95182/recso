@@ -38,10 +38,13 @@ import {
   warmPool,
 } from '../services/engine/player.service.js';
 import type {
+  BackgroundSpec,
   CursorBitmap,
   CursorPoint,
   ExportOptions,
+  VideoPlacement,
   WebcamOverlay,
+  ZoomRegion,
 } from '../types/engine.types.js';
 
 export function registerEngineHandlers(): void {
@@ -145,6 +148,13 @@ export function registerEngineHandlers(): void {
     },
   );
 
+  ipcMain.handle(
+    'engine:player:webcam-effects',
+    (_event, brightness: number, contrast: number, saturation: number) => {
+      requirePlayer().setWebcamEffects(brightness, contrast, saturation);
+    },
+  );
+
   // ---- composition --------------------------------------------------------
   //
   // Each of these re-renders the frames already queued rather than re-decoding,
@@ -153,6 +163,34 @@ export function registerEngineHandlers(): void {
   ipcMain.handle('engine:player:webcam-layout', (_event, layout: WebcamOverlay) => {
     requirePlayer().setWebcamLayout(layout);
   });
+
+  ipcMain.handle('engine:player:layout', (_event, placement: VideoPlacement) => {
+    requirePlayer().setLayout(placement);
+  });
+
+  ipcMain.handle('engine:player:zoom-regions', (_event, regions: ZoomRegion[]) => {
+    requirePlayer().setZoomRegions(regions);
+  });
+
+  /**
+   * The background image arrives as an ArrayBuffer, same as the cursor bitmap,
+   * and is wrapped rather than copied -- it is uploaded once per change and a
+   * canvas-sized copy on every one would be pure waste.
+   */
+  ipcMain.handle(
+    'engine:player:background',
+    (
+      _event,
+      background: Omit<BackgroundSpec, 'image'> & {
+        image?: (Omit<CursorBitmap, 'pixels'> & { pixels: ArrayBuffer }) | null;
+      },
+    ) => {
+      const image = background.image
+        ? { ...background.image, pixels: Buffer.from(background.image.pixels) }
+        : undefined;
+      requirePlayer().setBackground({ ...background, image });
+    },
+  );
 
   ipcMain.handle('engine:player:has-webcam', () => requirePlayer().hasWebcam());
 

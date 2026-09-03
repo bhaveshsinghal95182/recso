@@ -165,6 +165,46 @@ export interface EngineOpenedVideo {
   disagreements: string[];
 }
 
+/**
+ * A colour as four 0..1 channels.
+ *
+ * Not a CSS string: the shader wants floats, and the one place that should be
+ * parsing `#rrggbb` is the UI that already owns the colour picker.
+ */
+export interface EngineColour {
+  r: number;
+  g: number;
+  b: number;
+  /** Defaults to 1. */
+  a?: number;
+}
+
+/** A focal point a zoom pans to while it is held. */
+export interface EngineZoomFocalKeyframe {
+  timestampMs: number;
+  /** 0..1 across the recording, not the canvas. */
+  x: number;
+  y: number;
+}
+
+/** One span of the timeline that is zoomed in. */
+export interface EngineZoomRegion {
+  startMs: number;
+  endMs: number;
+  /** 1 is no zoom. */
+  zoomLevel: number;
+  /**
+   * Where it zooms to, 0..1 across the recording. Mapped through the video's
+   * placement, so a zoom stays on its subject when the video is inset.
+   */
+  focalX: number;
+  focalY: number;
+  /** How long the ease in and the ease out each take. 0 snaps. */
+  easeDurationMs?: number;
+  /** Extra focal points to pan between while the zoom is held. */
+  focalKeyframes?: EngineZoomFocalKeyframe[];
+}
+
 /** Where the webcam overlay sits, in the screen recording's own pixels. */
 export interface EngineWebcamOverlay {
   x: number;
@@ -175,7 +215,53 @@ export interface EngineWebcamOverlay {
   shape?: 'rect' | 'ellipse';
   /** Corner radius in pixels. Ignored for an ellipse. */
   cornerRadius?: number;
+  /** Clamped to 0..1. Defaults to 1. */
   opacity?: number;
+  /**
+   * How a camera whose aspect ratio does not match the box is reconciled.
+   *
+   * `cover` (default) fills the box and crops the overflow, `contain` fits the
+   * whole camera inside it, `stretch` distorts to fill exactly. Only pass
+   * `stretch` when the box was computed from the camera's own aspect ratio.
+   */
+  fit?: 'cover' | 'contain' | 'stretch';
+  /** Border thickness in canvas pixels, drawn outside the box. Defaults to 0. */
+  borderWidth?: number;
+  borderColour?: EngineColour;
+}
+
+/**
+ * Where the recording sits on the canvas.
+ *
+ * Canvas pixels: the padding fraction, the scale and the centring are resolved
+ * here, next to the webcam's anchor grid, so there is one layout formula in the
+ * app rather than two that have to agree.
+ */
+export interface EngineVideoPlacement {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** Corner radius in canvas pixels. Defaults to 0. */
+  cornerRadius?: number;
+  /** Border thickness, drawn outside the rect. Defaults to 0. */
+  borderWidth?: number;
+  borderColour?: EngineColour;
+}
+
+/**
+ * What fills the canvas behind the video.
+ *
+ * Gradients and patterns go in as `image`, already rasterised -- they are
+ * static for a whole export, so drawing one to a canvas once and uploading the
+ * pixels beats reimplementing the generators in HLSL where they would then have
+ * to match the Canvas2D versions exactly.
+ */
+export interface EngineBackground {
+  /** Flat fill, and what shows through a transparent image. Defaults to black. */
+  colour?: EngineColour;
+  /** Tightly packed RGBA8, stretched over the canvas. */
+  image?: EngineCursorBitmap;
 }
 
 export interface EngineCursorBitmap {
@@ -235,7 +321,10 @@ export interface EngineAPI {
     /** `exact: false` while dragging a scrubber, `true` on release. */
     seek: (ms: number, exact?: boolean) => Promise<void>;
     tick: () => Promise<EngineTickResult>;
+    /** Grade the video layer. The webcam has its own. */
     setEffects: (brightness: number, contrast: number, saturation: number) => Promise<void>;
+    /** Grade the webcam layer. */
+    setWebcamEffects: (brightness: number, contrast: number, saturation: number) => Promise<void>;
     stats: () => Promise<EnginePlayerStats>;
 
     /**
@@ -245,6 +334,15 @@ export interface EngineAPI {
      * so there is one placement formula in the app rather than two.
      */
     setWebcamLayout: (layout: EngineWebcamOverlay) => Promise<void>;
+    /** Place the recording on the canvas: rect, corner radius, border. */
+    setLayout: (placement: EngineVideoPlacement) => Promise<void>;
+    /**
+     * Set the zoom/pan timeline. The video and cursor move with it; the
+     * background and webcam do not.
+     */
+    setZoomRegions: (regions: EngineZoomRegion[]) => Promise<void>;
+    /** What fills the canvas behind the video. */
+    setBackground: (background: EngineBackground) => Promise<void>;
     /** False when the recording had no camera track, or its sidecar would not open. */
     hasWebcam: () => Promise<boolean>;
 

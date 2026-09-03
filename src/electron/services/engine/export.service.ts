@@ -26,8 +26,11 @@ export function startEngineExport(input: string, options: ExportOptions) {
 
   const { VideoExporter } = requireEngineBindings();
   const output = normalizeMediaPath(options.output);
+  // The sidecar is a path from the same place the input came from, so it needs
+  // the same de-quoting -- Media Foundation rejects the quoted form outright.
+  const webcamPath = options.webcamPath ? normalizeMediaPath(options.webcamPath) : undefined;
 
-  current = new VideoExporter(normalizeMediaPath(input), { ...options, output });
+  current = new VideoExporter(normalizeMediaPath(input), { ...options, output, webcamPath });
   outputPath = output;
 
   return { output };

@@ -221,8 +221,7 @@ export const engineBridge = {
      * Open a recording by id, using the metadata the recorder stored with it.
      * No probe, and any disagreement with the container is reported back.
      */
-    openRecording: (recordingId: string) =>
-      invoke('engine:player:open-recording', recordingId),
+    openRecording: (recordingId: string) => invoke('engine:player:open-recording', recordingId),
     close: () => invoke('engine:player:close'),
     /** Costs a few hundred ms once, and saves a stall in the first second. */
     warm: () => invoke('engine:player:warm'),
@@ -233,8 +232,12 @@ export const engineBridge = {
     seek: (ms: number, exact = true) => invoke('engine:player:seek', ms, exact),
     /** Pulls the frame due now. Drive this from a RAF loop. */
     tick: () => invoke('engine:player:tick'),
+    /** Grade the video layer. The webcam has its own -- see below. */
     setEffects: (brightness: number, contrast: number, saturation: number) =>
       invoke('engine:player:effects', brightness, contrast, saturation),
+    /** Grade the webcam layer. */
+    setWebcamEffects: (brightness: number, contrast: number, saturation: number) =>
+      invoke('engine:player:webcam-effects', brightness, contrast, saturation),
     stats: () => invoke('engine:player:stats'),
 
     // ---- composition ----------------------------------------------------
@@ -245,6 +248,22 @@ export const engineBridge = {
     /** Place the webcam box, in the screen recording's own pixels. */
     setWebcamLayout: (layout: Record<string, unknown>) =>
       invoke('engine:player:webcam-layout', layout),
+    /** Place the recording on the canvas: rect, corner radius, border. */
+    setLayout: (placement: Record<string, unknown>) => invoke('engine:player:layout', placement),
+    /**
+     * Set the zoom/pan timeline. The video and cursor move with it; the
+     * background and webcam do not.
+     */
+    setZoomRegions: (regions: unknown[]) => invoke('engine:player:zoom-regions', regions),
+    /**
+     * What fills the canvas behind the video.
+     *
+     * `image.pixels` must be an ArrayBuffer, same rule as the cursor bitmap: a
+     * Buffer or typed array is structured-cloned into something the main
+     * process cannot hand straight to the addon.
+     */
+    setBackground: (background: Record<string, unknown>) =>
+      invoke('engine:player:background', background),
     hasWebcam: () => invoke('engine:player:has-webcam'),
 
     /**
@@ -253,7 +272,13 @@ export const engineBridge = {
      * the addon.
      */
     setCursorImage: (
-      image: { width: number; height: number; pixels: ArrayBuffer; hotspotX?: number; hotspotY?: number } | null,
+      image: {
+        width: number;
+        height: number;
+        pixels: ArrayBuffer;
+        hotspotX?: number;
+        hotspotY?: number;
+      } | null,
     ) => invoke('engine:player:cursor-image', image),
     setCursorTrack: (samples: unknown[]) => invoke('engine:player:cursor-track', samples),
     setCursorStyle: (size: number, opacity: number) =>
