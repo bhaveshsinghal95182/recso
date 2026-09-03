@@ -37,7 +37,7 @@ GPU engine (Rust/D3D11, in `velocity/src/engine/`). This document says
 
 ---
 
-> **Status.** Steps 1-4 of the order at the bottom are done, plus zoom: the canvas is no
+> **Status.** Steps 1-4 of the order at the bottom are done, plus zoom and cuts: the canvas is no
 > longer tied to the source, backgrounds and the video's own rect/radius/border
 > exist, and grading is per-layer. The tables below are marked accordingly. What
 > is left is the timeline, per-event cursors and audio -- and the integration
@@ -167,15 +167,15 @@ colour is the exception, because a clear is free.
 
 ### Timeline
 
-| Feature                         | Compositor | Engine  | Notes                                                        |
-| ------------------------------- | ---------- | ------- | ------------------------------------------------------------ |
-| Cuts                            | yes        | **no**  | `cuts.ts` maps source ↔ composition time in both directions. |
-| Zoom regions (ease in/out)      | yes        | **yes** | `engine/zoom.rs`; smoothstep, matching the compositor's.     |
-| Focal keyframes within a region | yes        | **yes** | Linear pan between them, like the compositor.                |
-| Legacy zoom keyframes           | yes        | **no**  | The `computeZoomState` fallback. Regions supersede it.       |
-| Layer reordering                | yes        | **no**  | `layerStates` — the four layers are a user-ordered list.     |
-| Per-layer `base`/`zoomed` space | yes        | **no**  | Decides which layers the zoom transform applies to.          |
-| Multiple clips                  | **no**     | **no**  | Neither has one. Worth knowing before designing for it.      |
+| Feature                         | Compositor | Engine  | Notes                                                    |
+| ------------------------------- | ---------- | ------- | -------------------------------------------------------- |
+| Cuts                            | yes        | **yes** | `engine/cuts.rs`; source ↔ composition, both directions. |
+| Zoom regions (ease in/out)      | yes        | **yes** | `engine/zoom.rs`; smoothstep, matching the compositor's. |
+| Focal keyframes within a region | yes        | **yes** | Linear pan between them, like the compositor.            |
+| Legacy zoom keyframes           | yes        | **no**  | The `computeZoomState` fallback. Regions supersede it.   |
+| Layer reordering                | yes        | **no**  | `layerStates` — the four layers are a user-ordered list. |
+| Per-layer `base`/`zoomed` space | yes        | **no**  | Decides which layers the zoom transform applies to.      |
+| Multiple clips                  | **no**     | **no**  | Neither has one. Worth knowing before designing for it.  |
 
 ### Audio
 
@@ -246,10 +246,18 @@ handle. The engine has one `SpriteTexture` for the whole track. Supporting this
 means a texture cache keyed by image, or an atlas, not another field. Everything
 else in the cursor row is easy by comparison; this one is a data structure.
 
-**3. No timeline model.** Cuts, zoom regions and layer ordering are all the same
-missing thing: the engine plays one source linearly and has no representation of
-"the composition" as distinct from "the file". Zoom additionally needs a
-transform the render chain does not have.
+**3. No timeline model.** ~~Cuts, zoom regions~~ and layer ordering were all the
+same missing thing: the engine played one source linearly with no representation
+of "the composition" as distinct from "the file".
+
+Zoom and cuts are done. Zoom needed no transform after all -- every layer is a
+rect, and scaling an axis-aligned rect about a pivot is exactly what the
+compositor's canvas transform does to it. Cuts gave the engine the
+source/composition split it was missing, which is the representation the rest of
+the timeline work needs.
+
+Layer ordering is what is left here, and it is small by comparison: the four
+draws are already separate calls.
 
 **4. Audio.** The engine has none, anywhere, and audio has to become the master
 clock eventually. `Clock` is video-only and will have to slave to it. The longer
