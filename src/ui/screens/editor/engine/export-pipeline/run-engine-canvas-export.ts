@@ -177,12 +177,21 @@ export async function runEngineCanvasExport({
       sourceDurationMs / 1000,
       compositionDurationMs / 1000,
       () => cancelRequestedRef.current,
-      (fraction) => {
-        onProgress?.(createProgressSnapshot(fraction, totalFrames, startedAtMs, 'export'));
+      (fraction, phase, indeterminate) => {
+        onProgress?.(
+          createProgressSnapshot(
+            fraction,
+            totalFrames,
+            startedAtMs,
+            'export',
+            phase,
+            indeterminate,
+          ),
+        );
       },
     );
 
-    onProgress?.(createProgressSnapshot(1, totalFrames, startedAtMs, 'export'));
+    onProgress?.(createProgressSnapshot(1, totalFrames, startedAtMs, 'export', 'Done'));
 
     return {
       buffer: outputBuffer,

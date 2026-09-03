@@ -36,7 +36,7 @@ import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { getAnchorLabel, WEBCAM_ANCHORS } from '@/screens/editor/engine/webcam-anchor';
 import { useProjectStore } from '@/store/project-store';
-import { useTimelineStore } from '@/store/timeline-store';
+import { focusedZoomId, useTimelineStore } from '@/store/timeline-store';
 import type {
   RemoteCameraState,
   WebcamOverlayAnchor,
@@ -305,7 +305,8 @@ export function WebcamPanel() {
     startRemoteCameraPairing,
     cancelRemoteCameraPairing,
   } = useProjectStore();
-  const { zoomRegionsBySource, selectedZoomId, updateZoom, updateZoomRegions } = useTimelineStore();
+  const { zoomRegionsBySource, focus, updateZoom, updateZoomRegions } = useTimelineStore();
+  const selectedZoomId = focusedZoomId(focus);
 
   const [ratioWidthInput, setRatioWidthInput] = useState('3');
   const [ratioHeightInput, setRatioHeightInput] = useState('4');

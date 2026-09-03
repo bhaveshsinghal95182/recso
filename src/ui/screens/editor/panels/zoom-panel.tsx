@@ -21,7 +21,7 @@ import {
 } from '@/constants';
 import { smartPanSingleRegion } from '@/lib/calculations/pan';
 import { useProjectStore } from '@/store/project-store';
-import { useTimelineStore } from '@/store/timeline-store';
+import { focusedZoomId, isEditingFocalPoint, useTimelineStore } from '@/store/timeline-store';
 import type { RecordedMouseEvent, ZoomRegion } from '@/types';
 
 import {
@@ -64,15 +64,16 @@ export function ZoomPanel() {
   const { project } = useProjectStore();
   const {
     zoomRegionsBySource,
-    selectedZoomId,
+    focus,
     updateZoom,
     updateZoomRegions,
     replaceZoomRegions,
-    isEditingFocalPoint,
-    setIsEditingFocalPoint,
+    setEditingFocalPoint,
   } = useTimelineStore();
 
   const zoomRegions = zoomRegionsBySource.screen;
+  const selectedZoomId = focusedZoomId(focus);
+  const editingFocalPoint = isEditingFocalPoint(focus);
   const selectedZoom = zoomRegions.find((zoom) => zoom.id === selectedZoomId);
   const copyIconRef = useRef<AnimatedIconHandle>(null);
 
@@ -311,10 +312,10 @@ export function ZoomPanel() {
 
         <PanelButton
           Icon={Crosshair}
-          active={isEditingFocalPoint}
-          onClick={() => setIsEditingFocalPoint(!isEditingFocalPoint)}
+          active={editingFocalPoint}
+          onClick={() => setEditingFocalPoint(!editingFocalPoint)}
         >
-          {isEditingFocalPoint ? 'Done editing focal point' : 'Edit focal point'}
+          {editingFocalPoint ? 'Done editing focal point' : 'Edit focal point'}
         </PanelButton>
 
         {zoomRegions.length > 1 && (

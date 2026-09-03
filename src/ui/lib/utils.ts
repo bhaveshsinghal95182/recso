@@ -118,3 +118,16 @@ export function debounce<T extends (...args: any[]) => void>(
 
   return debounced as T & { cancel: () => void };
 }
+
+/**
+ * Exhaustiveness guard for discriminated unions.
+ *
+ * Call it in the `default` branch of a switch over a union's tag. Once every
+ * variant is handled the argument narrows to `never` and this compiles; add a
+ * variant without handling it and `tsc` fails right here. The throw only
+ * matters at runtime for values that bypassed the type system (IPC payloads,
+ * data off disk).
+ */
+export function assertNever(value: never): never {
+  throw new Error(`Unhandled union variant: ${JSON.stringify(value)}`);
+}

@@ -101,6 +101,23 @@ export interface ExportProgress {
   stage: 'composition' | 'export';
   /** Progress percentage of the current stage (0-100) */
   stagePercent: number;
+  /**
+   * What is happening right now, for the user rather than for arithmetic.
+   *
+   * The last third of an export is a handful of operations that cannot report
+   * their own progress -- rendering the mixed audio in one shot, writing the
+   * container -- so the percentage sits still through them. A number that has
+   * stopped moving reads as a hang; a label saying "Mixing audio" reads as
+   * work.
+   */
+  phase: string;
+  /**
+   * True while the current phase cannot report incremental progress.
+   *
+   * The bar should animate rather than sit at a number it is not actually
+   * making its way towards.
+   */
+  indeterminate: boolean;
 }
 
 /** Export result */

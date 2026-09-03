@@ -41,6 +41,7 @@ interface FloatingRecorderToolbarProps {
   isLoading: boolean;
   isRecording: boolean;
   isPaused: boolean;
+  isStopping: boolean;
   isStarting: boolean;
   duration: number;
   bytesWritten: number;
@@ -78,6 +79,7 @@ export function FloatingRecorderToolbar({
   isLoading,
   isRecording,
   isPaused,
+  isStopping,
   isStarting,
   duration,
   bytesWritten,
@@ -112,7 +114,7 @@ export function FloatingRecorderToolbar({
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
   const [isOutputValid, setIsOutputValid] = useState(true);
 
-  const isCaptureActive = isRecording || isPaused;
+  const isCaptureActive = isRecording || isPaused || isStopping;
   const controlsLocked = isCaptureActive || isStarting;
   const selectedQuality = useMemo(
     () => quality.find((option) => option.value === videoBitrate) ?? quality[1],
@@ -293,6 +295,7 @@ export function FloatingRecorderToolbar({
         {isCaptureActive ? (
           <RecordingBar
             isPaused={isPaused}
+            isStopping={isStopping}
             duration={duration}
             bytesWritten={bytesWritten}
             onPause={onPause}
@@ -384,6 +387,7 @@ export function FloatingRecorderToolbar({
 
 function RecordingBar({
   isPaused,
+  isStopping,
   duration,
   bytesWritten,
   onPause,
@@ -391,6 +395,7 @@ function RecordingBar({
   onStop,
 }: {
   isPaused: boolean;
+  isStopping: boolean;
   duration: number;
   bytesWritten: number;
   onPause: () => void;
@@ -400,13 +405,17 @@ function RecordingBar({
   return (
     <div className="flex w-full items-center gap-2">
       <div className="flex min-w-0 flex-1 items-center gap-3 rounded-[18px] border border-white/10 bg-black/25 px-4 py-3.5 text-[13px] text-white/60">
-        <span
-          className={cn(
-            'h-2 w-2 flex-none rounded-full bg-red-500 shadow-[0_0_0_4px_rgba(239,68,68,0.14)]',
-            isPaused && 'bg-yellow-400',
-          )}
-        />
-        <span>{isPaused ? 'Paused' : 'Recording'}</span>
+        {isStopping ? (
+          <Loader2 size={14} className="flex-none animate-spin text-white/70" />
+        ) : (
+          <span
+            className={cn(
+              'h-2 w-2 flex-none rounded-full bg-red-500 shadow-[0_0_0_4px_rgba(239,68,68,0.14)]',
+              isPaused && 'bg-yellow-400',
+            )}
+          />
+        )}
+        <span>{isStopping ? 'Finishing up' : isPaused ? 'Paused' : 'Recording'}</span>
         <strong className="font-mono text-[22px] font-[750] tabular-nums text-white">
           {formatDuration(duration)}
         </strong>
@@ -414,8 +423,9 @@ function RecordingBar({
       </div>
       <button
         type="button"
-        className={iconButtonBase}
+        className={cn(iconButtonBase, isStopping && 'pointer-events-none opacity-40')}
         onClick={isPaused ? onResume : onPause}
+        disabled={isStopping}
         title={isPaused ? 'Resume recording' : 'Pause recording'}
         aria-label={isPaused ? 'Resume recording' : 'Pause recording'}
       >
@@ -423,12 +433,22 @@ function RecordingBar({
       </button>
       <button
         type="button"
-        className="grid h-14 w-14 flex-none cursor-pointer place-items-center rounded-[19px] bg-[linear-gradient(180deg,#fb7185,#e11d48)] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.32),0_12px_30px_rgba(225,29,72,0.34)] transition duration-150 hover:-translate-y-[1px] hover:brightness-110"
+        className={cn(
+          'grid h-14 w-14 flex-none place-items-center rounded-[19px] bg-[linear-gradient(180deg,#fb7185,#e11d48)] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.32),0_12px_30px_rgba(225,29,72,0.34)] transition duration-150',
+          isStopping
+            ? 'cursor-default opacity-60'
+            : 'cursor-pointer hover:-translate-y-[1px] hover:brightness-110',
+        )}
         onClick={onStop}
-        title="Stop recording"
-        aria-label="Stop recording"
+        disabled={isStopping}
+        title={isStopping ? 'Finishing up…' : 'Stop recording'}
+        aria-label={isStopping ? 'Finishing up' : 'Stop recording'}
       >
-        <Square size={17} fill="currentColor" />
+        {isStopping ? (
+          <Loader2 size={18} className="animate-spin" />
+        ) : (
+          <Square size={17} fill="currentColor" />
+        )}
       </button>
     </div>
   );

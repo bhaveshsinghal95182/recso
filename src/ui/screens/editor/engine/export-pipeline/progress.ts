@@ -8,6 +8,8 @@ export function createProgressSnapshot(
   totalFrames: number,
   startedAtMs: number,
   stage: ExportProgress['stage'] = 'export',
+  phase = '',
+  indeterminate = false,
 ): ExportProgress {
   const clamped = Math.max(0, Math.min(1, fraction));
   const currentFrame = Math.min(totalFrames, Math.round(totalFrames * clamped));
@@ -32,5 +34,7 @@ export function createProgressSnapshot(
     eta,
     stage,
     stagePercent,
+    phase: phase || (stage === 'composition' ? 'Compositing frames' : 'Finishing up'),
+    indeterminate,
   };
 }

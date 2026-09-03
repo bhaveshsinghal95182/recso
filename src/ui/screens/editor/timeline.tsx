@@ -20,7 +20,12 @@ import {
 import { TimelineWaveform } from '@/screens/editor/timeline-waveform';
 import { usePlaybackStore } from '@/store/playback-store';
 import { useProjectStore } from '@/store/project-store';
-import { useTimelineStore } from '@/store/timeline-store';
+import {
+  focusedCursorRegionId,
+  focusedCutId,
+  focusedZoomId,
+  useTimelineStore,
+} from '@/store/timeline-store';
 import { useUIStore } from '@/store/ui-store';
 import type { CutRegion, ZoomSource } from '@/types';
 
@@ -172,20 +177,19 @@ export function Timeline() {
   const { duration, currentTime, seek } = usePlaybackStore();
   const {
     cuts,
-    selectedCutId,
+    focus,
     addCut,
     updateCut,
     removeCut,
-    setSelectedCut,
+    focusCut,
     zoomRegionsBySource,
     setZoomSource,
-    selectedZoomId,
     addZoom,
     updateZoom,
     removeZoom,
-    setSelectedZoom,
-    selectedCursorRegionId,
-    setSelectedCursorRegion,
+    focusZoom,
+    focusCursorRegion,
+    clearFocus,
   } = useTimelineStore();
   const { setActivePropertiesTab } = useUIStore();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -317,10 +321,8 @@ export function Timeline() {
     setSelectedZoomIds([]);
     setSelectedCursorRegionIds([]);
     setCutSelectionDrag(null);
-    setSelectedCut(null);
-    setSelectedZoom(null);
-    setSelectedCursorRegion(null);
-  }, [setSelectedCut, setSelectedCursorRegion, setSelectedZoom]);
+    clearFocus();
+  }, [clearFocus]);
 
   const handleModeChange = useCallback(
     (nextMode: TimelineMode) => {
@@ -350,11 +352,9 @@ export function Timeline() {
       setSelectedZoomIds([]);
       setSelectedCursorRegionIds([]);
       setCutSelectionDrag(null);
-      setSelectedCut(cutId);
-      setSelectedZoom(null);
-      setSelectedCursorRegion(null);
+      focusCut(cutId);
     },
-    [setSelectedCut, setSelectedCursorRegion, setSelectedZoom],
+    [focusCut],
   );
 
   const handleSelectZoom = useCallback(
@@ -363,20 +363,12 @@ export function Timeline() {
       setSelectedZoomIds([zoomId]);
       setSelectedCursorRegionIds([]);
       setCutSelectionDrag(null);
-      setSelectedCut(null);
-      setSelectedZoom(zoomId);
-      setSelectedCursorRegion(null);
+      focusZoom(zoomId);
       void setZoomSource(source);
       // Webcam regions are edited in the webcam panel, screen regions in the zoom panel.
       setActivePropertiesTab(source === 'webcam' ? 'webcam' : 'zoom');
     },
-    [
-      setSelectedCut,
-      setSelectedCursorRegion,
-      setSelectedZoom,
-      setZoomSource,
-      setActivePropertiesTab,
-    ],
+    [focusZoom, setZoomSource, setActivePropertiesTab],
   );
 
   const handleSelectCursor = useCallback(
@@ -385,12 +377,10 @@ export function Timeline() {
       setSelectedZoomIds([]);
       setSelectedCursorRegionIds([regionId]);
       setCutSelectionDrag(null);
-      setSelectedCut(null);
-      setSelectedZoom(null);
-      setSelectedCursorRegion(regionId);
+      focusCursorRegion(regionId);
       setActivePropertiesTab('cursor');
     },
-    [setSelectedCut, setSelectedCursorRegion, setSelectedZoom, setActivePropertiesTab],
+    [focusCursorRegion, setActivePropertiesTab],
   );
 
   const handleDeleteCutForLane = useCallback(
@@ -477,31 +467,45 @@ export function Timeline() {
       setSelectedCutIds(nextSelectedCutIds);
       setSelectedZoomIds(nextSelectedZoomIds);
       setSelectedCursorRegionIds(nextSelectedCursorRegionIds);
-      setSelectedCut(nextSelectedCutIds.length === 1 ? nextSelectedCutIds[0] : null);
+
+      // A marquee in 'all' mode can span several region types, but the
+      // properties panel edits exactly one region. Only take focus when the
+      // drag landed on a single region overall — anything else is ambiguous,
+      // so leave the marquee selection alone and drop focus.
+      const totalMatched =
+        nextSelectedCutIds.length + nextSelectedZoomIds.length + nextSelectedCursorRegionIds.length;
+
+      if (totalMatched !== 1) {
+        clearFocus();
+        return;
+      }
+
+      if (nextSelectedCutIds.length === 1) {
+        focusCut(nextSelectedCutIds[0]);
+        return;
+      }
 
       if (nextSelectedZoomIds.length === 1) {
         const zoomId = nextSelectedZoomIds[0];
-        setSelectedZoom(zoomId);
+        focusZoom(zoomId);
         if (screenZoomRegions.some((zoom) => zoom.id === zoomId)) {
           void setZoomSource('screen');
         } else if (webcamZoomRegions.some((zoom) => zoom.id === zoomId)) {
           void setZoomSource('webcam');
         }
-      } else {
-        setSelectedZoom(null);
+        return;
       }
 
-      setSelectedCursorRegion(
-        nextSelectedCursorRegionIds.length === 1 ? nextSelectedCursorRegionIds[0] : null,
-      );
+      focusCursorRegion(nextSelectedCursorRegionIds[0]);
     },
     [
       mode,
       screenZoomRegions,
       webcamZoomRegions,
-      setSelectedCut,
-      setSelectedCursorRegion,
-      setSelectedZoom,
+      focusCut,
+      focusZoom,
+      focusCursorRegion,
+      clearFocus,
       setZoomSource,
     ],
   );
@@ -533,9 +537,7 @@ export function Timeline() {
       setSelectedCutIds([]);
       setSelectedZoomIds([]);
       setSelectedCursorRegionIds([]);
-      setSelectedCut(null);
-      setSelectedZoom(null);
-      setSelectedCursorRegion(null);
+      clearFocus();
 
       const initialDrag: CutSelectionDrag = {
         startX,
@@ -586,10 +588,8 @@ export function Timeline() {
     [
       applyRegionSelectionDrag,
       clearRegionSelections,
-      setSelectedCut,
+      clearFocus,
       setSelectedCutIds,
-      setSelectedCursorRegion,
-      setSelectedZoom,
       setSelectedZoomIds,
       setSelectedCursorRegionIds,
     ],
@@ -623,17 +623,17 @@ export function Timeline() {
   }, [updateTrackScrollbarWidth]);
 
   const isCutSelected = useCallback(
-    (cutId: string) => selectedCutId === cutId || selectedCutIds.includes(cutId),
-    [selectedCutId, selectedCutIds],
+    (cutId: string) => focusedCutId(focus) === cutId || selectedCutIds.includes(cutId),
+    [focus, selectedCutIds],
   );
   const isZoomSelected = useCallback(
-    (zoomId: string) => selectedZoomId === zoomId || selectedZoomIds.includes(zoomId),
-    [selectedZoomId, selectedZoomIds],
+    (zoomId: string) => focusedZoomId(focus) === zoomId || selectedZoomIds.includes(zoomId),
+    [focus, selectedZoomIds],
   );
   const isCursorSelected = useCallback(
     (cursorId: string) =>
-      selectedCursorRegionId === cursorId || selectedCursorRegionIds.includes(cursorId),
-    [selectedCursorRegionId, selectedCursorRegionIds],
+      focusedCursorRegionId(focus) === cursorId || selectedCursorRegionIds.includes(cursorId),
+    [focus, selectedCursorRegionIds],
   );
 
   const cutLaneCount = screenCuts.length + (webcamTimelineEnabled ? webcamCuts.length : 0);

@@ -9,10 +9,11 @@ import { Loader2 } from 'lucide-react';
 import { useEffect } from 'react';
 import { toast } from 'sonner';
 
+import { assertNever } from '@/lib/utils';
 import { useExportStore } from '@/store/export-store';
 
 export function ExportProgressToast() {
-  const { state, progress, result, isModalOpen, setModalOpen } = useExportStore();
+  const { phase, isModalOpen, setModalOpen } = useExportStore();
 
   // Dismiss toast when modal opens
   useEffect(() => {
@@ -22,21 +23,36 @@ export function ExportProgressToast() {
   }, [isModalOpen]);
 
   useEffect(() => {
-    // Show toast when export starts (but only if modal is closed)
-    if (state === 'exporting' && progress && !isModalOpen) {
+    // Dismiss toast when idle
+    if (phase.kind === 'idle') {
+      toast.dismiss('export-progress');
+      return;
+    }
+
+    // Everything below is toast-only feedback; the modal shows its own UI.
+    if (isModalOpen) return;
+
+    if (phase.kind === 'exporting') {
+      const { progress } = phase;
       const toastId = 'export-progress';
 
       const handleToastClick = () => {
         setModalOpen(true);
       };
 
-      // Calculate overall progress text
+      // What to say, and whether a percentage means anything right now.
+      //
+      // The last steps of an export -- mixing the audio, writing the container
+      // -- are single blocking calls that cannot report progress. Showing a
+      // percentage through them means showing one that has stopped moving, and
+      // a number that has stopped moving reads as a hang. The phase label says
+      // what is actually happening instead.
       const getProgressText = () => {
-        if (progress.stage === 'composition') {
-          return `Compositing: ${Math.round(progress.stagePercent)}%`;
-        } else {
-          return `Exporting: ${Math.round(progress.stagePercent)}%`;
-        }
+        const stageLabel = progress.stage === 'composition' ? 'Compositing' : 'Exporting';
+        const label = progress.phase || stageLabel;
+        return progress.indeterminate
+          ? `${label}...`
+          : `${label}: ${Math.round(progress.stagePercent)}%`;
       };
 
       // Format ETA
@@ -54,14 +70,19 @@ export function ExportProgressToast() {
           <div className="flex-1 min-w-0">
             <div className="font-medium text-sm">{getProgressText()}</div>
             <div className="text-xs text-muted-foreground">
-              {progress.fps > 0 ? `${progress.fps.toFixed(1)} fps` : 'Starting...'} •{' '}
-              {formatETA(progress.eta)} remaining
+              {progress.indeterminate
+                ? 'This can take a moment on a long recording'
+                : `${progress.fps > 0 ? `${progress.fps.toFixed(1)} fps` : 'Starting...'} • ${formatETA(progress.eta)} remaining`}
             </div>
             {/* Progress bar */}
             <div className="mt-2 h-1.5 bg-muted rounded-full overflow-hidden">
               <div
-                className="h-full bg-primary transition-all duration-300"
-                style={{ width: `${progress.percent}%` }}
+                className={
+                  progress.indeterminate
+                    ? 'h-full w-1/3 bg-primary animate-[export-indeterminate_1.2s_ease-in-out_infinite]'
+                    : 'h-full bg-primary transition-all duration-300'
+                }
+                style={progress.indeterminate ? undefined : { width: `${progress.percent}%` }}
               />
             </div>
           </div>
@@ -73,10 +94,12 @@ export function ExportProgressToast() {
           description: 'Click to view details',
         },
       );
+      return;
     }
 
     // Show success toast when complete
-    if (state === 'complete' && result?.success && !isModalOpen) {
+    if (phase.kind === 'complete') {
+      const { outputPath } = phase.result;
       toast.dismiss('export-progress');
       toast.success('Export Complete!', {
         description: `File saved successfully`,
@@ -84,42 +107,40 @@ export function ExportProgressToast() {
         action: {
           label: 'Open',
           onClick: () => {
-            if (result.outputPath) {
-              window.electron.exporter.showInFolder(result.outputPath);
-            }
+            window.electron.exporter.showInFolder(outputPath);
           },
         },
       });
+      return;
     }
 
     // Show error toast when failed
-    if (state === 'error' && result && !result.success && !isModalOpen) {
+    if (phase.kind === 'error') {
       toast.dismiss('export-progress');
       toast.error('Export Failed', {
-        description: result.error || 'Unknown error occurred',
+        description: phase.message,
         duration: 8000,
         action: {
           label: 'Retry',
           onClick: () => setModalOpen(true),
         },
       });
+      return;
     }
 
-    // Dismiss toast when idle
-    if (state === 'idle') {
-      toast.dismiss('export-progress');
-    }
-  }, [state, progress, result, isModalOpen, setModalOpen]);
+    assertNever(phase);
+  }, [phase, isModalOpen, setModalOpen]);
 
   // Update the toast content as progress changes (but only if modal is closed)
   useEffect(() => {
-    if (state === 'exporting' && progress && !isModalOpen) {
+    if (phase.kind === 'exporting' && !isModalOpen) {
+      const { progress } = phase;
       const getProgressText = () => {
-        if (progress.stage === 'composition') {
-          return `Compositing: ${Math.round(progress.stagePercent)}%`;
-        } else {
-          return `Exporting: ${Math.round(progress.stagePercent)}%`;
-        }
+        const stageLabel = progress.stage === 'composition' ? 'Compositing' : 'Exporting';
+        const label = progress.phase || stageLabel;
+        return progress.indeterminate
+          ? `${label}...`
+          : `${label}: ${Math.round(progress.stagePercent)}%`;
       };
 
       const formatETA = (seconds: number): string => {
@@ -140,14 +161,19 @@ export function ExportProgressToast() {
           <div className="flex-1 min-w-0">
             <div className="font-medium text-sm">{getProgressText()}</div>
             <div className="text-xs text-muted-foreground">
-              {progress.fps > 0 ? `${progress.fps.toFixed(1)} fps` : 'Starting...'} •{' '}
-              {formatETA(progress.eta)} remaining
+              {progress.indeterminate
+                ? 'This can take a moment on a long recording'
+                : `${progress.fps > 0 ? `${progress.fps.toFixed(1)} fps` : 'Starting...'} • ${formatETA(progress.eta)} remaining`}
             </div>
             {/* Progress bar */}
             <div className="mt-2 h-1.5 bg-muted rounded-full overflow-hidden">
               <div
-                className="h-full bg-primary transition-all duration-300"
-                style={{ width: `${progress.percent}%` }}
+                className={
+                  progress.indeterminate
+                    ? 'h-full w-1/3 bg-primary animate-[export-indeterminate_1.2s_ease-in-out_infinite]'
+                    : 'h-full bg-primary transition-all duration-300'
+                }
+                style={progress.indeterminate ? undefined : { width: `${progress.percent}%` }}
               />
             </div>
           </div>
@@ -160,7 +186,7 @@ export function ExportProgressToast() {
         },
       );
     }
-  }, [state, progress, isModalOpen, setModalOpen]);
+  }, [phase, isModalOpen, setModalOpen]);
 
   return null; // This component only manages toasts
 }

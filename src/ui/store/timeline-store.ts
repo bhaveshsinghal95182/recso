@@ -5,6 +5,37 @@ import type { CutRegion, ZoomRegion, ZoomRegionsBySource, ZoomSource } from '../
 
 const DEFAULT_ZOOM_SOURCE: ZoomSource = 'screen';
 
+/**
+ * The single region the properties panel is editing.
+ *
+ * Focus is genuinely exclusive — focusing a cut un-focuses any zoom or cursor
+ * region — so it is one value rather than three nullable ids that callers have
+ * to null out by hand. `editingFocalPoint` rides on the zoom variant because
+ * it is only meaningful while a zoom is focused.
+ *
+ * Note this is NOT the marquee multi-selection: a box drag in 'all' mode can
+ * span cuts, zooms and cursor regions at once, so that stays a set per type.
+ */
+export type TimelineFocus =
+  | { kind: 'none' }
+  | { kind: 'cut'; id: string }
+  | { kind: 'zoom'; id: string; editingFocalPoint: boolean }
+  | { kind: 'cursorRegion'; id: string };
+
+const NO_FOCUS: TimelineFocus = { kind: 'none' };
+
+export const focusedCutId = (focus: TimelineFocus): string | null =>
+  focus.kind === 'cut' ? focus.id : null;
+
+export const focusedZoomId = (focus: TimelineFocus): string | null =>
+  focus.kind === 'zoom' ? focus.id : null;
+
+export const focusedCursorRegionId = (focus: TimelineFocus): string | null =>
+  focus.kind === 'cursorRegion' ? focus.id : null;
+
+export const isEditingFocalPoint = (focus: TimelineFocus): boolean =>
+  focus.kind === 'zoom' && focus.editingFocalPoint;
+
 function sortZoomRegions(zoomRegions: ZoomRegion[]): ZoomRegion[] {
   return [...zoomRegions].sort((a, b) => a.startMs - b.startMs);
 }
@@ -70,10 +101,7 @@ interface TimelineState {
   zoomSource: ZoomSource;
   zoomRegions: ZoomRegion[];
   zoomRegionsBySource: ZoomRegionsBySource;
-  selectedCutId: string | null;
-  selectedZoomId: string | null;
-  selectedCursorRegionId: string | null;
-  isEditingFocalPoint: boolean;
+  focus: TimelineFocus;
 
   // Actions
   setCuts: (cuts: CutRegion[]) => void;
@@ -84,16 +112,17 @@ interface TimelineState {
   addCut: (startMs: number, endMs: number, targets?: CutRegion['targets']) => Promise<void>;
   removeCut: (cutId: string) => Promise<void>;
   updateCut: (cut: CutRegion) => Promise<void>;
-  setSelectedCut: (cutId: string | null) => void;
+  focusCut: (cutId: string) => void;
 
   addZoom: (startMs: number, endMs: number, source?: ZoomSource) => Promise<void>;
   removeZoom: (zoomId: string, source?: ZoomSource) => Promise<void>;
   updateZoom: (zoom: ZoomRegion, source?: ZoomSource) => Promise<void>;
   updateZoomRegions: (zooms: ZoomRegion[], source?: ZoomSource) => Promise<void>;
   replaceZoomRegions: (zooms: ZoomRegion[], source?: ZoomSource) => Promise<void>;
-  setSelectedZoom: (zoomId: string | null) => void;
-  setSelectedCursorRegion: (regionId: string | null) => void;
-  setIsEditingFocalPoint: (isEditing: boolean) => void;
+  focusZoom: (zoomId: string) => void;
+  focusCursorRegion: (regionId: string) => void;
+  clearFocus: () => void;
+  setEditingFocalPoint: (isEditing: boolean) => void;
 
   // Reset
   reset: () => void;
@@ -116,10 +145,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
     screen: [],
     webcam: [],
   },
-  selectedCutId: null,
-  selectedZoomId: null,
-  selectedCursorRegionId: null,
-  isEditingFocalPoint: false,
+  focus: NO_FOCUS,
 
   setCuts: (cuts) => set({ cuts: normalizeCuts(cuts) }),
   setZoomRegions: (zoomRegions, source) => {
@@ -167,9 +193,11 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
           zoomSource: source,
           zoomRegionsBySource: nextBySource,
           zoomRegions: sortedZoomRegions,
-          selectedZoomId: sortedZoomRegions.some((zoom) => zoom.id === state.selectedZoomId)
-            ? state.selectedZoomId
-            : null,
+          focus:
+            state.focus.kind === 'zoom' &&
+            !sortedZoomRegions.some((zoom) => zoom.id === focusedZoomId(state.focus))
+              ? NO_FOCUS
+              : state.focus,
         };
       });
     } catch (err) {
@@ -202,7 +230,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
       await window.electron.editor.removeCut(cutId);
       set((state) => ({
         cuts: state.cuts.filter((c) => c.id !== cutId),
-        selectedCutId: state.selectedCutId === cutId ? null : state.selectedCutId,
+        focus: state.focus.kind === 'cut' && state.focus.id === cutId ? NO_FOCUS : state.focus,
       }));
     } catch (err) {
       console.error('[TimelineStore] removeCut error:', err);
@@ -221,7 +249,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
     }
   },
 
-  setSelectedCut: (cutId) => set({ selectedCutId: cutId }),
+  focusCut: (cutId) => set({ focus: { kind: 'cut', id: cutId } }),
 
   addZoom: async (startMs, endMs, source) => {
     const resolvedSource = source ?? get().zoomSource;
@@ -269,7 +297,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
           resolvedSource === state.zoomSource
             ? state.zoomRegions.filter((z) => z.id !== zoomId)
             : state.zoomRegions,
-        selectedZoomId: state.selectedZoomId === zoomId ? null : state.selectedZoomId,
+        focus: state.focus.kind === 'zoom' && state.focus.id === zoomId ? NO_FOCUS : state.focus,
       }));
     } catch (err) {
       console.error('[TimelineStore] removeZoom error:', err);
@@ -344,18 +372,29 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
           [resolvedSource]: sorted,
         },
         zoomRegions: resolvedSource === state.zoomSource ? sorted : state.zoomRegions,
-        selectedZoomId: sorted.some((zoom) => zoom.id === state.selectedZoomId)
-          ? state.selectedZoomId
-          : null,
+        focus:
+          state.focus.kind === 'zoom' &&
+          !sorted.some((zoom) => zoom.id === focusedZoomId(state.focus))
+            ? NO_FOCUS
+            : state.focus,
       }));
     } catch (err) {
       console.error('[TimelineStore] replaceZoomRegions error:', err);
     }
   },
 
-  setSelectedZoom: (zoomId) => set({ selectedZoomId: zoomId }),
-  setSelectedCursorRegion: (regionId) => set({ selectedCursorRegionId: regionId }),
-  setIsEditingFocalPoint: (isEditing) => set({ isEditingFocalPoint: isEditing }),
+  focusZoom: (zoomId) => set({ focus: { kind: 'zoom', id: zoomId, editingFocalPoint: false } }),
+  focusCursorRegion: (regionId) => set({ focus: { kind: 'cursorRegion', id: regionId } }),
+  clearFocus: () => set({ focus: NO_FOCUS }),
+
+  // Focal-point editing only exists while a zoom is focused, so this is a no-op
+  // otherwise rather than a flag that outlives its subject.
+  setEditingFocalPoint: (isEditing) =>
+    set((state) =>
+      state.focus.kind === 'zoom'
+        ? { focus: { ...state.focus, editingFocalPoint: isEditing } }
+        : state,
+    ),
 
   reset: () =>
     set({
@@ -366,9 +405,6 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
         screen: [],
         webcam: [],
       },
-      selectedCutId: null,
-      selectedZoomId: null,
-      selectedCursorRegionId: null,
-      isEditingFocalPoint: false,
+      focus: NO_FOCUS,
     }),
 }));

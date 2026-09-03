@@ -101,7 +101,16 @@ export async function appendMixedAudioTrack(
   sourceDurationSeconds: number,
   compositionDurationSeconds: number,
   isCancelRequested: () => boolean,
-  onProgress?: (fraction: number) => void,
+  /**
+   * `phase` is shown to the user; `indeterminate` says this step cannot report
+   * its own progress, so the bar should animate rather than sit on a number.
+   *
+   * Two steps here are single blocking calls with no progress events of their
+   * own -- rendering the mix and writing the container -- and between them they
+   * are most of the wall time on a long recording. Without a label the export
+   * looks hung.
+   */
+  onProgress?: (fraction: number, phase?: string, indeterminate?: boolean) => void,
 ): Promise<ArrayBuffer> {
   const {
     ALL_FORMATS,
@@ -193,7 +202,7 @@ export async function appendMixedAudioTrack(
       return renderedBuffer;
     }
 
-    onProgress?.(0.1);
+    onProgress?.(0.1, 'Reading audio tracks');
 
     const readTimedAudioBuffers = async (
       audioTrack: ConstructorParameters<typeof AudioBufferSink>[0],
@@ -250,7 +259,7 @@ export async function appendMixedAudioTrack(
         });
       });
     }
-    onProgress?.(0.3);
+    onProgress?.(0.3, 'Reading audio tracks');
 
     if (mappedExtraAudioBuffers.length === 0) {
       return renderedBuffer;
@@ -327,9 +336,19 @@ export async function appendMixedAudioTrack(
     renderedAudioBuffers.forEach(scheduleTimedBuffer);
     mappedExtraAudioBuffers.forEach(scheduleTimedBuffer);
 
+    // `startRendering` renders the whole mix in one call and resolves once,
+    // with nothing in between. On a long recording that is several seconds
+    // during which the only honest thing to show is what it is doing.
+    //
+    // `OfflineAudioContext.suspend` could turn this into real progress -- it
+    // resolves at a given time and holds the render until `resume`. It is not
+    // used here on purpose: a suspend whose resume never fires leaves
+    // `startRendering` pending forever, and an export that hangs is a worse
+    // bug than a bar that does not move.
+    onProgress?.(0.3, 'Mixing audio', true);
     const mixedAudioBuffer = await mixContext.startRendering();
     normaliseAudioBufferInPlace(mixedAudioBuffer);
-    onProgress?.(0.5);
+    onProgress?.(0.5, 'Mixing audio');
 
     remuxOutput = new Output({
       format: new Mp4OutputFormat({ fastStart: 'in-memory' }),
@@ -370,7 +389,7 @@ export async function appendMixedAudioTrack(
       // Report remux progress in the 50%–85% range (packet count isn't known upfront,
       // so we use a diminishing-returns curve that asymptotically approaches 0.85).
       if (packetIndex % 20 === 0) {
-        onProgress?.(0.5 + 0.35 * (1 - 1 / (1 + packetIndex / 200)));
+        onProgress?.(0.5 + 0.35 * (1 - 1 / (1 + packetIndex / 200)), 'Writing video');
       }
       renderedVideoPacket = await renderedVideoSink.getNextPacket(renderedVideoPacket);
     }
@@ -385,8 +404,12 @@ export async function appendMixedAudioTrack(
     }
 
     await mixedAudioSource.add(mixedAudioBuffer);
-    onProgress?.(0.9);
 
+    // The second silent stretch: finalising writes the container's index, which
+    // for `fastStart: 'in-memory'` means moving the whole moov atom to the
+    // front. One call, no events, and it is the last thing standing between the
+    // user and their file.
+    onProgress?.(0.9, 'Writing file', true);
     await remuxOutput.finalize();
     return remuxTarget.buffer ?? renderedBuffer;
   } catch (error) {

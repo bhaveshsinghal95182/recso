@@ -14,7 +14,7 @@ import type {
 } from 'mediabunny';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { DesktopSource, RecorderState } from '@/types';
+import type { DesktopSource, RecorderState, StopRecordingResult } from '@/types';
 
 interface UseScreenRecorderOptions {
   frameRate?: number;
@@ -34,7 +34,11 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
   const [error, setError] = useState<string | null>(null);
 
   const recordingIdRef = useRef<string | null>(null);
-  const isStoppingRef = useRef(false);
+  // The stop pass in flight, if any. Held as a promise rather than a boolean so
+  // a second stop trigger joins the real work instead of being told it already
+  // succeeded — the editor opens off this result, and a premature success sends
+  // it at a recording that is still being written.
+  const stopPassRef = useRef<Promise<StopRecordingResult> | null>(null);
 
   const pipelinesRef = useRef<{
     outputs: OutputType[];
@@ -103,6 +107,12 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
 
   useEffect(() => {
     const unsubscribe = window.electron.recorder.onStateChange((newState) => {
+      // A poll queued before the stop can still land mid-finalize; taking it
+      // would flip the UI back to 'recording' and make the stop look ignored.
+      if (stopPassRef.current) {
+        return;
+      }
+
       setState({
         status: newState.state.toLowerCase() as 'idle' | 'recording' | 'paused',
         recordingId: newState.recordingId,
@@ -128,39 +138,50 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
     };
   }, [refreshSources, resetPipelines]);
 
-  const stopRecordingInternal = useCallback(async () => {
-    if (isStoppingRef.current) {
-      return { success: true };
+  const stopRecordingInternal = useCallback((): Promise<StopRecordingResult> => {
+    const inFlight = stopPassRef.current;
+    if (inFlight) {
+      return inFlight;
     }
 
-    isStoppingRef.current = true;
+    const pass = (async (): Promise<StopRecordingResult> => {
+      try {
+        // Announce the finalize before any of the slow work starts, so the
+        // button reacts to the very first click.
+        setState((current) => ({ ...current, status: 'stopping' }));
 
-    try {
-      await stopAuxPipelines();
+        await stopAuxPipelines();
 
-      const recordingId = recordingIdRef.current;
-      if (!recordingId) {
-        return { success: false, error: 'No active recording' };
+        const recordingId = recordingIdRef.current;
+        if (!recordingId) {
+          return { success: false, error: 'No active recording' };
+        }
+
+        const result = await window.electron.recorder.stop(recordingId);
+        recordingIdRef.current = null;
+
+        setState({
+          status: 'idle',
+          recordingId: null,
+          duration: 0,
+          bytesWritten: 0,
+        });
+
+        return result;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to stop recording';
+        setError(message);
+        setState((current) => ({ ...current, status: 'idle' }));
+        return { success: false, error: message };
       }
+    })();
 
-      const result = await window.electron.recorder.stop(recordingId);
-      recordingIdRef.current = null;
+    stopPassRef.current = pass;
+    void pass.finally(() => {
+      stopPassRef.current = null;
+    });
 
-      setState({
-        status: 'idle',
-        recordingId: null,
-        duration: 0,
-        bytesWritten: 0,
-      });
-
-      return result;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to stop recording';
-      setError(message);
-      return { success: false, error: message };
-    } finally {
-      isStoppingRef.current = false;
-    }
+    return pass;
   }, [stopAuxPipelines]);
 
   const startRecording = useCallback(
@@ -525,5 +546,6 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
     resumeRecording,
     isRecording: state.status === 'recording',
     isPaused: state.status === 'paused',
+    isStopping: state.status === 'stopping',
   };
 }

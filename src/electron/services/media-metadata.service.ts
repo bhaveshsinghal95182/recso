@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { openAsBlob } from 'fs';
 
 export interface VideoMetadata {
   duration: number;
@@ -16,7 +17,7 @@ export async function probeVideoMetadata(filePath: string): Promise<VideoMetadat
   const { ALL_FORMATS, BlobSource, Input } = await import('mediabunny');
 
   const fileBuffer = await fs.promises.readFile(filePath);
-  const sourceBlob = new Blob([fileBuffer]);
+  const sourceBlob = await openAsBlob(fileBuffer);
 
   const input = new Input({
     source: new BlobSource(sourceBlob),

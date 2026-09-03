@@ -22,6 +22,7 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
     resumeRecording,
     isRecording,
     isPaused,
+    isStopping,
   } = useScreenRecorder();
 
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
@@ -133,12 +134,14 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
         isLoading={isLoading}
         isRecording={isRecording}
         isPaused={isPaused}
+        isStopping={isStopping}
         recordCamera={recordCamera}
         cameraDeviceId={cameraDeviceId}
         onRefresh={handleRefreshSources}
       />
 
       <FloatingRecorderToolbar
+        isStopping={isStopping}
         sources={sources}
         selectedSourceId={selectedSourceId}
         selectedSource={selectedSource}

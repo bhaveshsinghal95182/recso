@@ -11,6 +11,7 @@ interface CapturePreviewStageProps {
   isLoading: boolean;
   isRecording: boolean;
   isPaused: boolean;
+  isStopping: boolean;
   recordCamera: boolean;
   cameraDeviceId: string | null;
   onRefresh: () => void;
@@ -21,11 +22,12 @@ export function CapturePreviewStage({
   isLoading,
   isRecording,
   isPaused,
+  isStopping,
   recordCamera,
   cameraDeviceId,
   onRefresh,
 }: CapturePreviewStageProps) {
-  const isActive = isRecording || isPaused;
+  const isActive = isRecording || isPaused || isStopping;
   const cornerBase =
     'absolute h-7 w-7 border-[#5eead4] drop-shadow-[0_0_12px_rgba(94,234,212,0.55)]';
 

@@ -104,26 +104,22 @@ function ConfettiTrigger() {
 export function ExportModal({ open, onOpenChange }: ExportModalProps) {
   const { project, mouseEvents } = useProjectStore();
   const { zoomRegionsBySource } = useTimelineStore();
-  const {
-    state: exportState,
-    progress,
-    result,
-    setExportState,
-    setProgress,
-    setResult,
-    setModalOpen,
-    reset,
-  } = useExportStore();
+  const { phase, startExport, reportProgress, completeExport, failExport, setModalOpen, reset } =
+    useExportStore();
 
-  // Map export store state to modal step
+  // Map export phase to modal step
   const step: ExportStep =
-    exportState === 'idle'
+    phase.kind === 'idle'
       ? 'configure'
-      : exportState === 'exporting'
+      : phase.kind === 'exporting'
         ? 'exporting'
-        : exportState === 'complete'
+        : phase.kind === 'complete'
           ? 'complete'
           : 'error';
+
+  const progress = phase.kind === 'exporting' ? phase.progress : null;
+  const result = phase.kind === 'complete' ? phase.result : null;
+  const errorMessage = phase.kind === 'error' ? phase.message : null;
 
   // Export configuration state
   const [resolution, setResolution] = useState<ExportResolution>('1080p');
@@ -145,7 +141,7 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
   const prevOpenRef = useRef(false);
 
   // Reset state and pause playback when modal first opens (closed→open transition).
-  // We intentionally do NOT react to exportState changes here — doing so would
+  // We intentionally do NOT react to phase changes here — doing so would
   // reset the 'complete'/'error' states before the user sees them.
   useEffect(() => {
     const wasOpen = prevOpenRef.current;
@@ -153,7 +149,7 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
 
     if (open && !wasOpen) {
       // Only reset if not currently exporting
-      if (exportState !== 'exporting') {
+      if (phase.kind !== 'exporting') {
         reset();
       }
       // Pause playback to prevent high-frequency re-renders from currentTime updates
@@ -163,7 +159,7 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
         pause();
       }
     }
-  }, [open, exportState, reset]);
+  }, [open, phase.kind, reset]);
 
   const handleExport = useCallback(async () => {
     if (!project) return;
@@ -181,16 +177,7 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
       glRenderer: 'angle', // Enable GPU acceleration
     };
 
-    setExportState('exporting');
-    setProgress({
-      percent: 0,
-      currentFrame: 0,
-      totalFrames: 0,
-      fps: 0,
-      eta: 0,
-      stage: 'composition',
-      stagePercent: 0,
-    });
+    startExport();
 
     try {
       const outputPath = await window.electron.exporter.resolveOutputPath(config);
@@ -205,7 +192,7 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
         webcamZoomRegions: zoomRegionsBySource.webcam,
         mouseEvents,
         onProgress: (nextProgress) => {
-          setProgress(nextProgress);
+          reportProgress(nextProgress);
         },
         onCancelReady: (cancel) => {
           exportCancelRef.current = cancel;
@@ -220,13 +207,11 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
         throw new Error(writeResult.error || 'Failed to save exported file');
       }
 
-      setResult({
-        success: true,
+      completeExport({
         outputPath: writeResult.outputPath,
         duration: rendered.durationSeconds,
         fileSize: writeResult.fileSize ?? rendered.fileSize,
       });
-      setExportState('complete');
 
       // Trigger confetti
       confetti({
@@ -243,11 +228,7 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
         return;
       }
 
-      setResult({
-        success: false,
-        error: message,
-      });
-      setExportState('error');
+      failExport(message);
     } finally {
       exportCancelRef.current = null;
     }
@@ -262,9 +243,10 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
     fileName,
     outputFolder,
     zoomRegionsBySource,
-    setExportState,
-    setProgress,
-    setResult,
+    startExport,
+    reportProgress,
+    completeExport,
+    failExport,
     reset,
   ]);
 
@@ -465,14 +447,26 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
               <div className="space-y-2">
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">
-                    {progress.stage === 'composition' ? 'Compositing...' : 'Finalizing...'}
+                    {progress.phase ||
+                      (progress.stage === 'composition' ? 'Compositing...' : 'Finalizing...')}
                   </span>
-                  <span className="font-medium">{progress.percent}%</span>
+                  {/*
+                    Hidden while the current step cannot report progress. The
+                    percentage would simply stop moving, which reads as a hang
+                    -- the label and the sweeping bar say "working" honestly.
+                  */}
+                  {!progress.indeterminate && (
+                    <span className="font-medium">{progress.percent}%</span>
+                  )}
                 </div>
                 <div className="h-2 bg-muted rounded-full overflow-hidden">
                   <div
-                    className="h-full bg-primary transition-all duration-300 ease-out"
-                    style={{ width: `${progress.percent}%` }}
+                    className={
+                      progress.indeterminate
+                        ? 'h-full w-1/3 bg-primary animate-[export-indeterminate_1.2s_ease-in-out_infinite]'
+                        : 'h-full bg-primary transition-all duration-300 ease-out'
+                    }
+                    style={progress.indeterminate ? undefined : { width: `${progress.percent}%` }}
                   />
                 </div>
               </div>
@@ -485,7 +479,9 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
                 </div>
                 <div className="bg-muted/50 rounded-lg p-3">
                   <div className="text-muted-foreground text-xs mb-1">Time Remaining</div>
-                  <div className="font-medium">{formatETA(progress.eta)}</div>
+                  <div className="font-medium">
+                    {progress.indeterminate ? 'Almost there' : formatETA(progress.eta)}
+                  </div>
                 </div>
               </div>
 
@@ -602,7 +598,7 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
           )}
 
           {/* Error Step */}
-          {step === 'error' && result && (
+          {step === 'error' && errorMessage && (
             <div className="space-y-4">
               <div className="flex items-center justify-center py-4">
                 <div className="size-16 bg-destructive/10 rounded-full flex items-center justify-center">
@@ -612,7 +608,7 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
 
               <div className="text-center space-y-1">
                 <p className="font-medium text-destructive">Export Failed</p>
-                <p className="text-sm text-muted-foreground">{result.error || 'Unknown error'}</p>
+                <p className="text-sm text-muted-foreground">{errorMessage}</p>
               </div>
 
               <Button onClick={() => reset()} className="w-full">
