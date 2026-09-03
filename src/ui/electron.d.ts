@@ -180,6 +180,21 @@ export interface EngineColour {
 }
 
 /**
+ * How much of each edge of the recording to throw away.
+ *
+ * Fractions of the visible frame rather than pixels, so a crop survives the
+ * recording being scaled. The kept region is stretched across whatever rect
+ * `setLayout` was given, so a crop that changes the aspect ratio wants a
+ * matching rect.
+ */
+export interface EngineSourceCrop {
+  top: number;
+  left: number;
+  bottom: number;
+  right: number;
+}
+
+/**
  * A span of the recording to leave out.
  *
  * In source time -- where it sits in the file. Everything the player reports
@@ -357,6 +372,8 @@ export interface EngineAPI {
      * and duration reported afterwards are in composition time.
      */
     setCuts: (regions: EngineCutRegion[]) => Promise<void>;
+    /** Throw away the edges of the recording. `null` keeps all of it. */
+    setSourceCrop: (crop: EngineSourceCrop | null) => Promise<void>;
     /** The edit's length: the file's duration less what has been cut. */
     compositionDuration: () => Promise<number>;
     /** What fills the canvas behind the video. */

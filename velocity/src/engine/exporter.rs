@@ -23,7 +23,9 @@ use crate::engine::cuts::{Cut, CutTrack};
 use crate::engine::decode::Decoder;
 use crate::engine::encode::Encoder;
 use crate::engine::player::{advance_webcam, CursorImage, WebcamSync};
-use crate::engine::render::{Background, BackgroundRequest, EffectParams, RenderChain, VideoLayout};
+use crate::engine::render::{
+  Background, BackgroundRequest, EffectParams, RenderChain, SourceCrop, VideoLayout,
+};
 use crate::engine::zoom::{ZoomRegion, ZoomTrack};
 
 pub struct Options {
@@ -64,6 +66,8 @@ pub struct Options {
   pub zoom_regions: Vec<ZoomRegion>,
   /// Spans of the *source* to leave out. Empty exports the whole range.
   pub cuts: Vec<Cut>,
+  /// Edges of the recording to throw away. `None` keeps all of it.
+  pub crop: Option<SourceCrop>,
 }
 
 pub struct Shared {
@@ -297,6 +301,7 @@ fn run(shared: &Arc<Shared>, options: Options) -> Result<()> {
   chain.set_cursor_style(options.cursor_size, options.cursor_opacity);
   chain.set_zoom_track(ZoomTrack::new(options.zoom_regions));
   let cuts = CutTrack::new(options.cuts);
+  chain.set_source_crop(options.crop);
 
   stage("create encoder");
 

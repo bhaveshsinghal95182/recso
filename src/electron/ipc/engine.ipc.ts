@@ -43,6 +43,7 @@ import type {
   CursorPoint,
   CutRegion,
   ExportOptions,
+  SourceCropSpec,
   VideoPlacement,
   WebcamOverlay,
   ZoomRegion,
@@ -175,6 +176,10 @@ export function registerEngineHandlers(): void {
 
   ipcMain.handle('engine:player:cuts', (_event, regions: CutRegion[]) => {
     requirePlayer().setCuts(regions);
+  });
+
+  ipcMain.handle('engine:player:source-crop', (_event, crop: SourceCropSpec | null) => {
+    requirePlayer().setSourceCrop(crop);
   });
 
   ipcMain.handle('engine:player:composition-duration', () => requirePlayer().compositionDuration());

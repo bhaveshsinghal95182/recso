@@ -194,6 +194,8 @@ export declare class VideoPlayer {
    * shorter.
    */
   setCuts(regions: Array<CutRegion>): void
+  /** Throw away the edges of the recording. Pass `null` to keep all of it. */
+  setSourceCrop(crop?: SourceCropSpec | undefined | null): void
   /** Cuts the decode thread has loaded. Applied asynchronously. */
   cutCount(): number
   /**
@@ -363,6 +365,8 @@ export interface ExportOptions {
   zoomRegions?: Array<ZoomRegion>
   /** Spans of the source to leave out. Omit and the whole range is exported. */
   cuts?: Array<CutRegion>
+  /** Edges of the recording to throw away. Omit to keep all of it. */
+  crop?: SourceCropSpec
   /** Cursor height in destination pixels. Defaults to 22, matching the editor. */
   cursorSize?: number
   /** Clamped to 0..1. Defaults to 1. */
@@ -586,6 +590,21 @@ export interface SharedTextureInfo {
   pixelFormat: string
   /** Microseconds, surfaced on the resulting `VideoFrame`. */
   timestamp: number
+}
+
+/**
+ * How much of each edge of the recording to throw away.
+ *
+ * Fractions of the visible frame rather than pixels, so a crop survives the
+ * recording being scaled. Cropping does not resize anything: the kept region is
+ * stretched across whatever rect `setLayout` was given, so a crop that changes
+ * the aspect ratio wants a matching rect.
+ */
+export interface SourceCropSpec {
+  top: number
+  left: number
+  bottom: number
+  right: number
 }
 
 export declare function startMonitorRecording(

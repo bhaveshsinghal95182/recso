@@ -260,6 +260,9 @@ export const engineBridge = {
      * player reports afterwards is in composition time.
      */
     setCuts: (regions: unknown[]) => invoke('engine:player:cuts', regions),
+    /** Throw away the edges of the recording. `null` keeps all of it. */
+    setSourceCrop: (crop: Record<string, unknown> | null) =>
+      invoke('engine:player:source-crop', crop),
     /** The edit's length: the file's duration less what has been cut. */
     compositionDuration: () => invoke('engine:player:composition-duration'),
     /**

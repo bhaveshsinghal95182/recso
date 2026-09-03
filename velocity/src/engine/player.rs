@@ -27,7 +27,7 @@ use crate::engine::composite::{CursorSample, CursorTrack, SpriteTexture, WebcamL
 use crate::engine::d3d::{gpu, SharedTexture, Sharing};
 use crate::engine::decode::Decoder;
 use crate::engine::render::{
-  create_rtv, Background, BackgroundRequest, EffectParams, RenderChain,
+  create_rtv, Background, BackgroundRequest, EffectParams, RenderChain, SourceCrop,
   VideoLayout as RenderVideoLayout,
 };
 use crate::engine::cuts::{Cut, CutTrack};
@@ -195,6 +195,7 @@ enum Command {
   SetBackground(BackgroundRequest),
   SetZoomRegions(Vec<ZoomRegion>),
   SetCuts(Vec<Cut>),
+  SetSourceCrop(Option<SourceCrop>),
   SetWebcamLayout(WebcamLayout),
   SetCursorImage(Option<CursorImage>),
   SetCursorTrack(Vec<CursorSample>),
@@ -450,6 +451,12 @@ impl Player {
   /// in composition time: where things sit in the edit.
   pub fn set_cuts(&self, cuts: Vec<Cut>) {
     let _ = self.tx.send(Command::SetCuts(cuts));
+    self.shared.space.notify_all();
+  }
+
+  /// Throw away the edges of the recording.
+  pub fn set_source_crop(&self, crop: Option<SourceCrop>) {
+    let _ = self.tx.send(Command::SetSourceCrop(crop));
     self.shared.space.notify_all();
   }
 
@@ -767,6 +774,7 @@ fn decode_loop(
     let mut pending_background: Option<BackgroundRequest> = None;
     let mut pending_zoom: Option<Vec<ZoomRegion>> = None;
     let mut pending_cuts: Option<Vec<Cut>> = None;
+    let mut pending_crop: Option<Option<SourceCrop>> = None;
     let mut pending_seek: Option<(f64, SeekMode)> = None;
     let mut pending_webcam_layout: Option<WebcamLayout> = None;
     let mut pending_cursor_image: Option<Option<CursorImage>> = None;
@@ -786,6 +794,7 @@ fn decode_loop(
         Ok(Command::SetBackground(background)) => pending_background = Some(background),
         Ok(Command::SetZoomRegions(regions)) => pending_zoom = Some(regions),
         Ok(Command::SetCuts(regions)) => pending_cuts = Some(regions),
+        Ok(Command::SetSourceCrop(crop)) => pending_crop = Some(crop),
         Ok(Command::SetWebcamLayout(layout)) => pending_webcam_layout = Some(layout),
         Ok(Command::SetCursorImage(image)) => pending_cursor_image = Some(image),
         Ok(Command::SetCursorTrack(samples)) => pending_cursor_track = Some(samples),
@@ -819,6 +828,11 @@ fn decode_loop(
 
     if let Some(params) = pending_webcam_effects {
       chain.set_webcam_params(params);
+      needs_repaint = true;
+    }
+
+    if let Some(crop) = pending_crop {
+      chain.set_source_crop(crop);
       needs_repaint = true;
     }
 

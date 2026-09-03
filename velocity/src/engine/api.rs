@@ -814,6 +814,31 @@ impl From<ZoomRegion> for zoom::ZoomRegion {
   }
 }
 
+/// How much of each edge of the recording to throw away.
+///
+/// Fractions of the visible frame rather than pixels, so a crop survives the
+/// recording being scaled. Cropping does not resize anything: the kept region is
+/// stretched across whatever rect `setLayout` was given, so a crop that changes
+/// the aspect ratio wants a matching rect.
+#[napi(object)]
+pub struct SourceCropSpec {
+  pub top: f64,
+  pub left: f64,
+  pub bottom: f64,
+  pub right: f64,
+}
+
+impl From<SourceCropSpec> for render::SourceCrop {
+  fn from(spec: SourceCropSpec) -> Self {
+    render::SourceCrop {
+      top: spec.top as f32,
+      left: spec.left as f32,
+      bottom: spec.bottom as f32,
+      right: spec.right as f32,
+    }
+  }
+}
+
 /// A span of the recording to leave out.
 ///
 /// In *source* time -- where it sits in the file. Everything the player reports
@@ -1073,6 +1098,14 @@ impl VideoPlayer {
       .set_cuts(regions.into_iter().map(cuts::Cut::from).collect());
   }
 
+  /// Throw away the edges of the recording. Pass `null` to keep all of it.
+  #[napi]
+  pub fn set_source_crop(&self, crop: Option<SourceCropSpec>) {
+    self
+      .inner
+      .set_source_crop(crop.map(render::SourceCrop::from));
+  }
+
   /// Cuts the decode thread has loaded. Applied asynchronously.
   #[napi]
   pub fn cut_count(&self) -> f64 {
@@ -1203,6 +1236,8 @@ pub struct ExportOptions {
   pub zoom_regions: Option<Vec<ZoomRegion>>,
   /// Spans of the source to leave out. Omit and the whole range is exported.
   pub cuts: Option<Vec<CutRegion>>,
+  /// Edges of the recording to throw away. Omit to keep all of it.
+  pub crop: Option<SourceCropSpec>,
   /// Cursor height in destination pixels. Defaults to 22, matching the editor.
   pub cursor_size: Option<f64>,
   /// Clamped to 0..1. Defaults to 1.
@@ -1324,6 +1359,7 @@ impl VideoExporter {
           .into_iter()
           .map(cuts::Cut::from)
           .collect(),
+        crop: options.crop.map(render::SourceCrop::from),
         cursor_size: options.cursor_size.unwrap_or(22.0) as f32,
         cursor_opacity: options.cursor_opacity.unwrap_or(1.0).clamp(0.0, 1.0) as f32,
       }),

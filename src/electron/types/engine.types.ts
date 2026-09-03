@@ -125,6 +125,8 @@ export interface ExportOptions {
   zoomRegions?: ZoomRegion[];
   /** Spans of the source to leave out. Omit and the whole range is exported. */
   cuts?: CutRegion[];
+  /** Edges of the recording to throw away. Omit to keep all of it. */
+  crop?: SourceCropSpec;
   /** The camera sidecar. Without it the export has no webcam overlay. */
   webcamPath?: string;
   /** Where the camera goes -- the same value passed to `setWebcamLayout`. */
@@ -220,6 +222,8 @@ export interface VideoPlayerInstance {
   setZoomRegions(regions: ZoomRegion[]): void;
   /** Remove spans of the recording. Regions are in source time. */
   setCuts(regions: CutRegion[]): void;
+  /** Throw away the edges of the recording. `null` keeps all of it. */
+  setSourceCrop(crop: SourceCropSpec | null): void;
   /** Cuts loaded. Applied asynchronously. */
   cutCount(): number;
   /** The edit's length: the file's duration less what has been cut. */
@@ -402,6 +406,21 @@ export interface BackgroundSpec {
   colour?: Colour;
   /** Tightly packed RGBA8, stretched over the canvas. */
   image?: CursorBitmap;
+}
+
+/**
+ * How much of each edge of the recording to throw away.
+ *
+ * Fractions of the visible frame rather than pixels, so a crop survives the
+ * recording being scaled. Cropping does not resize anything -- the kept region
+ * is stretched across whatever rect `setLayout` was given, so a crop that
+ * changes the aspect ratio wants a matching rect.
+ */
+export interface SourceCropSpec {
+  top: number;
+  left: number;
+  bottom: number;
+  right: number;
 }
 
 /**

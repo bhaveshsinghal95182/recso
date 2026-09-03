@@ -153,6 +153,62 @@ pub struct BackgroundRequest {
   pub image: Option<RgbaImage>,
 }
 
+/// How much of each edge of the recording to throw away.
+///
+/// Fractions of the visible frame, not pixels, so a crop survives the recording
+/// being scaled. Matches the editor's `SourceCropConfig`, including its refusal
+/// to crop away more than 95% of either axis -- a crop that leaves nothing is
+/// almost always a slider that got dragged too far, and honouring it means
+/// sampling a sliver of texture across the whole video rect.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct SourceCrop {
+  pub top: f32,
+  pub left: f32,
+  pub bottom: f32,
+  pub right: f32,
+}
+
+/// The least of an axis a crop may leave, matching `MIN_VISIBLE_FRACTION`.
+const MIN_VISIBLE_FRACTION: f32 = 0.05;
+
+impl SourceCrop {
+  /// `None` when the crop is absent, nonsense, or a no-op -- so the render path
+  /// can skip it without re-deriving that.
+  pub fn resolve(self) -> Option<Self> {
+    let edge = |value: f32| {
+      if value.is_finite() {
+        value.clamp(0.0, 1.0 - MIN_VISIBLE_FRACTION)
+      } else {
+        0.0
+      }
+    };
+
+    let crop = Self {
+      top: edge(self.top),
+      left: edge(self.left),
+      bottom: edge(self.bottom),
+      right: edge(self.right),
+    };
+
+    if crop.width() < MIN_VISIBLE_FRACTION || crop.height() < MIN_VISIBLE_FRACTION {
+      return None;
+    }
+    if crop == Self::default() {
+      return None;
+    }
+
+    Some(crop)
+  }
+
+  fn width(&self) -> f32 {
+    1.0 - self.left - self.right
+  }
+
+  fn height(&self) -> f32 {
+    1.0 - self.top - self.bottom
+  }
+}
+
 /// Where the recording sits on the canvas, and what shape it is.
 ///
 /// Pixel coordinates in the canvas, like `WebcamLayout` -- the padding
@@ -276,6 +332,8 @@ pub struct RenderChain {
   /// Where the video sits on the canvas, and the background behind it.
   layout: VideoLayout,
   background: Background,
+  /// Which part of the recording is kept. `None` keeps all of it.
+  crop: Option<SourceCrop>,
 
   /// The webcam layer, when a recording has one.
   ///
@@ -517,6 +575,7 @@ impl RenderChain {
       video_bgra_srv,
       layout: VideoLayout::covering(canvas_width, canvas_height),
       background: Background::default(),
+      crop: None,
       output,
       output_rtv,
       output_srv,
@@ -567,18 +626,41 @@ impl RenderChain {
     self.webcam_params = params;
   }
 
+  /// Throw away the edges of the recording.
+  ///
+  /// This does not resize anything: the kept region is stretched across
+  /// whatever rect `set_layout` was given. Cropping to a different aspect ratio
+  /// and keeping the old rect will distort, so the caller sizes the rect from
+  /// the cropped dimensions -- the same division of labour as the webcam's box.
+  pub fn set_source_crop(&mut self, crop: Option<SourceCrop>) {
+    self.crop = crop.and_then(SourceCrop::resolve);
+  }
+
   /// Which part of the video's own texture is real picture.
   ///
   /// The macroblock padding is cropped here, on the quad that places the video,
   /// rather than on the way to the encoder -- so preview and export leave the
   /// same rows behind.
   fn video_uv(&self) -> UvRect {
+    // The visible picture occupies the top-left of the coded texture, so this
+    // is where it ends.
+    let visible = [
+      self.display_width as f32 / self.source_width.max(1) as f32,
+      self.display_height as f32 / self.source_height.max(1) as f32,
+    ];
+
+    let Some(crop) = self.crop else {
+      return UvRect {
+        scale: visible,
+        offset: [0.0, 0.0],
+      };
+    };
+
+    // The crop is a fraction of the *visible* frame, not of the texture, so it
+    // composes with the padding rather than replacing it.
     UvRect {
-      scale: [
-        self.display_width as f32 / self.source_width.max(1) as f32,
-        self.display_height as f32 / self.source_height.max(1) as f32,
-      ],
-      offset: [0.0, 0.0],
+      scale: [crop.width() * visible[0], crop.height() * visible[1]],
+      offset: [crop.left * visible[0], crop.top * visible[1]],
     }
   }
 
@@ -763,6 +845,23 @@ impl RenderChain {
     let sprite = self.cursor.as_ref()?;
     let sample = self.cursor_track.sample_at(timestamp_ms)?;
 
+    // Cursor positions are recorded against the whole frame, so a crop moves
+    // them: what was 50% across an uncropped frame is further right once the
+    // left edge is gone. A pointer that lands outside the kept region is not
+    // drawn at all, rather than clamped to the edge -- it genuinely is not on
+    // screen any more.
+    let (sample_x, sample_y) = match self.crop {
+      None => (sample.x, sample.y),
+      Some(crop) => {
+        let x = (sample.x - crop.left) / crop.width();
+        let y = (sample.y - crop.top) / crop.height();
+        if !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y) {
+          return None;
+        }
+        (x, y)
+      }
+    };
+
     // The image keeps its aspect ratio; `cursor_size` is its height.
     let scale = self.cursor_size / sprite.height.max(1) as f32;
     let width = sprite.width as f32 * scale;
@@ -777,8 +876,8 @@ impl RenderChain {
     // macroblock padding was never part of that picture either.
     let video = self.layout.rect;
     Some(Rect {
-      x: video.x + sample.x * video.width - sprite.hotspot_x * scale,
-      y: video.y + sample.y * video.height - sprite.hotspot_y * scale,
+      x: video.x + sample_x * video.width - sprite.hotspot_x * scale,
+      y: video.y + sample_y * video.height - sprite.hotspot_y * scale,
       width,
       height,
     })
@@ -1366,4 +1465,59 @@ pub fn create_rtv(gpu: &Gpu, texture: &ID3D11Texture2D) -> Result<ID3D11RenderTa
       .CreateRenderTargetView(texture, None, Some(&mut view))?
   };
   Ok(view.expect("rtv"))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn crop(top: f32, left: f32, bottom: f32, right: f32) -> SourceCrop {
+    SourceCrop {
+      top,
+      left,
+      bottom,
+      right,
+    }
+  }
+
+  #[test]
+  fn a_crop_of_nothing_is_no_crop() {
+    assert!(SourceCrop::default().resolve().is_none());
+  }
+
+  #[test]
+  fn a_real_crop_survives() {
+    let resolved = crop(0.1, 0.2, 0.1, 0.2).resolve().unwrap();
+    assert_eq!(resolved.width(), 0.6);
+    assert!((resolved.height() - 0.8).abs() < 1e-6);
+  }
+
+  #[test]
+  fn a_crop_that_leaves_nothing_is_refused() {
+    // Almost certainly a slider dragged too far. Honouring it would stretch a
+    // sliver of texture across the whole video rect.
+    assert!(crop(0.0, 0.5, 0.0, 0.5).resolve().is_none());
+    assert!(crop(0.99, 0.0, 0.99, 0.0).resolve().is_none());
+  }
+
+  #[test]
+  fn each_edge_is_clamped_before_the_pair_is_judged() {
+    // 2.0 on one edge alone would make the width negative, which reads as
+    // "refuse" rather than "clamp" unless the edges are clamped first.
+    let resolved = crop(0.0, 2.0, 0.0, 0.0).resolve().unwrap();
+    assert_eq!(resolved.left, 1.0 - MIN_VISIBLE_FRACTION);
+  }
+
+  #[test]
+  fn a_non_finite_edge_becomes_no_crop_on_that_edge() {
+    let resolved = crop(f32::NAN, 0.25, 0.0, 0.0).resolve().unwrap();
+    assert_eq!(resolved.top, 0.0);
+    assert_eq!(resolved.left, 0.25);
+  }
+
+  #[test]
+  fn a_negative_edge_clamps_to_zero() {
+    let resolved = crop(-0.5, 0.25, 0.0, 0.0).resolve().unwrap();
+    assert_eq!(resolved.top, 0.0);
+  }
 }
