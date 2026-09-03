@@ -186,6 +186,22 @@ export declare class VideoPlayer {
    */
   zoomRegionCount(): number
   /**
+   * Remove spans of the recording.
+   *
+   * Regions are in source time. Afterwards `compositionDuration` is the length
+   * of the edit rather than the file, and seeking and the playhead are in that
+   * same time -- so a cut is invisible to the caller beyond the video getting
+   * shorter.
+   */
+  setCuts(regions: Array<CutRegion>): void
+  /** Cuts the decode thread has loaded. Applied asynchronously. */
+  cutCount(): number
+  /**
+   * How long the edit runs, in milliseconds: the file's duration less whatever
+   * has been cut out of it.
+   */
+  compositionDuration(): number
+  /**
    * Grade the video layer. Applies to preview immediately, and the exporter
    * runs the same chain, so it applies to output too.
    *
@@ -281,6 +297,18 @@ export interface CursorPoint {
   visible?: boolean
 }
 
+/**
+ * A span of the recording to leave out.
+ *
+ * In *source* time -- where it sits in the file. Everything the player reports
+ * afterwards, its duration and playhead included, is in composition time:
+ * where things sit in the resulting edit.
+ */
+export interface CutRegion {
+  startMs: number
+  endMs: number
+}
+
 /** Sanity check that the addon loaded at all. */
 export declare function engineVersion(): string
 
@@ -333,6 +361,8 @@ export interface ExportOptions {
    * preview looks.
    */
   zoomRegions?: Array<ZoomRegion>
+  /** Spans of the source to leave out. Omit and the whole range is exported. */
+  cuts?: Array<CutRegion>
   /** Cursor height in destination pixels. Defaults to 22, matching the editor. */
   cursorSize?: number
   /** Clamped to 0..1. Defaults to 1. */

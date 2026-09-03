@@ -21,6 +21,7 @@
     "engine:pipeline": "node velocity/scripts/pipeline-check.mjs",
     "engine:composition": "node velocity/scripts/composition-check.mjs",
     "engine:export-composition": "node velocity/scripts/export-composition-check.mjs",
+    "engine:cuts": "node velocity/scripts/cuts-check.mjs",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier . --write",

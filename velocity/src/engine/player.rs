@@ -30,6 +30,7 @@ use crate::engine::render::{
   create_rtv, Background, BackgroundRequest, EffectParams, RenderChain,
   VideoLayout as RenderVideoLayout,
 };
+use crate::engine::cuts::{Cut, CutTrack};
 use crate::engine::zoom::{ZoomRegion, ZoomTrack};
 
 /// How far ahead of the playhead we decode.
@@ -122,6 +123,7 @@ pub struct Shared {
   /// taken the track on.
   cursor_samples: AtomicU64,
   zoom_regions: AtomicU64,
+  cut_count: AtomicU64,
   /// Present the next available frame regardless of the clock. Set after a
   /// seek and at startup, so a paused player still shows where it landed.
   force_present: AtomicBool,
@@ -192,6 +194,7 @@ enum Command {
   SetLayout(RenderVideoLayout),
   SetBackground(BackgroundRequest),
   SetZoomRegions(Vec<ZoomRegion>),
+  SetCuts(Vec<Cut>),
   SetWebcamLayout(WebcamLayout),
   SetCursorImage(Option<CursorImage>),
   SetCursorTrack(Vec<CursorSample>),
@@ -317,6 +320,7 @@ impl Player {
       has_webcam: AtomicBool::new(webcam.is_some()),
       cursor_samples: AtomicU64::new(0),
       zoom_regions: AtomicU64::new(0),
+      cut_count: AtomicU64::new(0),
       current: Mutex::new(None),
       repaint: AtomicBool::new(false),
       duration_ms: decoder.duration_100ns as f64 / 10_000.0,
@@ -439,6 +443,27 @@ impl Player {
     self.shared.zoom_regions.load(Ordering::Acquire)
   }
 
+  /// Remove spans of the recording.
+  ///
+  /// Cut regions are in *source* time -- where they sit in the file. Everything
+  /// the player reports afterwards, including `duration` and the playhead, is
+  /// in composition time: where things sit in the edit.
+  pub fn set_cuts(&self, cuts: Vec<Cut>) {
+    let _ = self.tx.send(Command::SetCuts(cuts));
+    self.shared.space.notify_all();
+  }
+
+  /// Cuts the decode thread has loaded. Applied asynchronously.
+  pub fn cut_count(&self) -> u64 {
+    self.shared.cut_count.load(Ordering::Acquire)
+  }
+
+  /// How long the edit runs, in milliseconds -- the file's duration less
+  /// whatever has been cut out of it.
+  pub fn composition_duration_ms(&self) -> f64 {
+    self.shared.clock.lock().unwrap().duration_ms
+  }
+
   /// Move or reshape the webcam box.
   ///
   /// Same mechanism as grading, and for the same reason: the frames already
@@ -494,12 +519,17 @@ impl Player {
   }
 
   pub fn seek(&self, ms: f64, mode: SeekMode) {
-    let clamped = ms.clamp(0.0, self.shared.duration_ms.max(0.0));
+    // Against the edit's length, not the file's: with cuts the two differ, and
+    // clamping to the file would let the playhead sit past the end of what
+    // there is to watch.
+    let mut clock = self.shared.clock.lock().unwrap();
+    let clamped = ms.clamp(0.0, clock.duration_ms.max(0.0));
     // Bump here rather than on the decode thread, so any frame queued between
     // now and the thread noticing is already stale and gets dropped by `tick`.
     self.shared.generation.fetch_add(1, Ordering::AcqRel);
     self.shared.force_present.store(true, Ordering::Release);
-    self.shared.clock.lock().unwrap().jump_to(clamped);
+    clock.jump_to(clamped);
+    drop(clock);
     let _ = self.tx.send(Command::Seek(clamped, mode));
     // Unblock the producer if it is sitting on a full queue.
     self.shared.space.notify_all();
@@ -722,6 +752,10 @@ fn decode_loop(
   let mut next_slot = 0usize;
   let mut previous_slot: Option<usize> = None;
   let mut webcam_sync = WebcamSync::default();
+  let mut cuts = CutTrack::default();
+  // Which cut the decoder has been sent past, so the pre-roll frames a seek
+  // lands on do not each trigger another seek to the same place.
+  let mut skipping_past: Option<f64> = None;
 
   while shared.running.load(Ordering::Acquire) {
     // Drain everything pending and keep only the last of each kind. A slider
@@ -732,6 +766,7 @@ fn decode_loop(
     let mut pending_layout: Option<RenderVideoLayout> = None;
     let mut pending_background: Option<BackgroundRequest> = None;
     let mut pending_zoom: Option<Vec<ZoomRegion>> = None;
+    let mut pending_cuts: Option<Vec<Cut>> = None;
     let mut pending_seek: Option<(f64, SeekMode)> = None;
     let mut pending_webcam_layout: Option<WebcamLayout> = None;
     let mut pending_cursor_image: Option<Option<CursorImage>> = None;
@@ -750,6 +785,7 @@ fn decode_loop(
         Ok(Command::SetLayout(layout)) => pending_layout = Some(layout),
         Ok(Command::SetBackground(background)) => pending_background = Some(background),
         Ok(Command::SetZoomRegions(regions)) => pending_zoom = Some(regions),
+        Ok(Command::SetCuts(regions)) => pending_cuts = Some(regions),
         Ok(Command::SetWebcamLayout(layout)) => pending_webcam_layout = Some(layout),
         Ok(Command::SetCursorImage(image)) => pending_cursor_image = Some(image),
         Ok(Command::SetCursorTrack(samples)) => pending_cursor_track = Some(samples),
@@ -789,6 +825,36 @@ fn decode_loop(
     if let Some(layout) = pending_layout {
       chain.set_layout(layout);
       needs_repaint = true;
+    }
+
+    if let Some(regions) = pending_cuts {
+      cuts = CutTrack::new(regions);
+      shared.cut_count.store(cuts.len() as u64, Ordering::Release);
+      // The edit just got longer or shorter, and the playhead is expressed in
+      // composition time -- so the clock's end has to move with it or playback
+      // runs off the end of a shortened edit.
+      {
+        let mut clock = shared.clock.lock().unwrap();
+        clock.duration_ms = cuts.composition_duration(shared.duration_ms);
+      }
+      // Everything queued was timed against the old cuts. Rather than trying to
+      // re-time it, throw it away and decode again from where the playhead now
+      // points.
+      let now = shared.clock.lock().unwrap().now_ms();
+      do_seek(
+        &shared,
+        &mut decoder,
+        &mut webcam,
+        &mut webcam_sync,
+        &mut chain,
+        &cuts,
+        &pool,
+        &pool_rtvs,
+        &mut next_slot,
+        now,
+        SeekMode::Exact,
+      );
+      continue;
     }
 
     if let Some(regions) = pending_zoom {
@@ -860,6 +926,7 @@ fn decode_loop(
         &mut webcam,
         &mut webcam_sync,
         &mut chain,
+        &cuts,
         &pool,
         &pool_rtvs,
         &mut next_slot,
@@ -912,6 +979,38 @@ fn decode_loop(
 
     let pts_ms = sample.timestamp_100ns as f64 / 10_000.0;
 
+    // This frame is not in the edit. Jump the decoder past the removed span
+    // rather than decoding through it: a ten-second cut is three hundred frames
+    // decoded only to be thrown away, and the playhead would stall visibly
+    // while it happened.
+    //
+    // The seek lands on the keyframe *before* the cut's end, so the frames
+    // after it are usually still inside the cut. `skipping_past` is what stops
+    // those from each seeking to the same place again, forever.
+    if let Some(cut_end_ms) = cuts.cut_end_at(pts_ms) {
+      if skipping_past != Some(cut_end_ms) {
+        skipping_past = Some(cut_end_ms);
+        let position = (cut_end_ms * 10_000.0) as i64;
+        if decoder.seek(position).is_err() {
+          shared.eof.store(true, Ordering::Release);
+        }
+        if let Some(webcam) = webcam.as_mut() {
+          chain.clear_webcam_staging();
+          webcam_sync = WebcamSync::default();
+          let _ = webcam.seek(position);
+        }
+        previous_slot = None;
+      }
+      continue;
+    }
+    skipping_past = None;
+
+    // Where this frame sits in the edit. The cursor track and the zoom timeline
+    // are authored against that, not against the file, so everything from here
+    // down runs on composition time -- except the webcam, whose sidecar shares
+    // the file's clock.
+    let composition_ms = cuts.to_composition(pts_ms);
+
     // Bring the other layers to this frame's time before compositing it. Both
     // are staged against the slot rather than applied globally, so re-rendering
     // this frame later puts the camera image and the pointer back where this
@@ -924,7 +1023,7 @@ fn decode_loop(
       slot_index,
       pts_ms,
     );
-    chain.stage_timeline(slot_index, pts_ms);
+    chain.stage_timeline(slot_index, composition_ms);
     previous_slot = Some(slot_index);
 
     // Decode output goes through the render layer on its way to the pool, so
@@ -943,7 +1042,7 @@ fn decode_loop(
       .fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
     shared.decoded.fetch_add(1, Ordering::Relaxed);
 
-    let frame = make_frame(&shared, slot_index, slot, pts_ms);
+    let frame = make_frame(&shared, slot_index, slot, composition_ms);
     shared.frames.lock().unwrap().push_back(frame);
   }
 }
@@ -1012,6 +1111,7 @@ fn do_seek(
   webcam: &mut Option<Decoder>,
   webcam_sync: &mut WebcamSync,
   chain: &mut RenderChain,
+  cuts: &CutTrack,
   pool: &[SharedTexture],
   pool_rtvs: &[ID3D11RenderTargetView],
   next_slot: &mut usize,
@@ -1025,7 +1125,11 @@ fn do_seek(
   shared.space.notify_all();
   shared.eof.store(false, Ordering::Release);
 
-  if decoder.seek((target * 10_000.0) as i64).is_err() {
+  // `target` is where the playhead is in the *edit*; the decoder is addressed
+  // in file time. With no cuts these are the same number.
+  let source_target = cuts.to_source(target);
+
+  if decoder.seek((source_target * 10_000.0) as i64).is_err() {
     return;
   }
 
@@ -1035,7 +1139,7 @@ fn do_seek(
   if let Some(webcam) = webcam.as_mut() {
     chain.clear_webcam_staging();
     *webcam_sync = WebcamSync::default();
-    let _ = webcam.seek((target * 10_000.0) as i64);
+    let _ = webcam.seek((source_target * 10_000.0) as i64);
   }
 
   // The frame on screen at time t is the last one whose pts is <= t, so decode
@@ -1066,6 +1170,14 @@ fn do_seek(
 
     let pts_ms = sample.timestamp_100ns as f64 / 10_000.0;
 
+    // A cut frame is not a candidate. Skipped rather than sought past, unlike
+    // the playback path: a seek is already scanning forward, and seeking again
+    // from inside one would restart the scan.
+    if cuts.contains(pts_ms) {
+      continue;
+    }
+    let composition_ms = cuts.to_composition(pts_ms);
+
     // Stage only. Scanning a GOP and rendering every frame is wasted work when
     // all but one gets thrown away, but the decoder reuses its array slices, so
     // a candidate still has to be copied somewhere we own.
@@ -1077,31 +1189,40 @@ fn do_seek(
     decoded_here += 1;
 
     if mode == SeekMode::Fast {
-      previous = Some((slot_index, pts_ms));
+      previous = Some((slot_index, composition_ms));
       break;
     }
 
-    if pts_ms > target {
+    if composition_ms > target {
       // Overshot: the previous frame is the right one, unless the target sits
       // before the first frame we could decode.
-      chosen = previous.or(Some((slot_index, pts_ms)));
+      chosen = previous.or(Some((slot_index, composition_ms)));
       break;
     }
-    previous = Some((slot_index, pts_ms));
+    previous = Some((slot_index, composition_ms));
   }
 
-  if let Some((slot_index, pts_ms)) = chosen.or(previous) {
+  if let Some((slot_index, composition_ms)) = chosen.or(previous) {
     // Only the frame we landed on gets its layers composed. Doing it for every
     // candidate would decode a GOP of camera frames to throw them away, which
     // is exactly the cost the staged-not-rendered seek path exists to avoid.
-    advance_webcam(chain, webcam, webcam_sync, None, slot_index, pts_ms);
-    chain.stage_timeline(slot_index, pts_ms);
+    //
+    // The camera is pulled to file time; everything else runs on edit time.
+    advance_webcam(
+      chain,
+      webcam,
+      webcam_sync,
+      None,
+      slot_index,
+      cuts.to_source(composition_ms),
+    );
+    chain.stage_timeline(slot_index, composition_ms);
 
     if chain.render_slot(slot_index, &pool_rtvs[slot_index]).is_ok() {
       // Anchor playback to where we actually landed, not where we aimed, so
       // the clock and the picture agree.
-      shared.clock.lock().unwrap().jump_to(pts_ms);
-      let frame = make_frame(shared, slot_index, &pool[slot_index], pts_ms);
+      shared.clock.lock().unwrap().jump_to(composition_ms);
+      let frame = make_frame(shared, slot_index, &pool[slot_index], composition_ms);
       shared.frames.lock().unwrap().push_back(frame);
     }
   }

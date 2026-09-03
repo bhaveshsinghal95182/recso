@@ -19,6 +19,7 @@ use std::time::Instant;
 use windows::core::Result;
 
 use crate::engine::composite::{CursorSample, CursorTrack, SpriteTexture, WebcamLayout};
+use crate::engine::cuts::{Cut, CutTrack};
 use crate::engine::decode::Decoder;
 use crate::engine::encode::Encoder;
 use crate::engine::player::{advance_webcam, CursorImage, WebcamSync};
@@ -61,6 +62,8 @@ pub struct Options {
   pub cursor_opacity: f32,
   /// The zoom/pan timeline. Empty exports unzoomed.
   pub zoom_regions: Vec<ZoomRegion>,
+  /// Spans of the *source* to leave out. Empty exports the whole range.
+  pub cuts: Vec<Cut>,
 }
 
 pub struct Shared {
@@ -293,6 +296,7 @@ fn run(shared: &Arc<Shared>, options: Options) -> Result<()> {
   chain.set_cursor_track(CursorTrack::new(options.cursor_track));
   chain.set_cursor_style(options.cursor_size, options.cursor_opacity);
   chain.set_zoom_track(ZoomTrack::new(options.zoom_regions));
+  let cuts = CutTrack::new(options.cuts);
 
   stage("create encoder");
 
@@ -345,6 +349,20 @@ fn run(shared: &Arc<Shared>, options: Options) -> Result<()> {
     if pts_ms > end_ms {
       break;
     }
+    // Cut frames are simply never written. The encoder timestamps from its own
+    // frame counter, so skipping one closes the gap in the output rather than
+    // leaving a hole -- which is exactly what a cut means.
+    //
+    // No seek past the cut here, unlike the player: export is not racing a
+    // clock, and decode is the cheapest stage in the loop. Seeking would cost a
+    // GOP of re-decode to save a few frames of it.
+    if cuts.contains(pts_ms) {
+      continue;
+    }
+
+    // Everything downstream runs on composition time: the cursor track and the
+    // zoom timeline are authored against the edit, not against the file.
+    let composition_ms = cuts.to_composition(pts_ms);
 
     let source = sample
       .texture
@@ -361,7 +379,7 @@ fn run(shared: &Arc<Shared>, options: Options) -> Result<()> {
     advance_webcam(&mut chain, &mut webcam, &mut webcam_sync, None, 0, pts_ms);
     // Resolved against this frame's own pts, not a playhead, so a cursor in the
     // file lands where it landed on screen.
-    chain.stage_timeline(0, pts_ms);
+    chain.stage_timeline(0, composition_ms);
 
     // Clone the COM reference so the borrow on the chain ends before the
     // encoder call; it is a refcount bump, not a copy.

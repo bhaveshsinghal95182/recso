@@ -5,7 +5,7 @@
 //! the class wrappers thin enough to read in one pass.
 
 use super::composite::{CursorSample, FitMode, OverlayShape, Rect, WebcamLayout};
-use super::{d3d, decode, encode, exporter, pattern, player, render, zoom};
+use super::{cuts, d3d, decode, encode, exporter, pattern, player, render, zoom};
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
@@ -814,6 +814,26 @@ impl From<ZoomRegion> for zoom::ZoomRegion {
   }
 }
 
+/// A span of the recording to leave out.
+///
+/// In *source* time -- where it sits in the file. Everything the player reports
+/// afterwards, its duration and playhead included, is in composition time:
+/// where things sit in the resulting edit.
+#[napi(object)]
+pub struct CutRegion {
+  pub start_ms: f64,
+  pub end_ms: f64,
+}
+
+impl From<CutRegion> for cuts::Cut {
+  fn from(region: CutRegion) -> Self {
+    cuts::Cut {
+      start_ms: region.start_ms,
+      end_ms: region.end_ms,
+    }
+  }
+}
+
 /// What to open, when a recording is more than one file.
 #[napi(object)]
 pub struct PlayerSources {
@@ -1040,6 +1060,32 @@ impl VideoPlayer {
     self.inner.zoom_region_count() as f64
   }
 
+  /// Remove spans of the recording.
+  ///
+  /// Regions are in source time. Afterwards `compositionDuration` is the length
+  /// of the edit rather than the file, and seeking and the playhead are in that
+  /// same time -- so a cut is invisible to the caller beyond the video getting
+  /// shorter.
+  #[napi]
+  pub fn set_cuts(&self, regions: Vec<CutRegion>) {
+    self
+      .inner
+      .set_cuts(regions.into_iter().map(cuts::Cut::from).collect());
+  }
+
+  /// Cuts the decode thread has loaded. Applied asynchronously.
+  #[napi]
+  pub fn cut_count(&self) -> f64 {
+    self.inner.cut_count() as f64
+  }
+
+  /// How long the edit runs, in milliseconds: the file's duration less whatever
+  /// has been cut out of it.
+  #[napi]
+  pub fn composition_duration(&self) -> f64 {
+    self.inner.composition_duration_ms()
+  }
+
   /// Grade the video layer. Applies to preview immediately, and the exporter
   /// runs the same chain, so it applies to output too.
   ///
@@ -1155,6 +1201,8 @@ pub struct ExportOptions {
   /// The zoom/pan timeline. Omit it and the export is unzoomed, however the
   /// preview looks.
   pub zoom_regions: Option<Vec<ZoomRegion>>,
+  /// Spans of the source to leave out. Omit and the whole range is exported.
+  pub cuts: Option<Vec<CutRegion>>,
   /// Cursor height in destination pixels. Defaults to 22, matching the editor.
   pub cursor_size: Option<f64>,
   /// Clamped to 0..1. Defaults to 1.
@@ -1269,6 +1317,12 @@ impl VideoExporter {
           .unwrap_or_default()
           .into_iter()
           .map(zoom::ZoomRegion::from)
+          .collect(),
+        cuts: options
+          .cuts
+          .unwrap_or_default()
+          .into_iter()
+          .map(cuts::Cut::from)
           .collect(),
         cursor_size: options.cursor_size.unwrap_or(22.0) as f32,
         cursor_opacity: options.cursor_opacity.unwrap_or(1.0).clamp(0.0, 1.0) as f32,

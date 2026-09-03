@@ -24,6 +24,8 @@ pub mod api;
 #[cfg(windows)]
 mod composite;
 #[cfg(windows)]
+mod cuts;
+#[cfg(windows)]
 mod d3d;
 #[cfg(windows)]
 mod decode;

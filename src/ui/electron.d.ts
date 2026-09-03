@@ -179,6 +179,17 @@ export interface EngineColour {
   a?: number;
 }
 
+/**
+ * A span of the recording to leave out.
+ *
+ * In source time -- where it sits in the file. Everything the player reports
+ * afterwards is in composition time: where things sit in the resulting edit.
+ */
+export interface EngineCutRegion {
+  startMs: number;
+  endMs: number;
+}
+
 /** A focal point a zoom pans to while it is held. */
 export interface EngineZoomFocalKeyframe {
   timestampMs: number;
@@ -341,6 +352,13 @@ export interface EngineAPI {
      * background and webcam do not.
      */
     setZoomRegions: (regions: EngineZoomRegion[]) => Promise<void>;
+    /**
+     * Remove spans of the recording. Regions are in source time; the playhead
+     * and duration reported afterwards are in composition time.
+     */
+    setCuts: (regions: EngineCutRegion[]) => Promise<void>;
+    /** The edit's length: the file's duration less what has been cut. */
+    compositionDuration: () => Promise<number>;
     /** What fills the canvas behind the video. */
     setBackground: (background: EngineBackground) => Promise<void>;
     /** False when the recording had no camera track, or its sidecar would not open. */

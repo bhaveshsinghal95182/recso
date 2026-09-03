@@ -123,6 +123,8 @@ export interface ExportOptions {
   background?: BackgroundSpec;
   /** The zoom/pan timeline. Omit it and the export is unzoomed. */
   zoomRegions?: ZoomRegion[];
+  /** Spans of the source to leave out. Omit and the whole range is exported. */
+  cuts?: CutRegion[];
   /** The camera sidecar. Without it the export has no webcam overlay. */
   webcamPath?: string;
   /** Where the camera goes -- the same value passed to `setWebcamLayout`. */
@@ -216,6 +218,12 @@ export interface VideoPlayerInstance {
   setLayout(placement: VideoPlacement): void;
   /** Set the zoom/pan timeline. */
   setZoomRegions(regions: ZoomRegion[]): void;
+  /** Remove spans of the recording. Regions are in source time. */
+  setCuts(regions: CutRegion[]): void;
+  /** Cuts loaded. Applied asynchronously. */
+  cutCount(): number;
+  /** The edit's length: the file's duration less what has been cut. */
+  compositionDuration(): number;
   /** Zoom regions loaded. Applied asynchronously. */
   zoomRegionCount(): number;
   /** What fills the canvas behind the video. */
@@ -394,6 +402,18 @@ export interface BackgroundSpec {
   colour?: Colour;
   /** Tightly packed RGBA8, stretched over the canvas. */
   image?: CursorBitmap;
+}
+
+/**
+ * A span of the recording to leave out.
+ *
+ * In *source* time -- where it sits in the file. Everything the player reports
+ * afterwards, its duration and playhead included, is in composition time: where
+ * things sit in the resulting edit.
+ */
+export interface CutRegion {
+  startMs: number;
+  endMs: number;
 }
 
 /** A focal point a zoom pans to while it is held. */

@@ -41,6 +41,7 @@ import type {
   BackgroundSpec,
   CursorBitmap,
   CursorPoint,
+  CutRegion,
   ExportOptions,
   VideoPlacement,
   WebcamOverlay,
@@ -171,6 +172,12 @@ export function registerEngineHandlers(): void {
   ipcMain.handle('engine:player:zoom-regions', (_event, regions: ZoomRegion[]) => {
     requirePlayer().setZoomRegions(regions);
   });
+
+  ipcMain.handle('engine:player:cuts', (_event, regions: CutRegion[]) => {
+    requirePlayer().setCuts(regions);
+  });
+
+  ipcMain.handle('engine:player:composition-duration', () => requirePlayer().compositionDuration());
 
   /**
    * The background image arrives as an ArrayBuffer, same as the cursor bitmap,

@@ -256,6 +256,13 @@ export const engineBridge = {
      */
     setZoomRegions: (regions: unknown[]) => invoke('engine:player:zoom-regions', regions),
     /**
+     * Remove spans of the recording. Regions are in source time; everything the
+     * player reports afterwards is in composition time.
+     */
+    setCuts: (regions: unknown[]) => invoke('engine:player:cuts', regions),
+    /** The edit's length: the file's duration less what has been cut. */
+    compositionDuration: () => invoke('engine:player:composition-duration'),
+    /**
      * What fills the canvas behind the video.
      *
      * `image.pixels` must be an ArrayBuffer, same rule as the cursor bitmap: a
