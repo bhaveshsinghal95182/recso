@@ -99,7 +99,7 @@ feature, `no` = absent.
 | Video scale / centring           | yes        | **yes** | ditto — the engine takes the resolved rect, not the ratio.                 |
 | Video border radius              | yes        | **yes** | The same SDF mask the webcam uses, now pointed at the video quad.          |
 | Video border (width, colour)     | yes        | **yes** | `ps_solid`: the same rounded rect grown by the width, filled, drawn under. |
-| Source crop                      | yes        | **no**  | `source-crop.ts`; the frame source crops before drawing.                   |
+| Source crop                      | yes        | **yes** | UVs on the video quad; also moves the cursor and hides it outside.         |
 | Explicit layout override         | yes        | n/a     | `config.layout` short-circuits the computed layout.                        |
 
 ### Background
