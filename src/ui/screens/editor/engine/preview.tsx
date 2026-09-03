@@ -177,6 +177,10 @@ export function EnginePreview() {
   }, [playbackCompositionConfig, renderCurrentFrame]);
 
   useEffect(() => {
+    if (useGpuEngine) {
+      return;
+    }
+
     syncPreviewTransportOnPlayState({
       isPlaying,
       pausePlayback: pause,
@@ -187,9 +191,13 @@ export function EnginePreview() {
       webcamVideoRef,
       engineRef,
     });
-  }, [isPlaying, pause, webcamSrc, isExportPreviewFullscreen, screenCuts]);
+  }, [isPlaying, pause, webcamSrc, isExportPreviewFullscreen, screenCuts, useGpuEngine]);
 
   useEffect(() => {
+    if (useGpuEngine) {
+      return;
+    }
+
     syncPausedPreviewPosition({
       isPlaying,
       currentTimeMs: currentTime,
@@ -208,9 +216,18 @@ export function EnginePreview() {
     webcamSrc,
     isExportPreviewFullscreen,
     screenCuts,
+    useGpuEngine,
   ]);
 
   useEffect(() => {
+    // The engine owns the clock while it is driving. Leaving this attached is
+    // not merely wasteful -- its render loop writes the playhead from the
+    // `<video>` element every frame, and the engine writes the same store from
+    // its own clock, so the two fight and the playhead jitters.
+    if (useGpuEngine) {
+      return;
+    }
+
     return attachPreviewSession({
       project,
       videoSrc,
@@ -238,6 +255,7 @@ export function EnginePreview() {
     project,
     renderCurrentFrame,
     screenCuts,
+    useGpuEngine,
     videoSrc,
     webcamSrc,
   ]);
