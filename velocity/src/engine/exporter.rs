@@ -183,7 +183,15 @@ impl Exporter {
 
     Progress {
       frames_done: done,
-      frames_total: self.shared.frames_total.load(Ordering::Relaxed),
+      // Never less than what has actually been written. The total is estimated
+      // from the range and the frame rate, so a file whose real rate differs
+      // slightly can overshoot it -- and a progress bar reading 104% is a
+      // worse lie than one that sits at 100 for a moment.
+      frames_total: self
+        .shared
+        .frames_total
+        .load(Ordering::Relaxed)
+        .max(done),
       finished,
       cancelled: self.shared.cancel.load(Ordering::Acquire),
       error: self.shared.error.lock().unwrap().clone(),
@@ -244,13 +252,19 @@ fn run(shared: &Arc<Shared>, options: Options) -> Result<()> {
     });
 
   let fps = decoder.fps_num as f64 / decoder.fps_den.max(1) as f64;
+  let cuts = CutTrack::new(options.cuts);
 
   let end_ms = if options.end_ms > 0.0 {
     options.end_ms.min(decoder.duration_100ns as f64 / 10_000.0)
   } else {
     decoder.duration_100ns as f64 / 10_000.0
   };
-  let span_ms = (end_ms - options.start_ms).max(0.0);
+
+  // The *edit's* span, not the file's. Cut frames are never written, so
+  // counting them leaves `frames_done` short of `frames_total` by exactly the
+  // cut fraction -- an export that finishes correctly while its progress bar
+  // stops at 75% and never moves again.
+  let span_ms = (cuts.to_composition(end_ms) - cuts.to_composition(options.start_ms)).max(0.0);
   shared
     .frames_total
     .store((span_ms / 1000.0 * fps).round() as u64, Ordering::Relaxed);
@@ -300,7 +314,6 @@ fn run(shared: &Arc<Shared>, options: Options) -> Result<()> {
   chain.set_cursor_track(CursorTrack::new(options.cursor_track));
   chain.set_cursor_style(options.cursor_size, options.cursor_opacity);
   chain.set_zoom_track(ZoomTrack::new(options.zoom_regions));
-  let cuts = CutTrack::new(options.cuts);
   chain.set_source_crop(options.crop);
 
   stage("create encoder");

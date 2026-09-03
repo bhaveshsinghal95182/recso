@@ -319,6 +319,47 @@ try {
     throw new Error('exports did not complete; the pixel comparison would be meaningless')
   }
 
+  // ---- cuts and progress ---------------------------------------------------
+  //
+  // Cut frames are never written, so an estimate based on the file's span
+  // leaves `framesDone` short of `framesTotal` by exactly the cut fraction --
+  // an export that finishes correctly while its progress bar stops partway and
+  // never moves again. The estimate has to be of the *edit*, not the file.
+
+  console.log('\ncuts')
+
+  const cutStart = clipMs * 0.375
+  const cutEnd = clipMs * 0.625
+  const withCuts = await runExport(screenPath, {
+    output: path.join(workDir, 'cut.mp4'),
+    bitrate: 12_000_000,
+    cuts: [{ startMs: cutStart, endMs: cutEnd }],
+  })
+
+  check('export with cuts finished', !withCuts.error, withCuts.error ?? '')
+  const cutPercent = withCuts.framesTotal > 0 ? (withCuts.framesDone / withCuts.framesTotal) * 100 : 0
+  check(
+    'progress reaches 100% with a quarter of the timeline cut',
+    cutPercent > 95,
+    `${withCuts.framesDone}/${withCuts.framesTotal} = ${cutPercent.toFixed(1)}%`,
+  )
+  // Screen capture only emits a frame when something changes, so an idle
+  // desktop can produce a recording of two or three frames -- and a quarter of
+  // three frames is not a quarter of anything. Below that the comparison says
+  // nothing either way.
+  if (bare.framesDone >= 20) {
+    check(
+      'and a cut export writes fewer frames than an uncut one',
+      withCuts.framesDone < bare.framesDone,
+      `${withCuts.framesDone} vs ${bare.framesDone}`,
+    )
+  } else {
+    skip(
+      'and a cut export writes fewer frames than an uncut one',
+      `only ${bare.framesDone} frames captured; nothing to cut`,
+    )
+  }
+
   // ---- read both back -----------------------------------------------------
 
   console.log('\noutput')

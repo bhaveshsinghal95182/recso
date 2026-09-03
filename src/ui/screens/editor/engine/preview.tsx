@@ -5,6 +5,7 @@ import { usePlaybackStore } from '@/store/playback-store';
 import { useProjectStore } from '@/store/project-store';
 import { focusedZoomId, isEditingFocalPoint, useTimelineStore } from '@/store/timeline-store';
 
+import { resolveProjectWebcamSourcePath } from './export-pipeline/source-paths';
 import { useGpuPreview } from './gpu-preview/session';
 import { unsupportedFeatures } from './gpu-preview/unsupported';
 import { resolveOverlayVideoLayout, resolvePreviewDisplaySize } from './preview-runtime/display';
@@ -132,7 +133,11 @@ export function EnginePreview() {
     canvasSize,
     isPlaying,
     seekToMs: gpuSeekMs,
-    webcamPath: project?.webcamOverlay?.sourcePath ?? undefined,
+    // Resolved, not read straight off the project: `sourcePath` is often unset
+    // and the sidecar is found by naming convention beside the recording. The
+    // export pipeline has always done this; reading the raw field meant the
+    // engine preview silently opened with no camera at all.
+    webcamPath: resolveProjectWebcamSourcePath(project),
   });
 
   const gpuGaps = useMemo(
