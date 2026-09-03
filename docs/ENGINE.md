@@ -202,24 +202,87 @@ across runs the gap ran +658ms to -518ms with no relationship to frame rate
 (-402ms at 12fps, where a frame is 81ms). The tolerance is there to catch a
 recording paired with the wrong file, not to police a few hundred ms.
 
-## Layers: desktop, webcam, cursor
+## Layers: background, video, webcam, cursor
 
-The engine composites three layers, and does it _inside_ the render chain --
-after the effect pass, before the preview/export fork. Same reason the grading
-sits there: one implementation, so the webcam cannot be in a different place on
-screen than it is in the exported file.
+The engine composites four layers, and does it _inside_ the render chain,
+before the preview/export fork. One implementation, so the webcam cannot be in a
+different place on screen than it is in the exported file.
 
 ```
-desktop NV12 -> BGRA -> [effects] -> dst
-webcam  NV12 -> BGRA -----------------^  quad, shape-masked
-cursor  RGBA ------------------------- ^  quad, alpha from the image
+background  clear to a colour, then an optional image quad
+video       NV12 -> BGRA at source size, then a quad into the video rect
+webcam      NV12 -> BGRA at camera size, then a quad into its box
+cursor      RGBA ------------------------------> quad, alpha from the image
 ```
 
-The overlays are quads rather than fullscreen passes, so they need their own
-vertex shader, a blend state and a shape mask -- `composite.rs` and the
-`vs_quad` / `ps_overlay` / `ps_sprite` half of `shaders.hlsl`. The mask is a
-signed distance field evaluated in _pixels_, not UV, so corners stay circular
-whatever the box's aspect ratio.
+**Everything is a quad, including the video.** That is what lets the canvas be
+bigger than the recording: the video is _placed into a rectangle_ rather than
+being the frame, so there is somewhere for a background to be and something for
+a border to go around. It also means there is no separate effect pass -- each
+quad carries its own grade in the overlay constant buffer, which is how the
+video and the camera can be graded independently.
+
+The quads need their own vertex shader, a blend state and a shape mask --
+`composite.rs` and the `vs_quad` / `ps_overlay` / `ps_sprite` / `ps_solid` half
+of `shaders.hlsl`. The mask is a signed distance field evaluated in _pixels_,
+not UV, so corners stay circular whatever the box's aspect ratio. `ps_solid` is
+the same mask with a flat colour instead of a texture: that is what draws the
+borders, as the same rounded rect grown by the border width with the layer
+placed over the top.
+
+### Canvas, and what is fixed
+
+The canvas is set when a player opens and does not change, because its size is
+the size of the textures already handed to Chromium -- resizing means redoing
+that handshake. The video's _rect within_ the canvas moves freely, which is what
+padding, scale and centring actually need.
+
+Layout stays resolved on the JS side, like the webcam's anchor grid: the padding
+fraction, the scale and the centring all arrive as pixels, so there is one
+layout formula in the app rather than two that have to agree.
+
+Backgrounds arrive as a colour, an image, or both. Gradients and cross-hatch
+patterns are images too -- they are static for a whole export, so rasterising
+once on the caller's side beats reimplementing four generators in HLSL that
+would then have to match the Canvas2D versions pixel for pixel. A solid colour
+is the exception: it is a `ClearRenderTargetView`, so it is free.
+
+Both consumers get all three layers. The exporter builds its own chain on its
+own thread, so it cannot inherit the player's -- it takes the camera path and
+the cursor through `ExportOptions` instead, and the caller passes whatever the
+preview is showing. Miss those and the export is silently missing two layers
+while the preview beside it looks correct, which is what
+`engine:export-composition` exists to catch.
+
+### Fitting the camera to its box
+
+The camera almost never matches the box the caller asks for. `FitMode` decides
+what happens then: `cover` (the default) crops the source to the box's aspect
+ratio through the quad's UVs, `contain` shrinks the box to the camera's shape,
+and `stretch` distorts to fill exactly.
+
+The engine owns this rather than the caller because the engine is the only side
+that knows the camera's real resolution -- working it out on the JS side means
+opening the sidecar, which is the demux the recorder metadata exists to avoid.
+Cover crops through UVs rather than by growing the quad because the shape mask
+is evaluated against the quad: grow it and a circular webcam gets clipped by the
+box instead of filling it.
+
+### Coded size is not display size
+
+H.264 codes in 16x16 macroblocks, so a 1080-tall recording is usually coded at
+1088 with the bottom eight rows as decoder scratch. Media Foundation reports the
+padded size in `MF_MT_FRAME_SIZE` and the real one in
+`MF_MT_MINIMUM_DISPLAY_APERTURE`, and the two are easy to confuse because they
+are equal on most files -- including every recording velocity produces, which is
+why this needs finding by reading rather than by testing.
+
+`RenderChain` takes both. Every texture in it is coded-sized, because that is
+what the decoder writes. Anything expressed as a _fraction of the frame_ --
+cursor positions, most obviously -- resolves against the display size, since the
+padding was never part of the picture the user saw. And the NV12 passes on the
+way to the encoder read only the display sub-rectangle, so an export is the
+visible size rather than the padded one.
 
 ### One clock, two decoders
 
@@ -301,6 +364,15 @@ finished frame back -- this records a few seconds of screen _and_ camera:
 pnpm engine:composition
 ```
 
+The same question for the _export_ path: exports the same recording twice, once
+bare and once with the overlays, and compares pixels in the two files. A
+preview-side check cannot catch an exporter that drops a layer, because the
+whole failure mode is the two paths disagreeing.
+
+```bash
+pnpm engine:export-composition
+```
+
 Colour readback is the only way to tell a composited frame from one that
 silently drew nothing, which is exactly the failure this catches.
 
@@ -350,7 +422,7 @@ Setup is reported separately from steady-state fps because it varies a lot
 (roughly 480–1900ms, worst when the discrete GPU is waking from idle), and on a
 short clip it dominates enough to make the faster GPU look slower.
 
-## Why grading is cheap
+## Why re-grading is cheap
 
 Each pool slot keeps the decoded NV12 it was rendered from, not just the
 finished BGRA. A colour change re-runs two shader passes over pixels already on
@@ -363,6 +435,10 @@ re-rendered in place. A drag emits a change per pixel of travel, so the decode
 thread drains its command channel and keeps only the last of each kind.
 
 ## What is not there
+
+The full list -- bugs, gaps and missing features, with file references and a
+suggested order -- lives in [ENGINE-BACKLOG.md](ENGINE-BACKLOG.md). The
+headlines:
 
 - **No audio.** The clock is video-only. Audio has to become the master clock
   eventually, and `Clock` is what will have to slave to it.
@@ -385,6 +461,13 @@ thread drains its command channel and keeps only the last of each kind.
 - **H.264 only.** Recordings made before the switch to H.264 are HEVC and will
   not open in the engine on a machine without the Store HEVC extension. They
   still work in the editor's `<video>` path, which goes through Chromium.
+- **No timeline model.** Cuts, zoom regions and layer ordering are the same
+  missing thing: the engine plays one source linearly and has no representation
+  of "the composition" as distinct from "the file". See
+  [ENGINE-FEATURE-MAP.md](ENGINE-FEATURE-MAP.md).
+- **One cursor bitmap for the whole track.** recso's track carries a
+  `cursorDataUrl` per sample; supporting that needs a texture cache keyed by
+  image, not another field.
 
 ## Adding a filter
 
