@@ -21,13 +21,6 @@
 //!   system.wav        ─┘
 //! ```
 
-// Decode and mixing are in place and tested; nothing calls them yet, because
-// the encoder cannot write an audio stream. That is the next piece, and until
-// it exists this module is deliberately unreachable rather than half-wired --
-// an export that writes a silent audio track is harder to diagnose than one
-// with no audio track at all.
-#![allow(dead_code)]
-
 use windows::core::{Result, PCWSTR};
 use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
@@ -53,16 +46,6 @@ pub struct AudioChunk {
   /// Interleaved samples: `[l, r, l, r, ...]` for stereo.
   pub samples: Vec<f32>,
   pub end_of_stream: bool,
-}
-
-impl AudioChunk {
-  /// How many frames (sample-sets across all channels) this chunk holds.
-  pub fn frames(&self, channels: u32) -> usize {
-    if channels == 0 {
-      return 0;
-    }
-    self.samples.len() / channels as usize
-  }
 }
 
 /// A decoded audio stream from one file.
@@ -217,109 +200,6 @@ unsafe fn read_float_samples(sample: &IMFSample) -> Result<Vec<f32>> {
   }
 }
 
-/// A fixed-length stereo mix buffer that sources are summed into.
-///
-/// Addressed in *composition* time: a source's samples are placed where the
-/// edit puts them, not where the file has them, so cuts are applied by mapping
-/// each chunk's timestamp rather than by splicing buffers.
-pub struct MixBuffer {
-  samples: Vec<f32>,
-  frames: usize,
-}
-
-impl MixBuffer {
-  /// A silent buffer covering `duration_ms` of the edit.
-  pub fn new(duration_ms: f64) -> Self {
-    let frames = ((duration_ms / 1000.0) * MIX_SAMPLE_RATE as f64)
-      .ceil()
-      .max(0.0) as usize;
-    Self {
-      samples: vec![0.0; frames * MIX_CHANNELS as usize],
-      frames,
-    }
-  }
-
-  pub fn frames(&self) -> usize {
-    self.frames
-  }
-
-  pub fn samples(&self) -> &[f32] {
-    &self.samples
-  }
-
-  pub fn is_empty(&self) -> bool {
-    self.frames == 0
-  }
-
-  /// Sum one decoded chunk into the mix at a composition timestamp.
-  ///
-  /// `channels` is what the chunk actually carries; mono is duplicated across
-  /// both output channels and anything wider is folded down by taking the
-  /// first two, which is what a stereo mix can represent.
-  ///
-  /// Samples landing outside the buffer are dropped rather than clamped to its
-  /// edges: a chunk that starts before zero belongs to a part of the timeline
-  /// that was cut, and piling it onto frame zero would be audible.
-  pub fn add_chunk(&mut self, chunk: &AudioChunk, channels: u32, at_ms: f64) {
-    if self.frames == 0 || channels == 0 || chunk.samples.is_empty() {
-      return;
-    }
-
-    let source_channels = channels as usize;
-    let out_channels = MIX_CHANNELS as usize;
-    let start = (at_ms / 1000.0 * MIX_SAMPLE_RATE as f64).round() as i64;
-    let chunk_frames = chunk.samples.len() / source_channels;
-
-    for frame in 0..chunk_frames {
-      let target = start + frame as i64;
-      if target < 0 {
-        continue;
-      }
-      let target = target as usize;
-      if target >= self.frames {
-        break;
-      }
-
-      let source_base = frame * source_channels;
-      let target_base = target * out_channels;
-
-      for channel in 0..out_channels {
-        // Mono feeds both sides; wider sources keep their first two channels.
-        let source_index = if source_channels == 1 {
-          source_base
-        } else {
-          source_base + channel.min(source_channels - 1)
-        };
-        self.samples[target_base + channel] += chunk.samples[source_index];
-      }
-    }
-  }
-
-  /// Bring the loudest peak down to `ceiling`, if it is above it.
-  ///
-  /// Summing sources can exceed 1.0, and everything downstream clips there.
-  /// Scaling the whole mix by one factor keeps the balance between sources; a
-  /// limiter that acted per-sample would change it.
-  ///
-  /// Quiet mixes are left alone. Normalising up would raise the noise floor of
-  /// a deliberately quiet recording.
-  pub fn normalise(&mut self, ceiling: f32) {
-    let peak = self
-      .samples
-      .iter()
-      .fold(0.0f32, |worst, sample| worst.max(sample.abs()));
-
-    if peak <= ceiling || peak == 0.0 {
-      return;
-    }
-
-    let gain = ceiling / peak;
-    for sample in &mut self.samples {
-      *sample *= gain;
-    }
-  }
-}
-
 /// Where one source's audio sits on the edit's timeline.
 pub struct SourcePlacement<'a> {
   /// The cuts to apply. A chunk inside one is dropped.
@@ -340,6 +220,242 @@ impl SourcePlacement<'_> {
   }
 }
 
+/// One file feeding the mix.
+struct MixSource {
+  decoder: AudioDecoder,
+  offset_ms: f64,
+  /// A chunk decoded but belonging past the window being filled.
+  ///
+  /// Sources are read forward until they overshoot, and the frame that
+  /// overshoots has to be kept rather than dropped -- it is the first frame of
+  /// the *next* window.
+  pending: Option<(f64, AudioChunk)>,
+  exhausted: bool,
+}
+
+/// Mixes any number of audio files onto the edit's timeline, a window at a time.
+///
+/// Windowed rather than buffering the whole soundtrack: a stereo float mix of
+/// an hour is over a gigabyte, and the mediabunny path is being retired partly
+/// because it read whole files into memory. Replacing one memory ceiling with
+/// another would be a poor trade.
+///
+/// The window is only the *output* granularity. Internally there is a small
+/// accumulator ahead of it, because a decoded chunk is typically tens of
+/// milliseconds and lands across a window boundary as often as not -- writing
+/// only the part that fits would clip a slice out of the sound at every
+/// boundary.
+pub struct AudioMixer {
+  sources: Vec<MixSource>,
+  cuts: CutTrack,
+  /// Mixed samples from `base_frame` onward, interleaved and still growing.
+  accumulator: Vec<f32>,
+  /// Composition frames already emitted.
+  base_frame: u64,
+}
+
+/// How far past the requested window to decode before stopping.
+///
+/// Covers a chunk that starts inside the window and runs past its end. A
+/// quarter second is many times the size of any decoder's output block.
+const LOOKAHEAD_MS: f64 = 250.0;
+
+impl AudioMixer {
+  /// Open every source that has audio. `None` when none of them do.
+  ///
+  /// Each entry is a path and the offset that puts it on the screen
+  /// recording's clock -- a camera sidecar that started late is placed by its
+  /// offset, not by assuming both started together.
+  pub fn open(sources: &[(String, f64)], cuts: CutTrack) -> Result<Option<Self>> {
+    let mut opened = Vec::new();
+
+    for (path, offset_ms) in sources {
+      // A file with no audio, or one nothing can decode, is skipped rather than
+      // failing the export: a recording with the microphone off is still a
+      // recording.
+      match AudioDecoder::open(path) {
+        Ok(Some(decoder)) => opened.push(MixSource {
+          decoder,
+          offset_ms: *offset_ms,
+          pending: None,
+          exhausted: false,
+        }),
+        Ok(None) => {}
+        Err(error) => {
+          eprintln!("[engine] audio source {path} did not open: {error:?}");
+        }
+      }
+    }
+
+    if opened.is_empty() {
+      return Ok(None);
+    }
+
+    Ok(Some(Self {
+      sources: opened,
+      cuts,
+      accumulator: Vec::new(),
+      base_frame: 0,
+    }))
+  }
+
+  pub fn source_count(&self) -> usize {
+    self.sources.len()
+  }
+
+  /// Discard everything before `composition_ms` and start the mix there.
+  ///
+  /// For an export trimmed to start partway in. Each source is sought in *its*
+  /// own time, which is not the same number: the edit's clock has had the cuts
+  /// taken out of it, and a sidecar has its own offset on top of that.
+  pub fn skip_to(&mut self, composition_ms: f64) -> Result<()> {
+    if composition_ms <= 0.0 {
+      return Ok(());
+    }
+
+    let source_ms = self.cuts.to_source(composition_ms);
+    for source in &mut self.sources {
+      let at = ((source_ms - source.offset_ms).max(0.0) * 10_000.0) as i64;
+      // A seek that fails leaves the decoder where it was, which reads as
+      // audio that starts too early rather than not at all -- worth reporting
+      // but not worth failing the export over.
+      if let Err(error) = source.decoder.seek(at) {
+        eprintln!("[engine] audio source could not seek: {error:?}");
+      }
+      source.pending = None;
+      source.exhausted = false;
+    }
+
+    self.base_frame = (composition_ms / 1000.0 * MIX_SAMPLE_RATE as f64).round() as u64;
+    self.accumulator.clear();
+    Ok(())
+  }
+
+  /// The next `frames` of mixed audio, in composition time.
+  ///
+  /// Always returns exactly `frames * MIX_CHANNELS` samples: silence where no
+  /// source has anything, so the audio timeline never develops a hole that the
+  /// muxer would have to guess about.
+  pub fn next_window(&mut self, frames: usize) -> Vec<f32> {
+    if frames == 0 {
+      return Vec::new();
+    }
+
+    let channels = MIX_CHANNELS as usize;
+    let horizon_ms = frame_to_ms(self.base_frame + frames as u64) + LOOKAHEAD_MS;
+
+    for index in 0..self.sources.len() {
+      self.fill_from(index, horizon_ms);
+    }
+
+    let wanted = frames * channels;
+    if self.accumulator.len() < wanted {
+      self.accumulator.resize(wanted, 0.0);
+    }
+
+    let out: Vec<f32> = self.accumulator.drain(..wanted).collect();
+    self.base_frame += frames as u64;
+    out
+  }
+
+  /// Read one source forward until it passes `horizon_ms`.
+  fn fill_from(&mut self, index: usize, horizon_ms: f64) {
+    loop {
+      let source = &mut self.sources[index];
+
+      // Whatever overshot last time is this window's first chunk.
+      let next = match source.pending.take() {
+        Some(held) => Some(held),
+        None => {
+          if source.exhausted {
+            None
+          } else {
+            match source.decoder.read_chunk() {
+              Ok(chunk) if chunk.end_of_stream => {
+                source.exhausted = true;
+                None
+              }
+              Ok(chunk) => {
+                let source_ms = chunk.timestamp_100ns as f64 / 10_000.0;
+                let placement = SourcePlacement {
+                  cuts: &self.cuts,
+                  offset_ms: source.offset_ms,
+                };
+                // A chunk inside a cut is dropped and reading continues; it
+                // belongs to a stretch of the edit nobody will hear.
+                match placement.place(source_ms) {
+                  Some(at_ms) => Some((at_ms, chunk)),
+                  None => continue,
+                }
+              }
+              Err(_) => {
+                source.exhausted = true;
+                None
+              }
+            }
+          }
+        }
+      };
+
+      let Some((at_ms, chunk)) = next else {
+        return;
+      };
+
+      if at_ms >= horizon_ms {
+        self.sources[index].pending = Some((at_ms, chunk));
+        return;
+      }
+
+      let channels = self.sources[index].decoder.channels;
+      accumulate(&mut self.accumulator, self.base_frame, &chunk, channels, at_ms);
+    }
+  }
+}
+
+fn frame_to_ms(frame: u64) -> f64 {
+  frame as f64 / MIX_SAMPLE_RATE as f64 * 1000.0
+}
+
+/// Sum a chunk into a growing accumulator whose first frame is `base_frame`.
+///
+/// Grows as needed rather than dropping the tail: unlike `MixBuffer`, which has
+/// a fixed length because it represents the whole edit, this one is a sliding
+/// view and its far edge is not a real boundary.
+fn accumulate(dst: &mut Vec<f32>, base_frame: u64, chunk: &AudioChunk, channels: u32, at_ms: f64) {
+  if chunk.samples.is_empty() || channels == 0 {
+    return;
+  }
+
+  let source_channels = channels as usize;
+  let out_channels = MIX_CHANNELS as usize;
+  let chunk_frames = chunk.samples.len() / source_channels;
+  let start = (at_ms / 1000.0 * MIX_SAMPLE_RATE as f64).round() as i64 - base_frame as i64;
+
+  for frame in 0..chunk_frames {
+    let target = start + frame as i64;
+    if target < 0 {
+      continue;
+    }
+    let target = target as usize;
+
+    let needed = (target + 1) * out_channels;
+    if dst.len() < needed {
+      dst.resize(needed, 0.0);
+    }
+
+    let source_base = frame * source_channels;
+    let target_base = target * out_channels;
+    for channel in 0..out_channels {
+      let source_index = if source_channels == 1 {
+        source_base
+      } else {
+        source_base + channel.min(source_channels - 1)
+      };
+      dst[target_base + channel] += chunk.samples[source_index];
+    }
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -354,85 +470,84 @@ mod tests {
   }
 
   #[test]
-  fn a_mix_buffer_is_silent_and_the_length_asked_for() {
-    let mix = MixBuffer::new(1000.0);
-    assert_eq!(mix.frames(), MIX_SAMPLE_RATE as usize);
-    assert!(mix.samples().iter().all(|s| *s == 0.0));
-  }
-
-  #[test]
   fn a_stereo_chunk_lands_where_it_is_placed() {
-    let mut mix = MixBuffer::new(1000.0);
-    // One frame of full-scale stereo, half a second in.
-    mix.add_chunk(&chunk(0.0, vec![1.0, -1.0]), 2, 500.0);
+    let mut dst = Vec::new();
+    // One frame of full-scale stereo, half a second into the window.
+    accumulate(&mut dst, 0, &chunk(0.0, vec![1.0, -1.0]), 2, 500.0);
 
     let frame = MIX_SAMPLE_RATE as usize / 2;
-    assert_eq!(mix.samples()[frame * 2], 1.0);
-    assert_eq!(mix.samples()[frame * 2 + 1], -1.0);
-    // And nothing anywhere else.
-    assert_eq!(mix.samples()[0], 0.0);
+    assert_eq!(dst[frame * 2], 1.0);
+    assert_eq!(dst[frame * 2 + 1], -1.0);
+    // And silence in front of it, not a smeared copy.
+    assert_eq!(dst[0], 0.0);
   }
 
   #[test]
   fn a_mono_chunk_is_heard_on_both_sides() {
-    let mut mix = MixBuffer::new(1000.0);
-    mix.add_chunk(&chunk(0.0, vec![0.5]), 1, 0.0);
+    let mut dst = Vec::new();
+    accumulate(&mut dst, 0, &chunk(0.0, vec![0.5]), 1, 0.0);
 
-    assert_eq!(mix.samples()[0], 0.5);
-    assert_eq!(mix.samples()[1], 0.5);
+    assert_eq!(dst[0], 0.5);
+    assert_eq!(dst[1], 0.5);
   }
 
   #[test]
   fn sources_sum_rather_than_replace() {
-    let mut mix = MixBuffer::new(1000.0);
-    mix.add_chunk(&chunk(0.0, vec![0.3, 0.3]), 2, 0.0);
-    mix.add_chunk(&chunk(0.0, vec![0.4, 0.4]), 2, 0.0);
+    // The whole point of a mixer: two sources at the same instant are heard
+    // together, not one instead of the other.
+    let mut dst = Vec::new();
+    accumulate(&mut dst, 0, &chunk(0.0, vec![0.3, 0.3]), 2, 0.0);
+    accumulate(&mut dst, 0, &chunk(0.0, vec![0.4, 0.4]), 2, 0.0);
 
-    assert!((mix.samples()[0] - 0.7).abs() < 1e-6);
+    assert!((dst[0] - 0.7).abs() < 1e-6);
   }
 
   #[test]
-  fn audio_past_the_end_is_dropped_rather_than_piled_on_the_last_frame() {
-    let mut mix = MixBuffer::new(100.0);
-    let frames = mix.frames();
-    // A chunk starting after the buffer ends.
-    mix.add_chunk(&chunk(0.0, vec![1.0, 1.0]), 2, 200.0);
+  fn the_accumulator_grows_rather_than_truncating_a_tail() {
+    // The failure this guards against: a chunk that starts inside a window and
+    // runs past its end, written only as far as the window reaches. That
+    // removes a slice of sound at every window boundary -- a regular tick
+    // through the whole export, which is far more audible than the gap's size
+    // suggests.
+    let mut dst = Vec::new();
+    let samples = vec![0.5f32; 1000];
+    accumulate(&mut dst, 0, &chunk(0.0, samples), 1, 0.0);
 
-    assert_eq!(mix.frames(), frames);
-    assert!(mix.samples().iter().all(|s| *s == 0.0));
+    assert_eq!(dst.len(), 1000 * MIX_CHANNELS as usize);
+    assert!(dst.iter().all(|s| (*s - 0.5).abs() < 1e-6));
   }
 
   #[test]
-  fn audio_before_zero_is_dropped_rather_than_piled_on_the_first_frame() {
-    let mut mix = MixBuffer::new(100.0);
-    // Long enough that its tail reaches into the buffer.
-    let samples = vec![1.0f32; MIX_SAMPLE_RATE as usize];
-    mix.add_chunk(&chunk(0.0, samples), 1, -500.0);
+  fn the_accumulator_places_relative_to_its_base_frame() {
+    let mut dst = Vec::new();
+    // A window starting one second in, and a chunk one second in: it belongs at
+    // the accumulator's frame zero, not at its second-worth offset.
+    accumulate(
+      &mut dst,
+      MIX_SAMPLE_RATE as u64,
+      &chunk(0.0, vec![1.0, 1.0]),
+      2,
+      1000.0,
+    );
 
-    // The part before zero is gone, not stacked on frame 0.
-    assert_eq!(mix.samples()[0], 1.0);
-    assert!(mix.samples()[0].abs() <= 1.0);
+    assert_eq!(dst[0], 1.0);
   }
 
   #[test]
-  fn normalising_scales_a_hot_mix_down_and_keeps_the_balance() {
-    let mut mix = MixBuffer::new(10.0);
-    mix.add_chunk(&chunk(0.0, vec![2.0, 1.0]), 2, 0.0);
-    mix.normalise(1.0);
+  fn the_accumulator_drops_what_falls_before_its_base() {
+    let mut dst = Vec::new();
+    // Half a second of audio placed at zero, while the window starts at one
+    // second: entirely behind, and none of it should appear at frame zero.
+    let samples = vec![1.0f32; MIX_SAMPLE_RATE as usize / 2];
+    accumulate(
+      &mut dst,
+      MIX_SAMPLE_RATE as u64,
+      &chunk(0.0, samples),
+      1,
+      0.0,
+    );
 
-    assert!((mix.samples()[0] - 1.0).abs() < 1e-6);
-    // The quieter channel came down by the same factor, not to its own ceiling.
-    assert!((mix.samples()[1] - 0.5).abs() < 1e-6);
-  }
-
-  #[test]
-  fn a_quiet_mix_is_left_alone() {
-    let mut mix = MixBuffer::new(10.0);
-    mix.add_chunk(&chunk(0.0, vec![0.2, 0.1]), 2, 0.0);
-    mix.normalise(1.0);
-
-    // Normalising up would raise the noise floor of a deliberately quiet take.
-    assert!((mix.samples()[0] - 0.2).abs() < 1e-6);
+    assert!(dst.is_empty() || dst.iter().all(|s| *s == 0.0));
   }
 
   #[test]

@@ -253,9 +253,11 @@ cache keyed by image, not just another field.
 
 ## Missing: engine-wide
 
-- **No audio, anywhere.** The clock is video-only. Audio has to become the
-  master clock eventually and `Clock` is what will have to slave to it. This is
-  the largest single gap on the list.
+- **No audio in playback.** Export has it now — decode, mix, cut-aware
+  placement and an AAC stream, verified by `pnpm engine:audio`. Playback does
+  not, and that is the harder half: audio has to become the master clock, and
+  `Clock` currently free-runs on the wall clock with the picture following it.
+  Inverting that is a rework of the thing the whole player is built around.
 - **No timeline or clip model.** One source plus one overlay. Cuts, ordering and
   multiple clips have no representation.
 - **One hardcoded effect.** The ping-pong targets exist but nothing drives a
@@ -340,6 +342,5 @@ Bugs 1, 3, 4 and 6 are done. What is left, in order:
 3. **Integration.** Everything in this engine is wired end to end and called by
    nothing. The map ends with a proposed order.
 4. **GOP length.** The only remaining large number in the system.
-5. **Audio**, whenever the engine is meant to be more than a preview. Everything
-   about the clock changes when it arrives, so the longer it waits the more
-   there is to redo.
+5. **Audio in playback**, and the clock inversion it forces. Export already has
+   sound.

@@ -18,10 +18,11 @@ use std::time::Instant;
 
 use windows::core::Result;
 
+use crate::engine::audio::{AudioMixer, MIX_SAMPLE_RATE};
 use crate::engine::composite::{CursorSample, CursorTrack, SpriteTexture, WebcamLayout};
 use crate::engine::cuts::{Cut, CutTrack};
 use crate::engine::decode::Decoder;
-use crate::engine::encode::Encoder;
+use crate::engine::encode::{AudioSpec, Encoder};
 use crate::engine::player::{advance_webcam, CursorImage, WebcamSync};
 use crate::engine::render::{
   Background, BackgroundRequest, EffectParams, RenderChain, SourceCrop, VideoLayout,
@@ -64,6 +65,13 @@ pub struct Options {
   pub cursor_opacity: f32,
   /// The zoom/pan timeline. Empty exports unzoomed.
   pub zoom_regions: Vec<ZoomRegion>,
+  /// Every file contributing sound, with the offset that puts it on the screen
+  /// recording's clock. Empty exports silent.
+  ///
+  /// The screen recording and the camera sidecar are not added automatically:
+  /// which tracks belong in the mix is an editing decision, and a caller that
+  /// wants the camera muted should be able to say so by leaving it out.
+  pub audio_sources: Vec<(String, f64)>,
   /// Spans of the *source* to leave out. Empty exports the whole range.
   pub cuts: Vec<Cut>,
   /// Edges of the recording to throw away. `None` keeps all of it.
@@ -231,6 +239,17 @@ impl Drop for Exporter {
   }
 }
 
+/// How many audio frames should have been written by `composition_ms`.
+///
+/// Derived from the position rather than accumulated per video frame: a
+/// variable-rate screen recording has no fixed frames-per-video-frame, and
+/// rounding one every frame would drift the audio against the picture over a
+/// long export.
+fn audio_frames_due(composition_ms: f64, already_written: u64) -> usize {
+  let target = (composition_ms.max(0.0) / 1000.0 * MIX_SAMPLE_RATE as f64).round() as u64;
+  target.saturating_sub(already_written) as usize
+}
+
 fn run(shared: &Arc<Shared>, options: Options) -> Result<()> {
   let stage = |name: &'static str| *shared.stage.lock().unwrap() = name;
 
@@ -316,6 +335,26 @@ fn run(shared: &Arc<Shared>, options: Options) -> Result<()> {
   chain.set_zoom_track(ZoomTrack::new(options.zoom_regions));
   chain.set_source_crop(options.crop);
 
+  // ---- audio ---------------------------------------------------------------
+  //
+  // Opened before the encoder, because whether there is an audio stream at all
+  // decides how the encoder is created: `BeginWriting` fixes the set of
+  // streams, so a track cannot be added once writing has begun.
+  stage("open audio");
+  let mut mixer = AudioMixer::open(&options.audio_sources, cuts.clone())?;
+
+  // Where this export begins on the edit's timeline. Audio is written relative
+  // to it, not to the file's zero: an export trimmed to start a minute in wants
+  // the sound from a minute in, and measuring from zero would play the opening
+  // minute of audio under the wrong picture.
+  let export_origin_ms = cuts.to_composition(options.start_ms.max(0.0));
+  if let Some(mixer) = mixer.as_mut() {
+    mixer.skip_to(export_origin_ms)?;
+  }
+  if let Some(mixer) = mixer.as_ref() {
+    eprintln!("[engine] export mixing {} audio source(s)", mixer.source_count());
+  }
+
   stage("create encoder");
 
   // From the chain, not the decoder: the chain crops the macroblock padding off
@@ -323,13 +362,14 @@ fn run(shared: &Arc<Shared>, options: Options) -> Result<()> {
   // about. Handing it the decoder's frame size would describe a texture two to
   // eight rows taller than the one it is actually given.
   let (out_width, out_height) = chain.output_size();
-  let mut encoder = Encoder::create(
+  let mut encoder = Encoder::create_with_audio(
     &options.output,
     out_width,
     out_height,
     decoder.fps_num,
     decoder.fps_den,
     options.bitrate,
+    mixer.as_ref().map(|_| AudioSpec::default()),
   )?;
 
   let mut webcam_sync = WebcamSync::default();
@@ -346,6 +386,11 @@ fn run(shared: &Arc<Shared>, options: Options) -> Result<()> {
       webcam.seek((options.start_ms * 10_000.0) as i64)?;
     }
   }
+
+  // Frames of audio handed to the encoder so far. Counted rather than derived
+  // from a clock so the audio timeline advances by exactly what was written.
+  let mut audio_frames_written = 0u64;
+  let mut last_composition_ms = 0.0f64;
 
   loop {
     if shared.cancel.load(Ordering::Acquire) {
@@ -381,6 +426,7 @@ fn run(shared: &Arc<Shared>, options: Options) -> Result<()> {
     // Everything downstream runs on composition time: the cursor track and the
     // zoom timeline are authored against the edit, not against the file.
     let composition_ms = cuts.to_composition(pts_ms);
+    last_composition_ms = composition_ms;
 
     let source = sample
       .texture
@@ -409,6 +455,20 @@ fn run(shared: &Arc<Shared>, options: Options) -> Result<()> {
     encoder.write_texture(&encoded, 0)?;
     let encode_us = t_encode.elapsed().as_micros() as u64;
 
+    // Audio is written to keep pace with the picture rather than in one block
+    // at the end. The sink writer buffers whatever it has not been able to
+    // interleave yet, so handing it an entire soundtrack after the last frame
+    // would hold the whole thing in memory -- the exact thing the windowed
+    // mixer exists to avoid.
+    if let Some(mixer) = mixer.as_mut() {
+      stage("write audio");
+      let due = audio_frames_due(composition_ms - export_origin_ms, audio_frames_written);
+      if due > 0 {
+        encoder.write_audio(&mixer.next_window(due))?;
+        audio_frames_written += due as u64;
+      }
+    }
+
     shared.decode_us.fetch_add(decode_us, Ordering::Relaxed);
     shared.render_us.fetch_add(render_us, Ordering::Relaxed);
     shared.encode_us.fetch_add(encode_us, Ordering::Relaxed);
@@ -416,6 +476,36 @@ fn run(shared: &Arc<Shared>, options: Options) -> Result<()> {
       shared
         .setup_us
         .store(shared.started_at.elapsed().as_micros() as u64, Ordering::Relaxed);
+    }
+  }
+
+  // The last video frame is displayed for its own duration, and audio under it
+  // has to reach the end of that rather than stopping at the frame's timestamp.
+  // Without this the sound ends a frame early, which on a clip that finishes on
+  // a word is very noticeable.
+  if let Some(mixer) = mixer.as_mut() {
+    stage("flush audio");
+    let frame_ms = 1000.0 / fps.max(1.0);
+    let due = audio_frames_due(
+      last_composition_ms + frame_ms - export_origin_ms,
+      audio_frames_written,
+    );
+    if due > 0 {
+      encoder.write_audio(&mixer.next_window(due))?;
+    }
+  }
+
+  // Audio and video should come out the same length. They are produced by
+  // different clocks -- one counts samples, the other follows frame
+  // timestamps -- so a disagreement here means one of them drifted, which is
+  // audible as lip sync long before it is visible in a duration.
+  if mixer.is_some() {
+    let audio_ms = encoder.audio_frames_written() as f64 / MIX_SAMPLE_RATE as f64 * 1000.0;
+    let drift = audio_ms - (last_composition_ms - export_origin_ms);
+    if drift.abs() > 50.0 {
+      eprintln!(
+        "[engine] export audio is {drift:.0}ms out against the picture          (audio {audio_ms:.0}ms, video {last_composition_ms:.0}ms)"
+      );
     }
   }
 

@@ -5,7 +5,7 @@
 //! the class wrappers thin enough to read in one pass.
 
 use super::composite::{CursorSample, FitMode, OverlayShape, Rect, WebcamLayout};
-use super::{cuts, d3d, decode, encode, exporter, pattern, player, render, zoom};
+use super::{audio, cuts, d3d, decode, encode, exporter, pattern, player, render, zoom};
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
@@ -246,6 +246,41 @@ pub struct ProbeResult {
 
 /// Diagnostic: what does Media Foundation see in this file?
 #[cfg(windows)]
+/// What a file's audio track looks like, if it has one.
+#[napi(object)]
+pub struct AudioProbe {
+  /// False when the file has no audio, or none that can be decoded. Not an
+  /// error: a recording with the microphone off is still a recording.
+  pub has_audio: bool,
+  pub sample_rate: u32,
+  pub channels: u32,
+  /// Milliseconds.
+  pub duration: f64,
+}
+
+/// Look at a file's audio without decoding all of it.
+///
+/// Exists mostly so an export can be checked for the track it was supposed to
+/// write: `probeVideo` enumerates video stream types only, so it reports
+/// nothing about sound and an audio regression would pass it silently.
+#[napi]
+pub fn probe_audio(path: String) -> AudioProbe {
+  match audio::AudioDecoder::open(&path) {
+    Ok(Some(decoder)) => AudioProbe {
+      has_audio: true,
+      sample_rate: decoder.sample_rate,
+      channels: decoder.channels,
+      duration: decoder.duration_100ns as f64 / 10_000.0,
+    },
+    _ => AudioProbe {
+      has_audio: false,
+      sample_rate: 0,
+      channels: 0,
+      duration: 0.0,
+    },
+  }
+}
+
 #[napi]
 pub fn probe_video(path: String) -> ProbeResult {
   let p = decode::probe(&path);
@@ -765,6 +800,15 @@ impl From<CursorPoint> for CursorSample {
   }
 }
 
+/// One file contributing sound to the export.
+#[napi(object)]
+pub struct AudioSource {
+  pub path: String,
+  /// Milliseconds to shift this file by so it sits on the screen recording's
+  /// clock. A camera sidecar that started late has a positive offset.
+  pub offset_ms: Option<f64>,
+}
+
 /// A focal point a zoom pans to while it is held.
 #[napi(object)]
 pub struct ZoomFocalKeyframe {
@@ -1234,6 +1278,12 @@ pub struct ExportOptions {
   /// The zoom/pan timeline. Omit it and the export is unzoomed, however the
   /// preview looks.
   pub zoom_regions: Option<Vec<ZoomRegion>>,
+  /// Every file contributing sound. Omit it and the export is silent.
+  ///
+  /// Not inferred from the input and the camera sidecar: which tracks belong in
+  /// the mix is an editing decision, and muting the camera should be a matter
+  /// of leaving it out of this list.
+  pub audio_sources: Option<Vec<AudioSource>>,
   /// Spans of the source to leave out. Omit and the whole range is exported.
   pub cuts: Option<Vec<CutRegion>>,
   /// Edges of the recording to throw away. Omit to keep all of it.
@@ -1352,6 +1402,12 @@ impl VideoExporter {
           .unwrap_or_default()
           .into_iter()
           .map(zoom::ZoomRegion::from)
+          .collect(),
+        audio_sources: options
+          .audio_sources
+          .unwrap_or_default()
+          .into_iter()
+          .map(|source| (source.path, source.offset_ms.unwrap_or(0.0)))
           .collect(),
         cuts: options
           .cuts

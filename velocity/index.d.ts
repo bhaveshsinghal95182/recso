@@ -233,6 +233,32 @@ export declare class VideoPlayer {
 export declare function adapterInfo(): Array<string>
 
 /**
+ * Diagnostic: what does Media Foundation see in this file?
+ * What a file's audio track looks like, if it has one.
+ */
+export interface AudioProbe {
+  /**
+   * False when the file has no audio, or none that can be decoded. Not an
+   * error: a recording with the microphone off is still a recording.
+   */
+  hasAudio: boolean
+  sampleRate: number
+  channels: number
+  /** Milliseconds. */
+  duration: number
+}
+
+/** One file contributing sound to the export. */
+export interface AudioSource {
+  path: string
+  /**
+   * Milliseconds to shift this file by so it sits on the screen recording's
+   * clock. A camera sidecar that started late has a positive offset.
+   */
+  offsetMs?: number
+}
+
+/**
  * What fills the canvas behind the video.
  *
  * Gradients and patterns arrive as `image`, already rasterised. The editor's
@@ -363,6 +389,14 @@ export interface ExportOptions {
    * preview looks.
    */
   zoomRegions?: Array<ZoomRegion>
+  /**
+   * Every file contributing sound. Omit it and the export is silent.
+   *
+   * Not inferred from the input and the camera sidecar: which tracks belong in
+   * the mix is an editing decision, and muting the camera should be a matter
+   * of leaving it out of this list.
+   */
+  audioSources?: Array<AudioSource>
   /** Spans of the source to leave out. Omit and the whole range is exported. */
   cuts?: Array<CutRegion>
   /** Edges of the recording to throw away. Omit to keep all of it. */
@@ -504,13 +538,21 @@ export interface PresentedFrame {
   pts: number
 }
 
+/**
+ * Look at a file's audio without decoding all of it.
+ *
+ * Exists mostly so an export can be checked for the track it was supposed to
+ * write: `probeVideo` enumerates video stream types only, so it reports
+ * nothing about sound and an audio regression would pass it silently.
+ */
+export declare function probeAudio(path: string): AudioProbe
+
 export interface ProbeResult {
   opened: boolean
   error: string
   nativeTypes: Array<string>
 }
 
-/** Diagnostic: what does Media Foundation see in this file? */
 export declare function probeVideo(path: string): ProbeResult
 
 /**

@@ -37,7 +37,8 @@ GPU engine (Rust/D3D11, in `velocity/src/engine/`). This document says
 
 ---
 
-> **Status.** Steps 1-4 of the order at the bottom are done, plus zoom and cuts: the canvas is no
+> **Status.** Steps 1-4 of the order at the bottom are done, plus zoom, cuts and
+> audio-on-export: the canvas is no
 > longer tied to the source, backgrounds and the video's own rect/radius/border
 > exist, and grading is per-layer. The tables below are marked accordingly. What
 > is left is the timeline, per-event cursors and audio -- and the integration
@@ -178,14 +179,24 @@ colour is the exception, because a clear is free.
 
 ### Audio
 
-| Feature                  | Export pipeline | Engine | Notes                                                  |
-| ------------------------ | --------------- | ------ | ------------------------------------------------------ |
-| Screen / system audio    | yes             | **no** | `audio-mix.ts`.                                        |
-| Webcam audio             | yes             | **no** | Remuxed and mixed in.                                  |
-| Cut-aware audio timeline | yes             | **no** | Audio follows the same cut mapping as video.           |
-| Audio as master clock    | **no**          | **no** | Neither does this. The engine's `Clock` is video-only. |
+| Feature                  | Export pipeline | Engine  | Notes                                                         |
+| ------------------------ | --------------- | ------- | ------------------------------------------------------------- |
+| Screen / system audio    | yes             | **yes** | Any number of sources, each with its own offset.              |
+| Webcam audio             | yes             | **yes** | Same mechanism; it is just another source.                    |
+| Cut-aware audio timeline | yes             | **yes** | Chunks are placed in composition time; cut ones are dropped.  |
+| Trimmed exports          | yes             | **yes** | `skip_to` seeks every source to the export's start.           |
+| Audio in preview         | n/a             | **no**  | Export only. Playback still has no sound.                     |
+| Audio as master clock    | **no**          | **no**  | Neither does this. `Clock` is video-only.                     |
+| Loudness normalisation   | yes             | **no**  | The mix is clamped on the way to 16-bit, not peak-normalised. |
 
----
+Audio landed export-first on purpose: it is what mediabunny was still needed
+for, and an export either has the sound or it does not, which is a far easier
+thing to be sure about than playback sync.
+
+Verified by `pnpm engine:audio`, which exports the same recording with and
+without sources and probes both files. The failure it guards against is quiet in
+both senses -- an export with a silent audio track looks completely normal until
+someone plays it with the volume up.
 
 ## Two things flowing the other way
 
@@ -248,6 +259,48 @@ Open questions worth settling when it is built: whether the stretch is capped
 (an unbounded one at a flick of the mouse is a streak across the screen), and
 whether it eases back or snaps when motion stops.
 
+## Before the cutover: a real test suite
+
+The engine is about to become the only path. Today there are two, and every bug
+found so far has been survivable because the other one still worked — the export
+that stalled at 79%, the preview that jittered, the webcam that opened with no
+camera. After mediabunny is deleted there is no other one.
+
+That asymmetry is the argument for building the suite _before_ the cutover
+rather than after. A test written afterwards documents behaviour; a test written
+before removing the fallback is the thing that lets you remove it.
+
+**Scale: 800–900 tests.** Not a target for its own sake — roughly what this
+surface costs to cover properly:
+
+| Area                                     | Rough count | Kind                                                     |
+| ---------------------------------------- | ----------- | -------------------------------------------------------- |
+| Timeline maths: cuts, zoom, focal pans   | 120         | Rust unit. Boundaries and degenerate inputs.             |
+| Layout: canvas, fit, anchors, crop       | 120         | Rust unit. Every mode against every aspect ratio.        |
+| Audio: mixing, placement, offsets, rates | 100         | Rust unit, plus a few end to end.                        |
+| Cursor: sampling, hotspots, overrides    | 90          | Rust unit. The per-event track is a state machine.       |
+| Colour: parsing, conversion, ranges      | 60          | Rust unit. BT.601/709, studio and full swing.            |
+| Render chain: passes, ordering, state    | 80          | Pixel readback — what a unit test cannot see.            |
+| Export: containers, progress, cancel     | 70          | End to end against real files.                           |
+| Config mapping: editor to engine         | 100         | TS unit. Every field, including ones nobody sets.        |
+| Preview session: lifecycle, transport    | 60          | TS. The React layer, where three bugs have already been. |
+| Recorder: geometry, duration, sidecars   | 70          | Mixed.                                                   |
+| Regression: one per fixed bug            | 40          | Whatever shape the bug was.                              |
+
+**Where the number comes from**, beyond today's ~115 Rust tests: degenerate
+inputs (zero-length clips, single-frame recordings, sources with no audio),
+boundaries (a cut at exactly frame zero, a zoom region of zero length, a webcam
+box larger than the canvas), and the whole TypeScript side, which has no tests
+at all despite being where every bug this week actually lived.
+
+**Two lessons from this branch the suite has to encode.** Screen capture emits
+frames only on change, so an idle desktop produces a recording of two frames and
+33 milliseconds — fixtures have to be synthetic or deliberately active, and
+several checks here have already had to learn that. And a preview that looks
+right is not evidence an export is right: the failures that matter most are the
+two paths disagreeing, so the checks that catch them have to compare the paths
+rather than inspect one.
+
 ## The four structural problems
 
 Not features. These need a design decision before any code.
@@ -281,10 +334,12 @@ the timeline work needs.
 Layer ordering is what is left here, and it is small by comparison: the four
 draws are already separate calls.
 
-**4. Audio.** The engine has none, anywhere, and audio has to become the master
-clock eventually. `Clock` is video-only and will have to slave to it. The longer
-this waits the more there is to redo — every timeline decision above is easier to
-make with audio in mind than to retrofit around.
+**4. Audio as the clock.** Half solved. The engine decodes and mixes audio and
+writes it to an export, so the mediabunny path is no longer needed for sound.
+What remains is playback: audio has to become the master clock, and `Clock` —
+which currently free-runs on the wall clock, with the picture following it — has
+to slave to audio instead. That inverts the relationship the whole player is
+built around, which is why it is still here rather than in the table above.
 
 ---
 
@@ -332,7 +387,14 @@ Sequenced so each step is independently shippable and nothing is wasted.
    source↔composition mapping the engine already almost has in its seek path),
    then layer ordering.
 7. **Per-event cursor bitmaps**, then the cursor effects that depend on them.
-8. **Audio**, and the clock rework it forces.
+8. ~~**Audio**~~ **half done.** Export has sound: decode, mix, cut-aware
+   placement and an AAC stream. Preview does not, and that is the half that
+   forces the clock rework — audio has to become the master and `Clock` has to
+   slave to it.
+9. **The test suite.** See "Before the cutover" above. It belongs before the
+   step after it, not after it.
+10. **Retire mediabunny.** Delete the second export path, and the `<video>`
+    preview with it.
 
 Steps 1–4 were engine-internal and changed nothing the user sees. Step 5 is the
 first point where any of this is reachable from the app, and it is deliberately

@@ -27,9 +27,40 @@ fn pack(hi: u32, lo: u32) -> u64 {
 // insert a video processor looks tempting, but it fails with E_INVALIDARG on
 // the second frame, so the render layer converts back to NV12 itself.
 
+/// The audio stream to add alongside the video, if there is any sound.
+///
+/// Separate from the encoder's own fields because it is optional and fixed at
+/// creation: `BeginWriting` closes the set of streams, so an audio track cannot
+/// be added to a writer that has already started.
+#[derive(Clone, Copy)]
+pub struct AudioSpec {
+  pub sample_rate: u32,
+  pub channels: u32,
+  /// Bits per second for the AAC stream. 128k is transparent enough for a
+  /// screen recording's narration and system sound.
+  pub bitrate: u32,
+}
+
+impl Default for AudioSpec {
+  fn default() -> Self {
+    Self {
+      sample_rate: 48_000,
+      channels: 2,
+      bitrate: 128_000,
+    }
+  }
+}
+
 pub struct Encoder {
   writer: IMFSinkWriter,
   stream: u32,
+  /// The audio stream index, when the output has sound.
+  audio_stream: Option<u32>,
+  audio: AudioSpec,
+  /// Frames of audio written so far, which is what timestamps are derived
+  /// from. Counting rather than trusting a clock keeps the audio and the
+  /// container's timeline exactly in step.
+  audio_frames_written: u64,
   ring: Vec<ID3D11Texture2D>,
   next: usize,
   pub width: u32,
@@ -52,6 +83,24 @@ impl Encoder {
     fps_num: u32,
     fps_den: u32,
     bitrate: u32,
+  ) -> Result<Self> {
+    Self::create_with_audio(path, width, height, fps_num, fps_den, bitrate, None)
+  }
+
+  /// As `create`, plus an AAC stream for `audio`.
+  ///
+  /// The audio stream has to be declared here rather than added later:
+  /// `BeginWriting` fixes the set of streams, and it is called before this
+  /// returns.
+  #[allow(clippy::too_many_arguments)]
+  pub fn create_with_audio(
+    path: &str,
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
+    bitrate: u32,
+    audio: Option<AudioSpec>,
   ) -> Result<Self> {
     ensure_mf();
     let gpu = gpu()?;
@@ -120,11 +169,60 @@ impl Encoder {
       ring.push(tex.expect("staging texture"));
     }
 
+    // ---- audio -------------------------------------------------------------
+    //
+    // AAC, fed 16-bit PCM. The encoder MFT does not accept float, so the mix is
+    // converted on the way in -- which is also the point where it is clamped,
+    // since a sum of sources can exceed full scale and the conversion would
+    // wrap rather than saturate.
+    let audio_spec = audio.unwrap_or_default();
+    let audio_stream = match audio {
+      None => None,
+      Some(spec) => {
+        let block_align = spec.channels * 2;
+
+        let out = unsafe { MFCreateMediaType()? };
+        unsafe {
+          out.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
+          out.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_AAC)?;
+          out.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16)?;
+          out.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, spec.sample_rate)?;
+          out.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, spec.channels)?;
+          out.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, spec.bitrate / 8)?;
+          // 0 is raw AAC, which is what an MP4 wants. The alternative, ADTS,
+          // carries its own framing and would end up nested in the container.
+          out.SetUINT32(&MF_MT_AAC_PAYLOAD_TYPE, 0)?;
+        }
+        let index = unsafe { writer.AddStream(&out)? };
+
+        let input = unsafe { MFCreateMediaType()? };
+        unsafe {
+          input.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
+          input.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM)?;
+          input.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16)?;
+          input.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, spec.sample_rate)?;
+          input.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, spec.channels)?;
+          input.SetUINT32(&MF_MT_AUDIO_BLOCK_ALIGNMENT, block_align)?;
+          input.SetUINT32(
+            &MF_MT_AUDIO_AVG_BYTES_PER_SECOND,
+            spec.sample_rate * block_align,
+          )?;
+          input.SetUINT32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
+          writer.SetInputMediaType(index, &input, None)?;
+        }
+
+        Some(index)
+      }
+    };
+
     unsafe { writer.BeginWriting()? };
 
     Ok(Self {
       writer,
       stream,
+      audio_stream,
+      audio: audio_spec,
+      audio_frames_written: 0,
       ring,
       next: 0,
       width,
@@ -186,6 +284,68 @@ impl Encoder {
 
   /// Flush the encoder and close the MP4. Without this the file has no moov
   /// atom and nothing will play it.
+  /// Write interleaved float samples to the audio stream.
+  ///
+  /// Timestamps come from a running frame count rather than from the caller:
+  /// audio is continuous, so the only way for it to stay in step with the
+  /// container is for every sample written to advance the clock by exactly its
+  /// own duration. A caller passing timestamps could leave gaps that the muxer
+  /// would fill with silence, or overlaps it would resolve by guessing.
+  ///
+  /// Samples are clamped on the way to 16-bit. A sum of sources can exceed full
+  /// scale, and the float-to-integer conversion wraps rather than saturating --
+  /// so an un-clamped loud moment comes out as a full-amplitude click of the
+  /// opposite sign, which is far more audible than the clipping it replaces.
+  pub fn write_audio(&mut self, samples: &[f32]) -> Result<()> {
+    let Some(stream) = self.audio_stream else {
+      return Ok(());
+    };
+    if samples.is_empty() {
+      return Ok(());
+    }
+
+    let channels = self.audio.channels.max(1) as usize;
+    let frames = samples.len() / channels;
+    if frames == 0 {
+      return Ok(());
+    }
+
+    let bytes = samples.len() * 2;
+
+    unsafe {
+      let buffer = MFCreateMemoryBuffer(bytes as u32)?;
+
+      let mut data: *mut u8 = std::ptr::null_mut();
+      buffer.Lock(&mut data, None, None)?;
+      let out = std::slice::from_raw_parts_mut(data as *mut i16, samples.len());
+      for (target, source) in out.iter_mut().zip(samples) {
+        *target = (source.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+      }
+      buffer.Unlock()?;
+      buffer.SetCurrentLength(bytes as u32)?;
+
+      let sample = MFCreateSample()?;
+      sample.AddBuffer(&buffer)?;
+
+      let rate = self.audio.sample_rate.max(1) as i64;
+      let start = self.audio_frames_written as i64 * 10_000_000 / rate;
+      let end = (self.audio_frames_written + frames as u64) as i64 * 10_000_000 / rate;
+      sample.SetSampleTime(start)?;
+      sample.SetSampleDuration(end - start)?;
+
+      self.writer.WriteSample(stream, &sample)?;
+    }
+
+    self.audio_frames_written += frames as u64;
+    Ok(())
+  }
+
+  /// Audio frames written so far, for progress and for checking the audio and
+  /// video timelines came out the same length.
+  pub fn audio_frames_written(&self) -> u64 {
+    self.audio_frames_written
+  }
+
   pub fn finish(&mut self) -> Result<()> {
     if !self.finished {
       unsafe { self.writer.Finalize()? };

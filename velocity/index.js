@@ -718,6 +718,7 @@ module.exports.isCursorSettingsSupported = nativeBinding.isCursorSettingsSupport
 module.exports.listAvailableWindows = nativeBinding.listAvailableWindows
 module.exports.listDecoders = nativeBinding.listDecoders
 module.exports.listWebcamDevices = nativeBinding.listWebcamDevices
+module.exports.probeAudio = nativeBinding.probeAudio
 module.exports.probeVideo = nativeBinding.probeVideo
 module.exports.startMonitorRecording = nativeBinding.startMonitorRecording
 module.exports.startMonitorRecordingV2 = nativeBinding.startMonitorRecordingV2
