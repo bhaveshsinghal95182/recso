@@ -162,8 +162,7 @@ colour is the exception, because a clear is free.
 | Region overrides by time                   | yes        | **no** | `cursorRegionOverrides` swap the image for a span.                         |
 | I-beam detection by handle                 | yes        | **no** | `KNOWN_IBEAM_CURSOR_HANDLES` special case.                                 |
 | Click animations                           | yes        | **no** | Scale + duration on click events.                                          |
-| Motion blur                                | yes        | **no** | Trail between samples.                                                     |
-| Speed-scaled motion blur                   | yes        | **no** | Intensity from sample-to-sample speed.                                     |
+| Cursor smear                               | partial    | **no** | Wanted: the pointer stretches along its motion. See below.                 |
 
 ### Timeline
 
@@ -226,6 +225,29 @@ explicitly and the engine's `set_webcam_layout` docs match. Keep it that way.
 
 ---
 
+## The cursor smear
+
+Not motion blur, and the difference is the whole feature. The compositor draws a
+blur trail: copies of the pointer along the path between two samples, fading
+out. What is wanted here is the animator's smear -- the pointer itself
+stretching along its direction of travel, one shape, elongated by how fast it is
+moving, snapping back when it stops.
+
+Blur says "this is a photograph of something fast". Smear says "this is drawn,
+and it is moving". A pointer is a drawn object composited on top of a
+recording, so the second is the honest read.
+
+It is also cheaper. A blur trail is many draws of the same sprite; a smear is
+one quad with its rect stretched along the velocity vector and its UVs left
+alone, which the engine's quad path already does for every other layer.
+
+Off by default and turned on deliberately -- it is a stylistic choice about how
+a recording should feel, not a correction for something wrong with the footage.
+
+Open questions worth settling when it is built: whether the stretch is capped
+(an unbounded one at a flick of the mouse is a streak across the screen), and
+whether it eases back or snaps when motion stops.
+
 ## The four structural problems
 
 Not features. These need a design decision before any code.
@@ -268,17 +290,23 @@ make with audio in mind than to retrofit around.
 
 ## Also worth knowing
 
-**The mediabunny export reads the whole file into memory.**
-`run-engine-canvas-export.ts` does `await response.blob()` on the source before
-handing it to `BlobSource`. That is the 5GB ceiling in `todo.md`. The engine's
-exporter streams through a Media Foundation source reader and has no equivalent
-limit, so this is a reason to move export to the engine that is independent of
-speed or fidelity.
+**mediabunny is being retired.** The engine is the export path; the two are not
+going to coexist indefinitely, and nothing new should be added to the mediabunny
+side.
 
-**Two export paths already coexist**, the engine's and mediabunny's, with
-nothing choosing between them. The engine's cannot yet produce a composed frame
-(no background, no zoom, no cuts, no audio), so mediabunny's is the only one
-that can currently export a real project.
+The immediate reason is the 5GB ceiling: `run-engine-canvas-export.ts` does
+`await response.blob()` on the source before handing it to `BlobSource`, so the
+whole recording goes through memory. The engine's exporter streams through a
+Media Foundation source reader and has no equivalent limit. That was tracked as
+its own bug for a while; it is not a bug to fix, it is a reason the path is
+going away.
+
+**What has to land before it can go.** Audio is the whole of it. The engine
+export already carries background, layout, zoom, cuts, crop, the webcam and the
+cursor -- everything the compositor draws except the items in the tables above.
+It has no audio at all, and mediabunny's path is where the microphone, system
+audio and camera audio are currently mixed. Until the engine can do that, the
+mediabunny exporter is the only one that can produce a finished file.
 
 ---
 

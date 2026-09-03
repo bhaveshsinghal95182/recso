@@ -238,7 +238,7 @@ has the three layers; it does not have most of what the editor draws on them.
 | Zoom regions                       | **no** | the animated zoom/pan timeline                                                                     |
 | Cuts / trim                        | **no** | no timeline model at all                                                                           |
 | Click effects                      | **no** | click animations and indicators                                                                    |
-| Cursor motion blur                 | **no** | including the speed-scaled variant                                                                 |
+| Cursor smear                       | **no** | stretch along the direction of travel; not the compositor's blur trail                             |
 | Per-region cursor overrides        | **no** | recso's track carries a `cursorDataUrl` _per event_; the engine has one bitmap for the whole track |
 | I-beam detection                   | **no** | the known-handle special case                                                                      |
 | Webcam borders and shadows         | **no** | shape and radius exist; borders and shadows do not                                                 |
@@ -292,6 +292,14 @@ cache keyed by image, not just another field.
   side that wants the aspect ratio before the engine is involved.
 - **`probeVideoMetadata` still reads the whole file into memory** on the fallback
   path, used for pre-metadata recordings and crash recovery.
+- **Audio is written to sidecars, not interleaved.** The recorder writes system
+  audio and the microphone beside the recording rather than muxing them in.
+  Interleaving is the goal; keeping the sidecar as an option is worth having for
+  callers that do not want the audio at all. (Was item 1 of `todo.md`.)
+- **`stop()` does not report file size or frames dropped.** Geometry, duration
+  and frame count are described at capture time; these two are not, and dropped
+  frames in particular are only visible in the recorder's own logs. (Was item 2
+  of `todo.md`.)
 - **`hasReadableVideoTrack` is still a mediabunny probe** in the finalize poll.
   Deliberate: it checks the file is muxed and readable on disk, which a frame
   count cannot tell you.

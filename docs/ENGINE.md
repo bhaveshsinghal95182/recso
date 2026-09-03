@@ -445,7 +445,7 @@ headlines:
 - **No timeline, no clips.** recso's cut and zoom model still lives entirely in
   the Pixi compositor and has no counterpart here. The webcam and cursor layers
   do now exist in the engine; backgrounds, zoom regions, click effects, cursor
-  motion blur and per-region cursor overrides do not.
+  cursor smear and per-region cursor overrides do not.
 - **The camera sidecar is not described by `stop()`.** Only the screen track
   reports a `RecordingMediaInfo`, so the camera's dimensions and aspect ratio
   still have to come from opening it.

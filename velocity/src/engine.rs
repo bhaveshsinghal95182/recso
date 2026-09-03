@@ -22,6 +22,8 @@
 #[cfg(windows)]
 pub mod api;
 #[cfg(windows)]
+mod audio;
+#[cfg(windows)]
 mod composite;
 #[cfg(windows)]
 mod cuts;

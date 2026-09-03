@@ -48,7 +48,10 @@ export function unsupportedFeatures(config: CompositionConfig): UnsupportedFeatu
       missing.push({ label: 'Click animations', detail: 'the pointer draws without them' });
     }
     if (cursor.showMotionBlur) {
-      missing.push({ label: 'Cursor motion blur', detail: 'the pointer draws without a trail' });
+      missing.push({
+        label: 'Cursor smear',
+        detail: 'the pointer draws without stretching along its motion',
+      });
     }
     if (cursor.cursorRegionOverrides?.length) {
       missing.push({
