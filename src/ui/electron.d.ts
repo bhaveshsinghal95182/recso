@@ -316,6 +316,28 @@ export interface EngineCursorEffects {
   smearStrength?: number;
 }
 
+/** Where a paired phone should point its browser. */
+export interface PhoneCameraSession {
+  /** The address to show as a QR code: the best guess at a reachable one. */
+  url: string;
+  /** Every address this machine answers on, best first, for when the guess is wrong. */
+  urls: string[];
+  port: number;
+}
+
+export interface PhoneCameraState extends PhoneCameraSession {
+  /** Whether a frame arrived recently enough that the phone is still showing the room. */
+  live: boolean;
+  framesReceived: number;
+  /** Frames replaced before the recorder read them. Climbing alongside a low
+   * frame count means the link cannot keep up. */
+  framesDropped: number;
+  width: number;
+  height: number;
+  /** What the phone last reported going wrong: permission refused, backgrounded. */
+  lastError?: string;
+}
+
 export interface EngineCursorPoint {
   timestampMs: number;
   /** 0..1 across the source frame, so it survives the video being scaled. */
@@ -445,6 +467,22 @@ interface ElectronAPI {
     hideToTray: () => void;
     isMaximized: () => Promise<boolean>;
     onMaximizeChange: (callback: (isMaximized: boolean) => void) => () => void;
+  };
+
+  /**
+   * A phone's camera, over the local network.
+   *
+   * The phone opens a page the desktop serves and posts frames back; they land
+   * in the native recorder's frame slot, so the camera track is written on the
+   * screen recording's own clock. Set `cameraSource: 'phone'` on the recording
+   * config to actually use it.
+   */
+  phoneCamera: {
+    /** Start serving the pairing page. Idempotent: returns the running session. */
+    start: () => Promise<PhoneCameraSession>;
+    stop: () => Promise<void>;
+    /** Null when nothing is paired. Poll it while the pairing panel is open. */
+    state: () => Promise<PhoneCameraState | null>;
   };
 
   recorder: {

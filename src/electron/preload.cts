@@ -147,6 +147,26 @@ electron.contextBridge.exposeInMainWorld('electron', {
       createSubscription('window-maximized', callback),
   },
 
+  // A phone's camera, over the local network
+  phoneCamera: {
+    /** Start serving the pairing page. Idempotent: returns the running session. */
+    start: (): Promise<{ url: string; urls: string[]; port: number }> =>
+      electron.ipcRenderer.invoke('phone-camera:start'),
+    stop: (): Promise<void> => electron.ipcRenderer.invoke('phone-camera:stop'),
+    /** Null when nothing is paired. Poll it while the panel is open. */
+    state: (): Promise<{
+      url: string;
+      urls: string[];
+      port: number;
+      live: boolean;
+      framesReceived: number;
+      framesDropped: number;
+      width: number;
+      height: number;
+      lastError?: string;
+    } | null> => electron.ipcRenderer.invoke('phone-camera:state'),
+  },
+
   // Recording
   recorder: {
     getSources: (): Promise<DesktopSource[]> => electron.ipcRenderer.invoke('recorder:get-sources'),
