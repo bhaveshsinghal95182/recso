@@ -26,6 +26,8 @@ import { quality } from '@/constants';
 import { cn, formatBytes, formatDuration } from '@/lib/utils';
 import type { DesktopSource } from '@/types';
 
+import { PhoneCameraPanel } from './phone-camera-panel';
+
 type ToolbarPanel = 'sources' | 'microphone' | 'camera' | 'settings';
 type SourceFilter = 'all' | 'screen' | 'window';
 
@@ -65,6 +67,9 @@ interface FloatingRecorderToolbarProps {
   onRecordCameraChange: (enabled: boolean) => void;
   onRecordSystemAudioChange: (enabled: boolean) => void;
   onCameraDeviceChange: (deviceId: string) => void;
+  /** Where the camera picture comes from: this machine, or a paired phone. */
+  cameraSource: 'local' | 'phone';
+  onCameraSourceChange: (source: 'local' | 'phone') => void;
   onMicDeviceChange: (deviceId: string) => void;
   onStart: () => void;
   onStop: () => void;
@@ -103,6 +108,8 @@ export function FloatingRecorderToolbar({
   onRecordCameraChange,
   onRecordSystemAudioChange,
   onCameraDeviceChange,
+  cameraSource,
+  onCameraSourceChange,
   onMicDeviceChange,
   onStart,
   onStop,
@@ -201,7 +208,10 @@ export function FloatingRecorderToolbar({
   };
 
   const toggleCamera = () => {
-    const next = !recordCamera;
+    // The switch on the local device list. Turning it on also claims the source
+    // back from a paired phone, since only one camera reaches the recording.
+    const next = !(recordCamera && cameraSource === 'local');
+    onCameraSourceChange('local');
     onRecordCameraChange(next);
     if (next && !cameraDeviceId && cameras[0]) {
       onCameraDeviceChange(cameras[0].deviceId);
@@ -255,21 +265,35 @@ export function FloatingRecorderToolbar({
             />
           )}
           {openPanel === 'camera' && (
-            <DevicePanel
-              title="Webcam"
-              enabled={recordCamera}
-              devices={cameras}
-              selectedDeviceId={cameraDeviceId}
-              emptyLabel="No webcams found"
-              fallbackLabel="Default webcam"
-              activeIcon={<Video size={18} />}
-              inactiveIcon={<VideoOff size={18} />}
-              onToggle={toggleCamera}
-              onDeviceSelect={(deviceId) => {
-                onCameraDeviceChange(deviceId);
-                onRecordCameraChange(true);
-              }}
-            />
+            <div className="flex flex-col gap-4">
+              <DevicePanel
+                title="Webcam"
+                enabled={recordCamera && cameraSource === 'local'}
+                devices={cameras}
+                selectedDeviceId={cameraDeviceId}
+                emptyLabel="No webcams found"
+                fallbackLabel="Default webcam"
+                activeIcon={<Video size={18} />}
+                inactiveIcon={<VideoOff size={18} />}
+                onToggle={toggleCamera}
+                onDeviceSelect={(deviceId) => {
+                  onCameraDeviceChange(deviceId);
+                  onCameraSourceChange('local');
+                  onRecordCameraChange(true);
+                }}
+              />
+              <PhoneCameraPanel
+                active={recordCamera && cameraSource === 'phone'}
+                onActivate={() => {
+                  onCameraSourceChange('phone');
+                  onRecordCameraChange(true);
+                }}
+                onDeactivate={() => {
+                  onCameraSourceChange('local');
+                  onRecordCameraChange(false);
+                }}
+              />
+            </div>
           )}
           {openPanel === 'settings' && (
             <SettingsPanel

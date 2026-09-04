@@ -200,6 +200,7 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
       nativeCaptureMode?: 'legacy' | 'native-singular-clock',
       targetFps: 30 | 60 = 60,
       nativeWebcamDeviceId?: string,
+      cameraSource: 'local' | 'phone' = 'local',
     ) => {
       let recordingId: string | null = null;
 
@@ -227,6 +228,7 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
           nativeCaptureMode,
           targetFps,
           nativeWebcamDeviceId,
+          cameraSource,
           options: {
             videoBitrate,
             audioBitrate: audioRef.current ? 128000 : 0,
@@ -240,7 +242,11 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
         recordingId = startResult.recordingId;
         recordingIdRef.current = recordingId;
         const nativeWebcamHandled = Boolean(startResult.nativeWebcamHandled);
-        const shouldRecordCameraSidecar = recordCamera && !nativeWebcamHandled;
+        // A phone only ever reaches the recording through the native path, so
+        // there is no renderer sidecar for it -- opening one would record this
+        // machine's own webcam alongside, which is not what was asked for.
+        const shouldRecordCameraSidecar =
+          recordCamera && !nativeWebcamHandled && cameraSource !== 'phone';
         const shouldRecordStandaloneMic = recordMic && (!recordCamera || nativeWebcamHandled);
 
         // If no auxiliary tracks are enabled, native recording is enough.

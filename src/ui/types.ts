@@ -96,6 +96,14 @@ export interface RecordingConfig {
   recordMic?: boolean;
   /** Specific camera device ID (defaults to system default) */
   cameraDeviceId?: string;
+  /**
+   * Where the camera picture comes from. Defaults to a camera on this machine.
+   *
+   * `'phone'` needs a phone already paired and sending. There is no renderer
+   * fallback for it, so starting a recording without one fails rather than
+   * quietly using the laptop's own webcam instead.
+   */
+  cameraSource?: 'local' | 'phone';
   /** Specific microphone device ID (defaults to system default) */
   micDeviceId?: string;
   /** Recording engine mode. Defaults to legacy hybrid capture. */

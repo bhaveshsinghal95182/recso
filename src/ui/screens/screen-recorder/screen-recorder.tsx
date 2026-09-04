@@ -37,6 +37,7 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
   const [recordCamera, setRecordCamera] = useState(false);
   const [recordSystemAudio, setRecordSystemAudio] = useState(true);
   const [cameraDeviceId, setCameraDeviceId] = useState<string | null>(null);
+  const [cameraSource, setCameraSource] = useState<'local' | 'phone'>('local');
   const [micDeviceId, setMicDeviceId] = useState<string | null>(null);
   const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
   const [microphones, setMicrophones] = useState<MediaDeviceInfo[]>([]);
@@ -101,6 +102,10 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
       cameraDeviceId || undefined,
       micDeviceId || undefined,
       recordSystemAudio,
+      undefined,
+      undefined,
+      undefined,
+      cameraSource,
     );
     setIsStarting(false);
 
@@ -171,6 +176,8 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
         onRecordCameraChange={setRecordCamera}
         onRecordSystemAudioChange={setRecordSystemAudio}
         onCameraDeviceChange={setCameraDeviceId}
+        cameraSource={cameraSource}
+        onCameraSourceChange={setCameraSource}
         onMicDeviceChange={setMicDeviceId}
         onStart={handleStart}
         onStop={handleStop}

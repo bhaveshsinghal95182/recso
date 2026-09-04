@@ -24,6 +24,7 @@ import type {
   StopRecordingResult,
 } from '../types/recorder.types.js';
 import { completeRecording, createRecording, getRecording } from './database.service.js';
+import { phoneCameraState } from './phone-camera.service.js';
 import { initProjectFolder } from './project-storage.service.js';
 
 interface VelocityStopper {
@@ -70,6 +71,7 @@ interface VelocityBindings {
     targetFps?: number;
     enableWebcam?: boolean;
     webcamDeviceId?: string;
+    webcamSource?: 'local' | 'phone';
   }) => VelocityStopper;
   startWindowRecordingV2?: (options: {
     windowTitle: string;
@@ -79,6 +81,7 @@ interface VelocityBindings {
     targetFps?: number;
     enableWebcam?: boolean;
     webcamDeviceId?: string;
+    webcamSource?: 'local' | 'phone';
   }) => VelocityStopper;
 }
 
@@ -87,6 +90,8 @@ interface NativeClockOptions {
   targetFps: 30 | 60;
   enableWebcam: boolean;
   webcamDeviceId?: string;
+  /** Which camera the native side should open. Omitted means a local one. */
+  webcamSource?: 'local' | 'phone';
 }
 
 interface NativeWebcamCapability {
@@ -216,6 +221,7 @@ function startVelocityMonitorRecording(
       targetFps: nativeClockOptions.targetFps,
       enableWebcam: nativeClockOptions.enableWebcam,
       webcamDeviceId: nativeClockOptions.webcamDeviceId,
+      webcamSource: nativeClockOptions.webcamSource,
     });
   }
 
@@ -247,6 +253,7 @@ function startVelocityWindowRecording(
       targetFps: nativeClockOptions.targetFps,
       enableWebcam: nativeClockOptions.enableWebcam,
       webcamDeviceId: nativeClockOptions.webcamDeviceId,
+      webcamSource: nativeClockOptions.webcamSource,
     });
   }
 
@@ -929,33 +936,53 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
       ? selectedSourceMeta.isScreen
       : selectedSourceId.startsWith('screen:') || selectedSourceId === 'screen';
     const useNativeSingularClock = shouldUseNativeSingularClock(config);
+    const usePhoneCamera = config.cameraSource === 'phone';
     const nativeClockOptions: NativeClockOptions = {
       useSingularClock: useNativeSingularClock,
       targetFps: config.targetFps === 30 ? 30 : 60,
       enableWebcam: Boolean(config.recordCamera),
       webcamDeviceId: config.nativeWebcamDeviceId || config.cameraDeviceId,
+      webcamSource: usePhoneCamera ? 'phone' : 'local',
     };
     let useNativeWebcam = false;
     let nativeWebcamDeviceId = nativeClockOptions.webcamDeviceId;
 
     if (nativeClockOptions.useSingularClock && nativeClockOptions.enableWebcam) {
-      const webcamCapability = resolveNativeWebcamCapability(
-        velocity,
-        nativeClockOptions.webcamDeviceId,
-      );
+      if (usePhoneCamera) {
+        // A phone is only reachable through the native path, so there is no
+        // renderer sidecar to fall back to. Refusing here beats starting a take
+        // that silently records this machine's own webcam instead of the phone
+        // the user just paired -- or worse, no camera track at all.
+        const phone = phoneCameraState();
+        if (!phone?.live) {
+          return {
+            success: false,
+            error:
+              'The phone is not sending a picture. Open the phone camera panel, scan the code, and tap Start camera before recording.',
+          };
+        }
 
-      if (webcamCapability.supported) {
         useNativeWebcam = true;
-        nativeWebcamDeviceId = webcamCapability.selectedDeviceId || nativeWebcamDeviceId;
-        if (webcamCapability.reason) {
+        nativeWebcamDeviceId = undefined;
+      } else {
+        const webcamCapability = resolveNativeWebcamCapability(
+          velocity,
+          nativeClockOptions.webcamDeviceId,
+        );
+
+        if (webcamCapability.supported) {
+          useNativeWebcam = true;
+          nativeWebcamDeviceId = webcamCapability.selectedDeviceId || nativeWebcamDeviceId;
+          if (webcamCapability.reason) {
+            console.warn(
+              `[RecorderService] Native webcam selection note: ${webcamCapability.reason}.`,
+            );
+          }
+        } else {
           console.warn(
-            `[RecorderService] Native webcam selection note: ${webcamCapability.reason}.`,
+            `[RecorderService] Native webcam capture unavailable; falling back to renderer camera sidecar (${webcamCapability.reason || 'unknown reason'}).`,
           );
         }
-      } else {
-        console.warn(
-          `[RecorderService] Native webcam capture unavailable; falling back to renderer camera sidecar (${webcamCapability.reason || 'unknown reason'}).`,
-        );
       }
     }
 
@@ -995,6 +1022,16 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
           throw error;
         }
 
+        if (usePhoneCamera) {
+          // Nothing to fall back to: the renderer sidecar can only open a local
+          // camera, and quietly recording that instead of the phone would be a
+          // surprise discovered in the editor.
+          return {
+            success: false,
+            error: `The phone camera would not start: ${error instanceof Error ? error.message : String(error)}`,
+          };
+        }
+
         console.warn(
           '[RecorderService] Native webcam start failed; falling back to renderer camera sidecar.',
           error,
@@ -1028,6 +1065,16 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
       } catch (error) {
         if (!useNativeWebcam) {
           throw error;
+        }
+
+        if (usePhoneCamera) {
+          // Nothing to fall back to: the renderer sidecar can only open a local
+          // camera, and quietly recording that instead of the phone would be a
+          // surprise discovered in the editor.
+          return {
+            success: false,
+            error: `The phone camera would not start: ${error instanceof Error ? error.message : String(error)}`,
+          };
         }
 
         console.warn(

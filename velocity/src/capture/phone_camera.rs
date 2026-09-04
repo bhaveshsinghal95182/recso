@@ -43,10 +43,25 @@ struct PhoneFrame {
   bgra: Vec<u8>,
   width: usize,
   height: usize,
-  received: Instant,
 }
 
 static SLOT: Mutex<Option<PhoneFrame>> = Mutex::new(None);
+
+/// What the last frame was and when it turned up, kept separately from the slot.
+///
+/// The slot empties as soon as the recorder reads it, so it answers "is there an
+/// unread frame", which is a different question from "is the phone still
+/// sending". While a recording is running the slot is empty most of the time --
+/// that is the loop working correctly -- and reading liveness off it would make
+/// the panel say the phone had stopped and the recorder refuse to start against
+/// a phone that was streaming perfectly well.
+struct LastSeen {
+  at: Instant,
+  width: usize,
+  height: usize,
+}
+
+static LAST_SEEN: Mutex<Option<LastSeen>> = Mutex::new(None);
 
 /// Bumped on every accepted frame, so a reader can tell a new one from the one
 /// it already wrote without comparing pixels.
@@ -86,8 +101,16 @@ fn accept(jpeg: &[u8]) -> std::result::Result<(u32, u32), String> {
     bgra,
     width,
     height,
-    received: Instant::now(),
   });
+  drop(slot);
+
+  if let Ok(mut seen) = LAST_SEEN.lock() {
+    *seen = Some(LastSeen {
+      at: Instant::now(),
+      width,
+      height,
+    });
+  }
   SEQUENCE.fetch_add(1, Ordering::Release);
 
   Ok((width as u32, height as u32))
@@ -105,11 +128,14 @@ pub(crate) fn take_frame() -> Option<(Vec<u8>, usize, usize)> {
 }
 
 /// Whether the phone has sent anything recently enough to trust.
+///
+/// Asked of the last arrival rather than the slot, which is usually empty while
+/// a recording is draining it.
 pub(crate) fn is_live() -> bool {
-  SLOT
+  LAST_SEEN
     .lock()
     .ok()
-    .and_then(|slot| slot.as_ref().map(|frame| frame.received.elapsed()))
+    .and_then(|seen| seen.as_ref().map(|seen| seen.at.elapsed()))
     .map(|age| age < FRAME_FRESH_FOR)
     .unwrap_or(false)
 }
@@ -122,6 +148,9 @@ pub(crate) fn is_live() -> bool {
 pub fn reset_phone_camera() {
   if let Ok(mut slot) = SLOT.lock() {
     *slot = None;
+  }
+  if let Ok(mut seen) = LAST_SEEN.lock() {
+    *seen = None;
   }
   DROPPED.store(0, Ordering::Relaxed);
 }
@@ -144,14 +173,14 @@ pub struct PhoneCameraStatus {
 
 #[napi]
 pub fn phone_camera_status() -> PhoneCameraStatus {
-  let (live, width, height) = SLOT
+  let (live, width, height) = LAST_SEEN
     .lock()
     .ok()
-    .map(|slot| match slot.as_ref() {
-      Some(frame) => (
-        frame.received.elapsed() < FRAME_FRESH_FOR,
-        frame.width as u32,
-        frame.height as u32,
+    .map(|seen| match seen.as_ref() {
+      Some(seen) => (
+        seen.at.elapsed() < FRAME_FRESH_FOR,
+        seen.width as u32,
+        seen.height as u32,
       ),
       None => (false, 0, 0),
     })
