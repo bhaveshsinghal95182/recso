@@ -142,6 +142,8 @@ export interface ExportOptions {
   cursorSize?: number;
   /** Clamped to 0..1. Defaults to 1. */
   cursorOpacity?: number;
+  /** The click pop and the smear. Omit and the pointer draws plainly. */
+  cursorEffects?: CursorEffectSpec;
 }
 
 export interface ExportProgress {
@@ -246,6 +248,8 @@ export interface VideoPlayerInstance {
   setCursorTrack(samples: CursorPoint[]): void;
   /** Cursor height in destination pixels, and its opacity. Size 0 hides it. */
   setCursorStyle(size: number, opacity: number): void;
+  /** The click pop and the smear, both resolved per frame against the track. */
+  setCursorEffects(effects: CursorEffectSpec): void;
   /** Pointer samples the decode thread has loaded. Applied asynchronously. */
   cursorSampleCount(): number;
   /** Pointer bitmaps resident. Applied asynchronously, like the sample count. */
@@ -521,6 +525,26 @@ export interface CursorPoint {
    * Omitted, or past the end of the table, draws the default pointer.
    */
   imageId?: number;
+  /**
+   * Whether the user clicked here. Defaults to false.
+   *
+   * On the sample rather than in its own list so a cut that drops the moment
+   * drops the click with it.
+   */
+  click?: boolean;
+}
+
+/** What a click does to the pointer, and how far it stretches when it moves. */
+export interface CursorEffectSpec {
+  /** Peak scale of the click pop, about the hotspot. 1 or omitted disables it. */
+  clickScale?: number;
+  /** How long that pop lasts. 0 or omitted also disables it. */
+  clickDurationMs?: number;
+  /**
+   * How far the pointer stretches along its travel, as a multiplier on the
+   * distance it covered. 0 or omitted disables the smear. Capped engine-side.
+   */
+  smearStrength?: number;
 }
 
 /** What to open, when a recording is more than one file. */

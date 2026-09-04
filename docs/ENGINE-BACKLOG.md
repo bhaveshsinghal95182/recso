@@ -228,22 +228,22 @@ and it should be revisited if the engine is ever abandoned.
 What the editor's `CompositionEngine` does that the engine does not. The engine
 has the three layers; it does not have most of what the editor draws on them.
 
-| Feature                            | Engine | Notes                                                                  |
-| ---------------------------------- | ------ | ---------------------------------------------------------------------- |
-| Screen video                       | yes    |                                                                        |
-| Webcam overlay                     | yes    | shape, corner radius, and aspect fit                                   |
-| Cursor sprite                      | yes    | one global bitmap; see below                                           |
-| Brightness / contrast / saturation | yes    | one hardcoded pass                                                     |
-| Backgrounds                        | **no** | colour, pattern, image                                                 |
-| ~~Zoom regions~~                   | yes    | the animated zoom/pan timeline                                         |
-| ~~Cuts / trim~~                    | yes    | source↔composition mapping, and cut-aware audio                        |
-| ~~Per-event cursor bitmaps~~       | yes    | a deduped bitmap table; each sample indexes into it                    |
-| Click effects                      | **no** | click animations and indicators                                        |
-| Cursor smear                       | **no** | stretch along the direction of travel; not the compositor's blur trail |
-| ~~Per-region cursor overrides~~    | yes    | a table entry, plus a sample injected at each boundary                 |
-| ~~I-beam detection~~               | yes    | the same known-handle check, choosing a table entry                    |
-| Webcam borders and shadows         | **no** | shape and radius exist; borders and shadows do not                     |
-| Canvas padding / layout            | **no** | the video's placement within a larger canvas                           |
+| Feature                            | Engine | Notes                                                                   |
+| ---------------------------------- | ------ | ----------------------------------------------------------------------- |
+| Screen video                       | yes    |                                                                         |
+| Webcam overlay                     | yes    | shape, corner radius, and aspect fit                                    |
+| Cursor sprite                      | yes    | one global bitmap; see below                                            |
+| Brightness / contrast / saturation | yes    | one hardcoded pass                                                      |
+| Backgrounds                        | **no** | colour, pattern, image                                                  |
+| ~~Zoom regions~~                   | yes    | the animated zoom/pan timeline                                          |
+| ~~Cuts / trim~~                    | yes    | source↔composition mapping, and cut-aware audio                         |
+| ~~Per-event cursor bitmaps~~       | yes    | a deduped bitmap table; each sample indexes into it                     |
+| ~~Click animations~~               | yes    | a scale about the hotspot, punched out and settled back                 |
+| ~~Cursor smear~~                   | yes    | the pointer stretched along its travel; not the compositor's blur trail |
+| ~~Per-region cursor overrides~~    | yes    | a table entry, plus a sample injected at each boundary                  |
+| ~~I-beam detection~~               | yes    | the same known-handle check, choosing a table entry                     |
+| Webcam borders and shadows         | **no** | shape and radius exist; borders and shadows do not                      |
+| Canvas padding / layout            | **no** | the video's placement within a larger canvas                            |
 
 The structural one here was per-event bitmaps, and it is done. The engine's
 cursor used to be a single `SpriteTexture` plus a track of positions, against a
@@ -256,8 +256,27 @@ Region overrides and I-beam detection followed immediately, with no engine
 change at all -- both reduce to choosing a different id for a sample, which the
 table already supports.
 
-What is left is click animations and the smear, and those do need engine work:
-they change the pointer's rect rather than its bitmap.
+Click animations and the smear did need engine work, because they change the
+pointer's _rect_ rather than its bitmap -- and the cursor is now done.
+
+The click folds into the scale the rect is already derived from, taken about the
+hotspot so the tip stays on the pixel that was clicked. It is resolved against a
+separate list of click times rather than against the sample in effect, because
+the engine holds the last sample until the next one: a mousemove ten
+milliseconds after a click would otherwise end the pop, which is a drag, which
+is exactly when a click most needs to be visible.
+
+The smear is one draw, not a trail of copies. The quad is the bounding box of
+the pointer and the pointer swept backwards, the uv transform maps it back onto
+the sprite, and the shader marches each pixel forward along the travel vector so
+the head stays crisp and the tail streaks out. It is capped at four times the
+pointer's height -- speed has no upper bound and a smear does -- and it snaps to
+nothing rather than easing once the pointer stops, because a stopped pointer is
+not slowing down, it is stopped.
+
+Both are staged with the frame, like the rect and the zoom before them: a
+re-render after a grading change has to put the pointer back the way it was, not
+the way the playhead is now.
 
 ---
 

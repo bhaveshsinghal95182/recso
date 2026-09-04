@@ -38,11 +38,12 @@ GPU engine (Rust/D3D11, in `velocity/src/engine/`). This document says
 ---
 
 > **Status.** Steps 1-4 of the order at the bottom are done, plus zoom, cuts,
-> audio-on-export and per-event cursor bitmaps: the canvas is no longer tied to
+> audio-on-export and the whole of the cursor: the canvas is no longer tied to
 > the source, backgrounds and the video's own rect/radius/border exist, grading
-> is per-layer, and the pointer can change shape as it moves. The tables below
-> are marked accordingly. What is left is the rest of the cursor work, audio in
-> playback, and the test suite before the cutover.
+> is per-layer, and the pointer changes shape as it moves, pops when clicked and
+> smears when flicked. The tables below are marked accordingly. What is left is
+> audio in playback, the remaining webcam and layout work, and the test suite
+> before the cutover.
 
 ---
 
@@ -162,8 +163,8 @@ colour is the exception, because a clear is free.
 | **Per-event bitmap**                       | yes        | **yes** | A deduped bitmap table; each sample carries an index into it.                    |
 | Region overrides by time                   | yes        | yes     | A table entry, plus a sample injected at each boundary. See below.               |
 | I-beam detection by handle                 | yes        | yes     | The same known-handle check, choosing a table entry.                             |
-| Click animations                           | yes        | **no**  | Scale + duration on click events.                                                |
-| Cursor smear                               | partial    | **no**  | Wanted: the pointer stretches along its motion. See below.                       |
+| Click animations                           | **no**     | yes     | Compositor carries the settings and never reads them. Engine pops the pointer.   |
+| Cursor smear                               | partial    | yes     | Compositor draws a blur trail; the engine stretches the pointer. See below.      |
 
 ### Timeline
 
@@ -240,24 +241,68 @@ explicitly and the engine's `set_webcam_layout` docs match. Keep it that way.
 
 Not motion blur, and the difference is the whole feature. The compositor draws a
 blur trail: copies of the pointer along the path between two samples, fading
-out. What is wanted here is the animator's smear -- the pointer itself
-stretching along its direction of travel, one shape, elongated by how fast it is
+out. What the engine draws is the animator's smear -- the pointer itself
+stretched along its direction of travel, one shape, elongated by how fast it is
 moving, snapping back when it stops.
 
 Blur says "this is a photograph of something fast". Smear says "this is drawn,
 and it is moving". A pointer is a drawn object composited on top of a
 recording, so the second is the honest read.
 
-It is also cheaper. A blur trail is many draws of the same sprite; a smear is
-one quad with its rect stretched along the velocity vector and its UVs left
-alone, which the engine's quad path already does for every other layer.
+It is also cheaper. A blur trail is many draws of the same sprite; the smear is
+one draw. The quad is the bounding box of the pointer and the pointer swept
+backwards, `uv_rect` maps that box back onto the sprite so uv 0..1 still means
+"the pointer", and `ps_smear` marches each pixel _forward_ along the travel
+vector, accumulating what the pointer looked like as it passed. A pixel behind
+the head sees the pointer that was there a moment ago; the head sees only
+itself, so it stays crisp while the tail streaks out.
 
-Off by default and turned on deliberately -- it is a stylistic choice about how
-a recording should feel, not a correction for something wrong with the footage.
+Two details do the work. Alpha is the strongest weighted tap rather than the sum
+-- the smear is the union of the shape as it swept, and summing would make a
+fast pointer, whose taps all land on the same few texels, more opaque than the
+pointer itself. And the weight falls off quadratically, which is what puts the
+heavy blur at the back and leaves the front sharp.
 
-Open questions worth settling when it is built: whether the stretch is capped
-(an unbounded one at a flick of the mouse is a streak across the screen), and
-whether it eases back or snaps when motion stops.
+**It is capped.** Speed has no upper bound; a flick of the mouse crosses a 4K
+screen in a couple of frames, and an uncapped smear is a streak from one edge to
+the other, which stops reading as a pointer at all. Four times the pointer's
+height is long enough to look fast and short enough to still look like the shape
+it came from.
+
+**It snaps rather than eases.** The track holds its last sample forever, so the
+velocity that reached it is still sitting there minutes after the pointer
+stopped -- a streak frozen on screen. Instead the motion is only believed for
+about as long as it took to arrive: if the next sample has not turned up by then
+the pointer has stopped, and the smear is gone in one frame. Easing out of
+something that already ended is the wrong shape for the problem; a stopped
+pointer is not slowing down, it is stopped.
+
+It rides on the editor's existing `showMotionBlur` switch. That setting already
+means "make fast pointer movement look fast", and the engine answers it with a
+smear instead of a trail of ghosted copies -- same control, different mechanism,
+nothing in the UI to change.
+
+## Click animations
+
+The pointer pops when clicked: a fast punch out over the first 18% of the
+duration and a slower settle back over the rest. Holding it at full size for the
+whole 500ms would read as the cursor having changed size, and an equal rise and
+fall reads as breathing; the asymmetry is what makes it look struck.
+
+The scale is taken about the hotspot, not the rect's centre, so the tip stays on
+the pixel that was clicked while everything around it grows.
+
+The click rides on the sample -- `click: true` -- so a cut that drops the moment
+drops the click with it, but it is resolved against a _separate list_ of click
+times pulled out of the track. That distinction is the whole design. A click is
+an impulse and a sample is a state: the engine holds the last sample until the
+next one, so if the pop were a property of the sample in effect, the mousemove
+ten milliseconds later would end it. That is a drag, and it is exactly when a
+click most needs to be visible.
+
+The same reasoning is why a sample injected at an override boundary explicitly
+clears the flag rather than inheriting it -- copying a held click would fire the
+pop again at a time the user never clicked.
 
 ## Before the cutover: a real test suite
 
@@ -349,8 +394,12 @@ which is exactly when someone is demonstrating the thing they added the override
 for. The fix is to inject a sample at each override boundary, inheriting the held
 position since only the shape changes.
 
-Click animations and the smear are what is left, and those do need engine work:
-they change the rect rather than the bitmap.
+Click animations and the smear landed on top of that, and they did need engine
+work: they change the pointer's rect rather than its bitmap. The click folds
+into the scale the rect is already derived from, and the smear replaces the
+sprite draw with a stretched quad and a marching shader. Both are staged with
+the frame for the same reason the rect is -- a re-render after a grading change
+must put the pointer back the way it was, not the way the playhead is now.
 
 **3. No timeline model.** ~~Cuts, zoom regions~~ and layer ordering were all the
 same missing thing: the engine played one source linearly with no representation

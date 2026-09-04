@@ -784,6 +784,41 @@ pub struct CursorPoint {
   ///
   /// Omitted, or past the end of the table, draws the default pointer.
   pub image_id: Option<u32>,
+  /// Whether the user clicked here. Defaults to false.
+  ///
+  /// Rides on the sample rather than arriving as its own list so a cut that
+  /// drops the moment drops the click with it, and so there is one thing to
+  /// keep in timeline order instead of two.
+  pub click: Option<bool>,
+}
+
+/// What a click does to the pointer, and how far it stretches when it moves.
+///
+/// Both off when omitted, so a caller that does not care about either keeps the
+/// plain pointer rather than having to switch them off.
+#[napi(object)]
+pub struct CursorEffectSpec {
+  /// Peak scale of the click pop, taken about the hotspot so the tip stays on
+  /// the pixel that was clicked. 1, or omitted, disables it.
+  pub click_scale: Option<f64>,
+  /// How long that pop lasts. Defaults to 0, which also disables it.
+  pub click_duration_ms: Option<f64>,
+  /// How far the pointer stretches along its travel, as a multiplier on the
+  /// distance it actually covered. 0, or omitted, disables the smear.
+  ///
+  /// The length is capped at a few times the pointer's height however fast it
+  /// moves -- speed has no upper bound and a smear does.
+  pub smear_strength: Option<f64>,
+}
+
+impl From<CursorEffectSpec> for render::CursorEffects {
+  fn from(spec: CursorEffectSpec) -> Self {
+    render::CursorEffects {
+      click_scale: spec.click_scale.unwrap_or(1.0) as f32,
+      click_duration_ms: spec.click_duration_ms.unwrap_or(0.0),
+      smear_strength: spec.smear_strength.unwrap_or(0.0) as f32,
+    }
+  }
 }
 
 impl From<CursorPoint> for CursorSample {
@@ -794,6 +829,7 @@ impl From<CursorPoint> for CursorSample {
       y: point.y as f32,
       visible: point.visible.unwrap_or(true),
       image_id: point.image_id,
+      click: point.click.unwrap_or(false),
     }
   }
 }
@@ -1130,6 +1166,17 @@ impl VideoPlayer {
     self.inner.set_cursor_style(size as f32, opacity as f32);
   }
 
+  /// The click pop and the smear.
+  ///
+  /// Apart from `setCursorStyle` because those two describe the pointer and
+  /// these describe its motion: they are resolved per frame against the track,
+  /// so a click needs `click: true` on the samples and a smear needs enough of
+  /// them to measure a speed from.
+  #[napi]
+  pub fn set_cursor_effects(&self, effects: CursorEffectSpec) {
+    self.inner.set_cursor_effects(effects.into());
+  }
+
   /// Set the zoom/pan timeline.
   ///
   /// The video and the cursor move with it; the background and the webcam do
@@ -1315,6 +1362,8 @@ pub struct ExportOptions {
   pub cursor_size: Option<f64>,
   /// Clamped to 0..1. Defaults to 1.
   pub cursor_opacity: Option<f64>,
+  /// The click pop and the smear. Omit and the pointer draws plainly.
+  pub cursor_effects: Option<CursorEffectSpec>,
 }
 
 #[napi(object)]
@@ -1448,6 +1497,10 @@ impl VideoExporter {
         crop: options.crop.map(render::SourceCrop::from),
         cursor_size: options.cursor_size.unwrap_or(22.0) as f32,
         cursor_opacity: options.cursor_opacity.unwrap_or(1.0).clamp(0.0, 1.0) as f32,
+        cursor_effects: options
+          .cursor_effects
+          .map(render::CursorEffects::from)
+          .unwrap_or_default(),
       }),
     })
   }

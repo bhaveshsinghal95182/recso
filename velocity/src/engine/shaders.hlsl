@@ -137,6 +137,10 @@ cbuffer Overlay : register(b1) {
   /// Fill colour for `ps_solid`, which draws borders. Ignored by the textured
   /// shaders.
   float4 tint;
+  /// How far the pointer travels forward, in the sprite's own uv units, over
+  /// the length of tail being drawn. Only `ps_smear` reads it.
+  float2 smear;
+  float2 _pad1;
 };
 
 struct QuadOut {
@@ -210,4 +214,69 @@ float4 ps_solid(QuadOut i) : SV_Target {
 float4 ps_sprite(QuadOut i) : SV_Target {
   float4 c = OverlaySource.Sample(samp, i.uv);
   return float4(c.rgb, c.a * opacity);
+}
+
+// ---------------------------------------------------------------------------
+// Cursor smear
+//
+// The animator's smear, not a photographic blur: the pointer itself stretched
+// along its direction of travel, sharp at the head and streaked out behind.
+//
+// One draw. The quad is the bounding box of the pointer and the pointer swept
+// backwards, and `uv_rect` maps that box back onto the sprite -- so uv (0,0)
+// to (1,1) still means the pointer, and everything outside that range is the
+// space the tail occupies. Each pixel then marches *forward* along `smear`,
+// accumulating what the pointer looked like as it passed through: a pixel
+// behind the head sees the pointer that was there a moment ago, and the head
+// itself sees only itself.
+//
+// The alternative is the compositor's approach, drawing the sprite N times
+// along the path. That costs N draws and N constant buffer updates to produce
+// a chain of discrete ghosts; this costs one draw and reads as a single
+// stretched object, which is the look being asked for.
+// ---------------------------------------------------------------------------
+
+/// Enough taps that the cap on smear length works out to a couple of pixels
+/// between them, which the linear sampler closes up on its own.
+#define SMEAR_TAPS 32
+
+float4 ps_smear(QuadOut i) : SV_Target {
+  float3 colour = 0.0;
+  float  weight = 0.0;
+  float  alpha  = 0.0;
+
+  [unroll]
+  for (int k = 0; k < SMEAR_TAPS; k++) {
+    float  t  = (float)k / (float)(SMEAR_TAPS - 1);
+    float2 uv = i.uv + smear * t;
+
+    // The sampler is set to clamp, which would smear the sprite's edge texels
+    // down the entire tail as a set of coloured stripes. Outside the image
+    // there is no pointer, so there is nothing to contribute.
+    float2 in_range = step(0.0, uv) * step(uv, 1.0);
+    float  inside   = in_range.x * in_range.y;
+
+    // Quadratic falloff. Linear leaves the tail too solid to read as motion;
+    // squaring keeps the head at full strength and thins the rest out fast,
+    // which is the heavy blur at the back and the crisp pointer at the front.
+    float w = (1.0 - t) * (1.0 - t);
+
+    float4 s = OverlaySource.Sample(samp, uv);
+    float  a = s.a * inside * w;
+
+    colour += s.rgb * a;
+    weight += a;
+    // Max, not sum. The smear is the *union* of the shape as it swept, so
+    // overlapping taps must not stack into something more opaque than the
+    // pointer itself -- which is what a fast pointer, whose taps all land on
+    // the same few texels, would otherwise become.
+    alpha = max(alpha, a);
+  }
+
+  // Normalised by the weight actually collected, so the colour is the average
+  // of what passed through rather than being dragged towards black by the taps
+  // that found nothing.
+  colour = weight > 0.0 ? colour / weight : 0.0;
+
+  return float4(colour, alpha * opacity);
 }

@@ -303,6 +303,19 @@ export interface EngineCursorBitmap {
   hotspotY?: number;
 }
 
+/** What a click does to the pointer, and how far it stretches when it moves. */
+export interface EngineCursorEffects {
+  /** Peak scale of the click pop, about the hotspot. 1 or omitted disables it. */
+  clickScale?: number;
+  /** How long that pop lasts. 0 or omitted also disables it. */
+  clickDurationMs?: number;
+  /**
+   * How far the pointer stretches along its travel, as a multiplier on the
+   * distance it covered. 0 or omitted disables the smear. Capped engine-side.
+   */
+  smearStrength?: number;
+}
+
 export interface EngineCursorPoint {
   timestampMs: number;
   /** 0..1 across the source frame, so it survives the video being scaled. */
@@ -316,6 +329,8 @@ export interface EngineCursorPoint {
    * Omitted, or past the end of the table, draws the default pointer.
    */
   imageId?: number;
+  /** Whether the user clicked here. Defaults to false. */
+  click?: boolean;
 }
 
 export interface EngineAPI {
@@ -401,6 +416,8 @@ export interface EngineAPI {
     setCursorTrack: (samples: EngineCursorPoint[]) => Promise<void>;
     /** Cursor height in destination pixels, and opacity. Size 0 hides it. */
     setCursorStyle: (size: number, opacity: number) => Promise<void>;
+    /** The click pop and the smear, both resolved per frame against the track. */
+    setCursorEffects: (effects: EngineCursorEffects) => Promise<void>;
     /** Applied asynchronously, so this reads 0 for a moment after setCursorTrack. */
     cursorSampleCount: () => Promise<number>;
     /** Pointer bitmaps resident. Asynchronous like the sample count. */

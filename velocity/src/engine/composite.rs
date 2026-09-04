@@ -133,6 +133,50 @@ impl Default for UvRect {
   }
 }
 
+/// The quad to draw a smeared cursor into, and how it maps back onto the sprite.
+///
+/// `head` is where the pointer itself goes; `smear` is how far it travels
+/// forward over the tail's length, in the same pixels. Returns the bounding box
+/// of the pointer and the pointer swept backwards, the uv transform that puts
+/// the sprite back in the right place inside that box, and the travel expressed
+/// in the sprite's own uv units for the shader to march along.
+///
+/// Doing it as one stretched quad rather than a trail of sprite copies is the
+/// difference between a smear and a blur: the copies are separable objects and
+/// read as ghosts, the stretch reads as one thing moving. It is also one draw
+/// instead of a dozen.
+///
+/// `None` when there is nothing to smear, so the caller falls back to the plain
+/// sprite path and pays nothing for a stationary pointer.
+pub fn smear_geometry(head: Rect, smear: [f32; 2]) -> Option<(Rect, UvRect, [f32; 2])> {
+  let [sx, sy] = smear;
+  if head.is_empty() || (sx == 0.0 && sy == 0.0) {
+    return None;
+  }
+
+  // The tail trails the pointer, so the box grows on whichever side the pointer
+  // came *from*: moving right, it grows to the left.
+  let quad = Rect {
+    x: head.x - sx.max(0.0),
+    y: head.y - sy.max(0.0),
+    width: head.width + sx.abs(),
+    height: head.height + sy.abs(),
+  };
+
+  // The sprite still occupies exactly `head`, so uv 0..1 has to land there
+  // inside a box that is larger. Anything outside that range is tail, and the
+  // shader treats it as empty rather than letting the sampler clamp.
+  let uv = UvRect {
+    scale: [quad.width / head.width, quad.height / head.height],
+    offset: [
+      (quad.x - head.x) / head.width,
+      (quad.y - head.y) / head.height,
+    ],
+  };
+
+  Some((quad, uv, [sx / head.width, sy / head.height]))
+}
+
 /// Resolve a source of `src_width` x `src_height` into `rect` under `fit`.
 ///
 /// Returns the rectangle to actually draw and the part of the source to read.
@@ -261,6 +305,7 @@ pub struct Overlays {
   vs: ID3D11VertexShader,
   ps_overlay: ID3D11PixelShader,
   ps_sprite: ID3D11PixelShader,
+  ps_smear: ID3D11PixelShader,
   ps_solid: ID3D11PixelShader,
   blend: ID3D11BlendState,
   constants: ID3D11Buffer,
@@ -313,6 +358,9 @@ pub enum Fill {
   Texture,
   /// Sample the texture and take alpha from the image itself. The cursor.
   Sprite,
+  /// The cursor again, stretched along its travel. Carries the forward offset
+  /// in the sprite's own uv units -- see `ps_smear`.
+  Smear([f32; 2]),
   /// A flat colour, no texture. Borders.
   Solid([f32; 4]),
 }
@@ -323,6 +371,7 @@ impl Overlays {
     vs: ID3D11VertexShader,
     ps_overlay: ID3D11PixelShader,
     ps_sprite: ID3D11PixelShader,
+    ps_smear: ID3D11PixelShader,
     ps_solid: ID3D11PixelShader,
   ) -> Result<Self> {
     // Straight alpha over the destination. The overlays are drawn after the
@@ -344,13 +393,15 @@ impl Overlays {
     let mut blend = None;
     unsafe { gpu.device.CreateBlendState(&desc, Some(&mut blend))? };
 
-    // 20 floats: the rect, the mask, the grade, the uv sub-rect and the tint.
-    let constants = super::render::create_constant_buffer(gpu, 20 * 4)?;
+    // 24 floats: the rect, the mask, the grade, the uv sub-rect, the tint and
+    // the smear vector.
+    let constants = super::render::create_constant_buffer(gpu, 24 * 4)?;
 
     Ok(Self {
       vs,
       ps_overlay,
       ps_sprite,
+      ps_smear,
       ps_solid,
       blend: blend.unwrap(),
       constants,
@@ -396,6 +447,7 @@ impl Overlays {
         match quad.fill {
           Fill::Texture => &self.ps_overlay,
           Fill::Sprite => &self.ps_sprite,
+          Fill::Smear(_) => &self.ps_smear,
           Fill::Solid(_) => &self.ps_solid,
         },
         None,
@@ -423,6 +475,10 @@ impl Overlays {
       Fill::Solid(colour) => colour,
       _ => [0.0, 0.0, 0.0, 0.0],
     };
+    let smear = match quad.fill {
+      Fill::Smear(offset) => offset,
+      _ => [0.0, 0.0],
+    };
 
     let values = [
       ndc[0],
@@ -448,6 +504,10 @@ impl Overlays {
       tint[1],
       tint[2],
       tint[3],
+      smear[0],
+      smear[1],
+      0.0,
+      0.0,
     ];
 
     let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
@@ -592,12 +652,33 @@ pub struct CursorSample {
   /// `None` falls back to the single default bitmap, which is what a caller
   /// that never sets a table gets for every sample.
   pub image_id: Option<u32>,
+  /// Whether the user clicked at this instant.
+  ///
+  /// A flag on the sample rather than a separate list because a click *is* a
+  /// recorded pointer event -- it arrives with a position, through the same
+  /// track, and a cut that drops the moment has to drop the click with it.
+  /// `CursorTrack` pulls the times out on the way in, because the two decay
+  /// differently: a position is held until the next sample, a click is an
+  /// impulse that plays out over its own duration.
+  pub click: bool,
+}
+
+/// How the pointer was travelling when a frame was taken.
+///
+/// Normalised source units per millisecond, the same space the samples are in,
+/// so the caller scales it by whatever rectangle the video ended up occupying.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CursorMotion {
+  pub vx: f32,
+  pub vy: f32,
 }
 
 /// The recorded cursor path, searchable by playback position.
 #[derive(Default)]
 pub struct CursorTrack {
   samples: Vec<CursorSample>,
+  /// Click times, pulled out of the samples. Sorted, because the samples are.
+  clicks: Vec<f64>,
 }
 
 impl CursorTrack {
@@ -605,7 +686,12 @@ impl CursorTrack {
   /// order, but a track assembled from several sources might not be.
   pub fn new(mut samples: Vec<CursorSample>) -> Self {
     samples.sort_by(|a, b| a.timestamp_ms.total_cmp(&b.timestamp_ms));
-    Self { samples }
+    let clicks = samples
+      .iter()
+      .filter(|s| s.click)
+      .map(|s| s.timestamp_ms)
+      .collect();
+    Self { samples, clicks }
   }
 
   pub fn len(&self) -> usize {
@@ -639,6 +725,110 @@ impl CursorTrack {
 
     Some(sample)
   }
+
+  /// How fast the pointer was moving at `timestamp_ms`, if it was moving.
+  ///
+  /// Measured across the last two samples rather than smoothed over more,
+  /// because the smear is meant to read as "this is where it is going right
+  /// now" and an average lags the direction through a corner.
+  ///
+  /// Returns `None` once the pair goes stale, and that is the whole of the
+  /// "snap back" behaviour. The track holds the last sample forever, so the
+  /// velocity that reached it would otherwise still be there minutes after the
+  /// pointer stopped -- a streak frozen on screen. Instead the motion is only
+  /// believed for about as long as it took to arrive: if the next sample has
+  /// not turned up by then, the pointer has stopped, and the smear is gone in
+  /// one frame rather than easing out of something that already ended.
+  pub fn motion_at(&self, timestamp_ms: f64) -> Option<CursorMotion> {
+    let upper = self
+      .samples
+      .partition_point(|s| s.timestamp_ms <= timestamp_ms);
+    if upper < 2 {
+      return None;
+    }
+
+    let last = self.samples[upper - 1];
+    let previous = self.samples[upper - 2];
+    // A pointer that was hidden and came back did not travel the distance
+    // between the two -- it teleported, and smearing that draws a streak
+    // across whatever it crossed.
+    if !last.visible || !previous.visible {
+      return None;
+    }
+
+    let gap_ms = last.timestamp_ms - previous.timestamp_ms;
+    if gap_ms <= 0.0 || gap_ms > MAX_MOTION_GAP_MS {
+      return None;
+    }
+
+    if timestamp_ms - last.timestamp_ms > gap_ms.clamp(MIN_MOTION_HOLD_MS, MAX_MOTION_HOLD_MS) {
+      return None;
+    }
+
+    Some(CursorMotion {
+      vx: (last.x - previous.x) / gap_ms as f32,
+      vy: (last.y - previous.y) / gap_ms as f32,
+    })
+  }
+
+  /// The scale multiplier a click adds at `timestamp_ms`, or 1.0 for none.
+  ///
+  /// Resolved against the click list rather than the sample in effect, because
+  /// a click is an impulse and a sample is a state. Flagging the held sample
+  /// would end the animation at the next mouse move -- ten milliseconds later
+  /// if the user is dragging, which is exactly when a click most needs to be
+  /// visible.
+  pub fn click_scale_at(&self, timestamp_ms: f64, peak: f32, duration_ms: f64) -> f32 {
+    if peak == 1.0 || duration_ms <= 0.0 || self.clicks.is_empty() {
+      return 1.0;
+    }
+
+    let upper = self.clicks.partition_point(|t| *t <= timestamp_ms);
+    if upper == 0 {
+      return 1.0;
+    }
+
+    let elapsed = timestamp_ms - self.clicks[upper - 1];
+    1.0 + (peak - 1.0) * click_envelope(elapsed, duration_ms)
+  }
+}
+
+/// A pair of samples further apart than this is not motion worth smearing --
+/// the pointer was somewhere else a quarter of a second ago, which says nothing
+/// about where it is heading now.
+const MAX_MOTION_GAP_MS: f64 = 260.0;
+/// Believe a velocity for at least one frame at 30fps, so a slow sample cadence
+/// does not make the smear flicker...
+const MIN_MOTION_HOLD_MS: f64 = 34.0;
+/// ...and never for longer than this, so a gap that only just qualified above
+/// cannot leave a streak hanging for a quarter of a second.
+const MAX_MOTION_HOLD_MS: f64 = 120.0;
+
+/// How much of the click's peak is showing, `elapsed_ms` into it.
+///
+/// A fast punch out and a slower settle back. Holding the pointer at full size
+/// for the whole duration would read as the cursor having changed size, and an
+/// equal rise and fall reads as breathing; the asymmetry is what makes it look
+/// struck.
+fn click_envelope(elapsed_ms: f64, duration_ms: f64) -> f32 {
+  if duration_ms <= 0.0 || elapsed_ms < 0.0 || elapsed_ms >= duration_ms {
+    return 0.0;
+  }
+
+  /// Fraction of the duration spent growing. The rest is the settle.
+  const ATTACK: f64 = 0.18;
+
+  let progress = elapsed_ms / duration_ms;
+  let position = if progress < ATTACK {
+    progress / ATTACK
+  } else {
+    1.0 - (progress - ATTACK) / (1.0 - ATTACK)
+  };
+
+  // Smoothstep at both ends: the pop starts and stops from rest, so there is no
+  // corner at the peak or at the moment it finishes.
+  let x = position.clamp(0.0, 1.0) as f32;
+  x * x * (3.0 - 2.0 * x)
 }
 
 #[cfg(test)]
@@ -652,7 +842,96 @@ mod tests {
       y: 0.5,
       visible: true,
       image_id: None,
+      click: false,
     }
+  }
+
+  #[test]
+  fn a_still_pointer_needs_no_smear_quad() {
+    let head = Rect {
+      x: 100.0,
+      y: 100.0,
+      width: 20.0,
+      height: 30.0,
+    };
+
+    assert!(smear_geometry(head, [0.0, 0.0]).is_none());
+  }
+
+  #[test]
+  fn the_smear_box_grows_behind_the_pointer() {
+    let head = Rect {
+      x: 100.0,
+      y: 100.0,
+      width: 20.0,
+      height: 30.0,
+    };
+
+    // Travelling right: the tail is to the left, so the box grows that way and
+    // the pointer stays where it was going to be drawn anyway.
+    let (quad, _, _) = smear_geometry(head, [40.0, 0.0]).expect("smeared");
+    assert_eq!(quad.x, 60.0);
+    assert_eq!(quad.width, 60.0);
+    assert_eq!(quad.y, 100.0);
+    assert_eq!(quad.height, 30.0);
+
+    // Travelling left: the other side.
+    let (quad, _, _) = smear_geometry(head, [-40.0, 0.0]).expect("smeared");
+    assert_eq!(quad.x, 100.0);
+    assert_eq!(quad.width, 60.0);
+  }
+
+  #[test]
+  fn the_sprite_still_lands_exactly_on_the_pointer() {
+    // The whole point of the uv transform: the box is bigger, but uv 0..1 has
+    // to keep meaning "the pointer", or a smeared cursor would sit somewhere
+    // different from an unsmeared one and the smear would look like a jump.
+    let head = Rect {
+      x: 100.0,
+      y: 100.0,
+      width: 20.0,
+      height: 30.0,
+    };
+    let (quad, uv, _) = smear_geometry(head, [40.0, 15.0]).expect("smeared");
+
+    // Where uv hits 0 and 1 across the quad, back in destination pixels.
+    let at = |u: f32, axis: usize| {
+      let (start, size) = if axis == 0 {
+        (quad.x, quad.width)
+      } else {
+        (quad.y, quad.height)
+      };
+      // Invert `uv = t * scale + offset` for the t that gives `u`.
+      start + (u - uv.offset[axis]) / uv.scale[axis] * size
+    };
+
+    assert!((at(0.0, 0) - head.x).abs() < 1e-3);
+    assert!((at(1.0, 0) - (head.x + head.width)).abs() < 1e-3);
+    assert!((at(0.0, 1) - head.y).abs() < 1e-3);
+    assert!((at(1.0, 1) - (head.y + head.height)).abs() < 1e-3);
+  }
+
+  #[test]
+  fn the_far_end_of_the_tail_marches_back_onto_the_sprite() {
+    // A pixel at the very end of the tail, marched the full length of the
+    // smear, has to land on the pointer's own edge -- that is what makes the
+    // tail show where the pointer was rather than a stripe of clamped texels.
+    let head = Rect {
+      x: 100.0,
+      y: 100.0,
+      width: 20.0,
+      height: 30.0,
+    };
+    let (quad, uv, offset) = smear_geometry(head, [40.0, 0.0]).expect("smeared");
+
+    // uv of the quad's leftmost pixel, which is the back of the tail.
+    let tail_u = uv.offset[0];
+    assert!(tail_u < 0.0, "the tail sits outside the sprite");
+    assert!(
+      (tail_u + offset[0]).abs() < 1e-3,
+      "a full march reaches uv 0"
+    );
+    assert_eq!(quad.x, 60.0);
   }
 
   #[test]
@@ -921,11 +1200,117 @@ mod tests {
         y: 1.0,
         visible: false,
         image_id: None,
+        click: false,
       },
     ]);
 
     assert!(track.sample_at(50.0).is_some());
     assert!(track.sample_at(150.0).is_none());
+  }
+
+  fn click(timestamp_ms: f64, x: f32) -> CursorSample {
+    CursorSample {
+      click: true,
+      ..sample(timestamp_ms, x)
+    }
+  }
+
+  #[test]
+  fn a_click_pops_the_pointer_and_settles_back() {
+    let track = CursorTrack::new(vec![click(100.0, 0.5)]);
+
+    assert_eq!(track.click_scale_at(99.0, 1.5, 500.0), 1.0);
+    let peak = track.click_scale_at(100.0 + 500.0 * 0.18, 1.5, 500.0);
+    assert!((peak - 1.5).abs() < 1e-3, "peak was {peak}");
+    // Back to nothing by the end, not left slightly enlarged.
+    assert_eq!(track.click_scale_at(600.0, 1.5, 500.0), 1.0);
+    assert_eq!(track.click_scale_at(5000.0, 1.5, 500.0), 1.0);
+  }
+
+  #[test]
+  fn the_pop_grows_faster_than_it_settles() {
+    let track = CursorTrack::new(vec![click(0.0, 0.5)]);
+
+    // The peak lands at 18% of the duration, so the same offset either side of
+    // it is well up the rise and barely down the fall. The settle being the
+    // slower half is what makes it read as struck rather than as breathing.
+    let peak_ms = 500.0 * 0.18;
+    let rising = track.click_scale_at(peak_ms - 45.0, 2.0, 500.0);
+    let falling = track.click_scale_at(peak_ms + 45.0, 2.0, 500.0);
+    assert!(
+      falling > rising,
+      "the settle {falling} should still be above the rise {rising}"
+    );
+
+    // And it is genuinely finished: no residue left at the end.
+    assert_eq!(track.click_scale_at(499.9, 2.0, 500.0).round(), 1.0);
+  }
+
+  #[test]
+  fn a_move_right_after_a_click_does_not_cut_the_pop_short() {
+    // The trap this whole design avoids: the click is not a property of the
+    // sample in effect, so the mousemove ten milliseconds later -- a drag --
+    // must not end the animation.
+    let track = CursorTrack::new(vec![click(100.0, 0.5), sample(110.0, 0.6)]);
+
+    assert!(track.click_scale_at(200.0, 1.5, 500.0) > 1.0);
+  }
+
+  #[test]
+  fn a_track_with_no_clicks_never_scales() {
+    let track = CursorTrack::new(vec![sample(0.0, 0.0), sample(100.0, 1.0)]);
+
+    assert_eq!(track.click_scale_at(50.0, 2.0, 500.0), 1.0);
+  }
+
+  #[test]
+  fn the_pointer_carries_its_velocity_while_it_is_moving() {
+    let track = CursorTrack::new(vec![sample(0.0, 0.0), sample(100.0, 0.5)]);
+
+    let motion = track.motion_at(100.0).expect("moving");
+    assert!((motion.vx - 0.005).abs() < 1e-6, "vx was {}", motion.vx);
+    assert_eq!(motion.vy, 0.0);
+  }
+
+  #[test]
+  fn a_stopped_pointer_snaps_out_of_its_smear() {
+    let track = CursorTrack::new(vec![sample(0.0, 0.0), sample(100.0, 0.5)]);
+
+    // Still believed a frame later...
+    assert!(track.motion_at(120.0).is_some());
+    // ...and gone once the next sample plainly is not coming. The track holds
+    // the last sample forever, so without this the smear would still be there
+    // minutes after the pointer stopped.
+    assert!(track.motion_at(400.0).is_none());
+  }
+
+  #[test]
+  fn a_pointer_that_reappeared_somewhere_else_did_not_travel_there() {
+    let track = CursorTrack::new(vec![
+      CursorSample {
+        visible: false,
+        ..sample(0.0, 0.0)
+      },
+      sample(50.0, 1.0),
+    ]);
+
+    assert!(track.motion_at(50.0).is_none());
+  }
+
+  #[test]
+  fn a_long_pause_between_samples_is_not_a_velocity() {
+    // Half a second apart says where the pointer used to be, not where it is
+    // heading. Smearing across that gap draws a streak over the whole screen.
+    let track = CursorTrack::new(vec![sample(0.0, 0.0), sample(500.0, 1.0)]);
+
+    assert!(track.motion_at(500.0).is_none());
+  }
+
+  #[test]
+  fn the_first_sample_has_nothing_to_measure_against() {
+    let track = CursorTrack::new(vec![sample(0.0, 0.0)]);
+
+    assert!(track.motion_at(0.0).is_none());
   }
 
   #[test]

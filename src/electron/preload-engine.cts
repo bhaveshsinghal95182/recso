@@ -311,6 +311,11 @@ export const engineBridge = {
     setCursorTrack: (samples: unknown[]) => invoke('engine:player:cursor-track', samples),
     setCursorStyle: (size: number, opacity: number) =>
       invoke('engine:player:cursor-style', size, opacity),
+    setCursorEffects: (effects: {
+      clickScale?: number;
+      clickDurationMs?: number;
+      smearStrength?: number;
+    }) => invoke('engine:player:cursor-effects', effects),
     cursorSampleCount: () => invoke('engine:player:cursor-sample-count'),
     cursorImageCount: () => invoke('engine:player:cursor-image-count'),
 

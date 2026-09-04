@@ -41,6 +41,7 @@ import {
 import type {
   BackgroundSpec,
   CursorBitmap,
+  CursorEffectSpec,
   CursorPoint,
   CutRegion,
   ExportOptions,
@@ -242,6 +243,10 @@ export function registerEngineHandlers(): void {
 
   ipcMain.handle('engine:player:cursor-style', (_event, size: number, opacity: number) => {
     requirePlayer().setCursorStyle(size, opacity);
+  });
+
+  ipcMain.handle('engine:player:cursor-effects', (_event, effects: CursorEffectSpec) => {
+    requirePlayer().setCursorEffects(effects);
   });
 
   ipcMain.handle('engine:player:cursor-sample-count', () => requirePlayer().cursorSampleCount());

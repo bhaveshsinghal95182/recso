@@ -77,6 +77,7 @@ interface TrackSample {
   y: number;
   visible?: boolean;
   imageId?: number;
+  click?: boolean;
   event: CompositionCursorEvent;
 }
 
@@ -96,6 +97,11 @@ interface TrackSample {
  * -- only its shape changes. The closing one takes the id the underlying event
  * would have had anyway, which is the recorded bitmap, or another override if
  * one starts where this ends.
+ *
+ * It does *not* inherit the click, though. Copying a held sample that happened
+ * to be a click would fire the pop again at the boundary, which is a click the
+ * user never made -- and it would land at whatever arbitrary time an override
+ * happens to start.
  */
 function withOverrideBoundaries(
   samples: TrackSample[],
@@ -136,6 +142,7 @@ function withOverrideBoundaries(
       ...held,
       timestampMs: boundary,
       imageId: table.idFor(held.event, boundary),
+      click: false,
     });
   }
 
@@ -238,6 +245,7 @@ export async function applyComposition(
         y: event.normalizedY ?? (cursor.sourceHeight > 0 ? event.y / cursor.sourceHeight : 0),
         visible: event.visible,
         imageId: table.idFor(event, at(event)),
+        click: event.eventType === 'click',
         event,
       }));
 
@@ -248,6 +256,16 @@ export async function applyComposition(
     // The compositor's base size is 22px scaled by the user's multiplier; the
     // engine takes the resolved height in canvas pixels.
     await player.setCursorStyle(22 * Math.max(0.2, cursor.size), 1);
+
+    // `showMotionBlur` is the switch the editor already has for "make fast
+    // pointer movement look fast". The engine answers it with a smear rather
+    // than the compositor's trail of ghosted copies -- same setting, different
+    // and better-looking mechanism, so nothing in the UI has to change.
+    await player.setCursorEffects({
+      clickScale: cursor.showClickAnimations ? Math.max(1, cursor.clickAnimationScale) : 1,
+      clickDurationMs: cursor.showClickAnimations ? Math.max(0, cursor.clickDisplayDuration) : 0,
+      smearStrength: cursor.showMotionBlur ? Math.max(0, cursor.motionBlurStrength) : 0,
+    });
   } else {
     await player.setCursorImage(null);
     await player.setCursorImages([]);

@@ -184,6 +184,15 @@ export declare class VideoPlayer {
   /** Cursor height in destination pixels, and its opacity. Size 0 hides it. */
   setCursorStyle(size: number, opacity: number): void
   /**
+   * The click pop and the smear.
+   *
+   * Apart from `setCursorStyle` because those two describe the pointer and
+   * these describe its motion: they are resolved per frame against the track,
+   * so a click needs `click: true` on the samples and a smear needs enough of
+   * them to measure a speed from.
+   */
+  setCursorEffects(effects: CursorEffectSpec): void
+  /**
    * Set the zoom/pan timeline.
    *
    * The video and the cursor move with it; the background and the webcam do
@@ -326,6 +335,30 @@ export interface CursorBitmap {
   hotspotY?: number
 }
 
+/**
+ * What a click does to the pointer, and how far it stretches when it moves.
+ *
+ * Both off when omitted, so a caller that does not care about either keeps the
+ * plain pointer rather than having to switch them off.
+ */
+export interface CursorEffectSpec {
+  /**
+   * Peak scale of the click pop, taken about the hotspot so the tip stays on
+   * the pixel that was clicked. 1, or omitted, disables it.
+   */
+  clickScale?: number
+  /** How long that pop lasts. Defaults to 0, which also disables it. */
+  clickDurationMs?: number
+  /**
+   * How far the pointer stretches along its travel, as a multiplier on the
+   * distance it actually covered. 0, or omitted, disables the smear.
+   *
+   * The length is capped at a few times the pointer's height however fast it
+   * moves -- speed has no upper bound and a smear does.
+   */
+  smearStrength?: number
+}
+
 /** One recorded pointer position, normalised against the source video. */
 export interface CursorPoint {
   timestampMs: number
@@ -344,6 +377,14 @@ export interface CursorPoint {
    * Omitted, or past the end of the table, draws the default pointer.
    */
   imageId?: number
+  /**
+   * Whether the user clicked here. Defaults to false.
+   *
+   * Rides on the sample rather than arriving as its own list so a cut that
+   * drops the moment drops the click with it, and so there is one thing to
+   * keep in timeline order instead of two.
+   */
+  click?: boolean
 }
 
 /**
@@ -431,6 +472,8 @@ export interface ExportOptions {
   cursorSize?: number
   /** Clamped to 0..1. Defaults to 1. */
   cursorOpacity?: number
+  /** The click pop and the smear. Omit and the pointer draws plainly. */
+  cursorEffects?: CursorEffectSpec
 }
 
 export interface ExportProgress {

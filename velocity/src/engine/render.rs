@@ -28,8 +28,8 @@ use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::engine::composite::{
-  fit_source, CursorImages, CursorTrack, Fill, Grade, OverlayShape, Overlays, Quad, Rect,
-  SpriteTexture, UvRect, WebcamLayout,
+  fit_source, smear_geometry, CursorImages, CursorTrack, Fill, Grade, OverlayShape, Overlays, Quad,
+  Rect, SpriteTexture, UvRect, WebcamLayout,
 };
 use crate::engine::d3d::{gpu, Gpu};
 use crate::engine::zoom::{ZoomState, ZoomTrack};
@@ -39,6 +39,52 @@ const HLSL: &str = include_str!("shaders.hlsl");
 /// Matches the editor's compositor default, so switching paths does not resize
 /// the pointer.
 const DEFAULT_CURSOR_SIZE_PX: f32 = 22.0;
+
+/// How much of the pointer's travel the tail represents, at strength 1.
+///
+/// Roughly one frame at 30fps, which is the honest answer to "where was it when
+/// this frame started" -- and the reason a smear reads as motion rather than as
+/// a decoration is that it is the distance actually covered.
+const SMEAR_TRAVEL_MS: f32 = 28.0;
+
+/// The cap, in multiples of the pointer's drawn height.
+///
+/// Speed is unbounded -- a flick of the mouse crosses a 4K screen in a couple
+/// of frames -- so an uncapped smear is a streak from one edge to the other,
+/// which stops being a pointer. Four is long enough to look fast and short
+/// enough to still read as the shape it came from.
+const MAX_SMEAR_HEIGHTS: f32 = 4.0;
+
+/// Below this there is nothing to see, and drawing it costs a shader that
+/// samples the sprite thirty-two times to produce a pointer with a fuzzy edge.
+const MIN_SMEAR_HEIGHTS: f32 = 0.15;
+
+/// What a click does to the pointer, and how far it stretches when it moves.
+///
+/// Separate from `set_cursor_style` because size and opacity describe the
+/// pointer and these describe its *motion*: they are resolved per frame against
+/// the track rather than being fixed for the whole edit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CursorEffects {
+  /// Peak scale of the click pop, taken about the hotspot so the tip stays on
+  /// the pixel that was clicked. 1.0 disables it.
+  pub click_scale: f32,
+  pub click_duration_ms: f64,
+  /// Multiplier on the length of the tail. 0 disables the smear.
+  pub smear_strength: f32,
+}
+
+impl Default for CursorEffects {
+  /// Both off. A caller that never asks for them gets the plain pointer, which
+  /// is what every existing caller expects.
+  fn default() -> Self {
+    Self {
+      click_scale: 1.0,
+      click_duration_ms: 0.0,
+      smear_strength: 0.0,
+    }
+  }
+}
 
 /// Parameters for the adjustable pass.
 ///
@@ -291,6 +337,10 @@ struct WebcamLayer {
 struct StagedCursor {
   rect: Rect,
   image_id: Option<u32>,
+  /// Forward travel in canvas pixels over the tail's length, zero for none.
+  /// Staged with the rest for the same reason: the pointer was moving when this
+  /// frame was taken, and it still was when the frame is drawn again later.
+  smear: [f32; 2],
 }
 
 pub struct RenderChain {
@@ -366,6 +416,7 @@ pub struct RenderChain {
   cursor_track: CursorTrack,
   cursor_size: f32,
   cursor_opacity: f32,
+  cursor_effects: CursorEffects,
   slot_cursor: Vec<Option<StagedCursor>>,
 
   /// The zoom timeline, and where each staged slot sat on it.
@@ -452,6 +503,7 @@ impl RenderChain {
     let quad_blob = compile(HLSL, "vs_quad", "vs_5_0")?;
     let overlay_blob = compile(HLSL, "ps_overlay", "ps_5_0")?;
     let sprite_blob = compile(HLSL, "ps_sprite", "ps_5_0")?;
+    let smear_blob = compile(HLSL, "ps_smear", "ps_5_0")?;
     let solid_blob = compile(HLSL, "ps_solid", "ps_5_0")?;
 
     let mut vs = None;
@@ -493,6 +545,7 @@ impl RenderChain {
     let mut vs_quad = None;
     let mut ps_overlay = None;
     let mut ps_sprite = None;
+    let mut ps_smear = None;
     let mut ps_solid = None;
     unsafe {
       gpu
@@ -506,6 +559,9 @@ impl RenderChain {
         .CreatePixelShader(blob(&sprite_blob), None, Some(&mut ps_sprite))?;
       gpu
         .device
+        .CreatePixelShader(blob(&smear_blob), None, Some(&mut ps_smear))?;
+      gpu
+        .device
         .CreatePixelShader(blob(&solid_blob), None, Some(&mut ps_solid))?;
     }
 
@@ -514,6 +570,7 @@ impl RenderChain {
       vs_quad.expect("quad vertex shader"),
       ps_overlay.expect("overlay shader"),
       ps_sprite.expect("sprite shader"),
+      ps_smear.expect("smear shader"),
       ps_solid.expect("solid shader"),
     )?;
 
@@ -609,6 +666,7 @@ impl RenderChain {
       cursor_track: CursorTrack::default(),
       cursor_size: DEFAULT_CURSOR_SIZE_PX,
       cursor_opacity: 1.0,
+      cursor_effects: CursorEffects::default(),
       slot_cursor: vec![None; slots.max(1)],
       zoom_track: ZoomTrack::default(),
       slot_zoom: vec![ZoomState::default(); slots.max(1)],
@@ -847,6 +905,14 @@ impl RenderChain {
     self.cursor_opacity = opacity.clamp(0.0, 1.0);
   }
 
+  pub fn set_cursor_effects(&mut self, effects: CursorEffects) {
+    self.cursor_effects = CursorEffects {
+      click_scale: effects.click_scale.max(0.0),
+      click_duration_ms: effects.click_duration_ms.max(0.0),
+      smear_strength: effects.smear_strength.max(0.0),
+    };
+  }
+
   /// Resolve everything that depends on *this frame's* timestamp, and remember
   /// it against the slot: where the cursor sits, and how far the zoom is in.
   ///
@@ -899,8 +965,16 @@ impl RenderChain {
       }
     };
 
-    // The image keeps its aspect ratio; `cursor_size` is its height.
-    let scale = self.cursor_size / sprite.height.max(1) as f32;
+    // The image keeps its aspect ratio; `cursor_size` is its height. A click
+    // rides on the same scale, which is what keeps the pop anchored: the rect
+    // is positioned by subtracting the scaled hotspot, so growing the scale
+    // grows the pointer *about its own tip* rather than about a corner.
+    let click = self.cursor_track.click_scale_at(
+      timestamp_ms,
+      self.cursor_effects.click_scale,
+      self.cursor_effects.click_duration_ms,
+    );
+    let scale = (self.cursor_size / sprite.height.max(1) as f32) * click;
     let width = sprite.width as f32 * scale;
     let height = sprite.height as f32 * scale;
 
@@ -920,7 +994,42 @@ impl RenderChain {
         height,
       },
       image_id: sample.image_id,
+      smear: self.resolve_smear(timestamp_ms, video, height),
     })
+  }
+
+  /// How far the pointer's tail reaches at this instant, in canvas pixels.
+  ///
+  /// The vector points the way the pointer is *going*; the tail is drawn behind
+  /// it. Length is how far it would travel in `SMEAR_TRAVEL_MS`, so the smear
+  /// grows and shrinks with real speed rather than being a fixed decoration --
+  /// then capped, because speed has no upper bound and a smear does.
+  fn resolve_smear(&self, timestamp_ms: f64, video: Rect, height: f32) -> [f32; 2] {
+    let strength = self.cursor_effects.smear_strength;
+    if strength <= 0.0 || height <= 0.0 {
+      return [0.0, 0.0];
+    }
+
+    let Some(motion) = self.cursor_track.motion_at(timestamp_ms) else {
+      return [0.0, 0.0];
+    };
+
+    // Normalised units per millisecond into canvas pixels per millisecond. The
+    // two axes scale differently on a non-square video, which is the point:
+    // moving across a 16:9 frame covers more pixels than moving down it.
+    let vx = motion.vx * video.width;
+    let vy = motion.vy * video.height;
+    let speed = (vx * vx + vy * vy).sqrt();
+    if speed <= 0.0 {
+      return [0.0, 0.0];
+    }
+
+    let length = (speed * SMEAR_TRAVEL_MS * strength).min(height * MAX_SMEAR_HEIGHTS);
+    if length < height * MIN_SMEAR_HEIGHTS {
+      return [0.0, 0.0];
+    }
+
+    [vx / speed * length, vy / speed * length]
   }
 
   pub fn set_params(&mut self, params: EffectParams) {
@@ -1303,8 +1412,18 @@ impl RenderChain {
     let rect = staged.rect;
 
     // In zoomed space with the video, so it grows and moves with it -- the
-    // compositor draws the cursor inside the same transform.
+    // compositor draws the cursor inside the same transform. The smear is a
+    // distance in the same pixels, so it takes the same scale; without that,
+    // zooming in would leave the tail the length it was at 1x.
     let rect = zoom.apply(rect);
+    let smear = [staged.smear[0] * zoom.scale, staged.smear[1] * zoom.scale];
+
+    // The pointer's own rect and the whole of it, which differ only when there
+    // is a tail to leave room for.
+    let (quad_rect, uv, fill) = match smear_geometry(rect, smear) {
+      None => (rect, UvRect::default(), Fill::Sprite),
+      Some((box_rect, uv, offset)) => (box_rect, uv, Fill::Smear(offset)),
+    };
 
     unsafe {
       set_viewport(ctx, self.canvas_width, self.canvas_height);
@@ -1313,16 +1432,14 @@ impl RenderChain {
         dst_rtv,
         &sprite.srv,
         Quad {
-          rect,
+          rect: quad_rect,
           shape: OverlayShape::Rect,
           corner_radius: 0.0,
           opacity: self.cursor_opacity,
-          // The rect was already derived from the sprite's aspect ratio, so
-          // there is nothing to fit.
-          uv: UvRect::default(),
+          uv,
           // No grade: this is a bitmap of a pointer, not picture.
           grade: Grade::default(),
-          fill: Fill::Sprite,
+          fill,
         },
       )?;
     }

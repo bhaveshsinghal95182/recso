@@ -27,7 +27,7 @@ use crate::engine::decode::Decoder;
 use crate::engine::encode::{AudioSpec, Encoder};
 use crate::engine::player::{advance_webcam, CursorImage, WebcamSync};
 use crate::engine::render::{
-  Background, BackgroundRequest, EffectParams, RenderChain, SourceCrop, VideoLayout,
+  Background, BackgroundRequest, CursorEffects, EffectParams, RenderChain, SourceCrop, VideoLayout,
 };
 use crate::engine::zoom::{ZoomRegion, ZoomTrack};
 
@@ -71,6 +71,7 @@ pub struct Options {
   /// Cursor height in destination pixels, and its opacity.
   pub cursor_size: f32,
   pub cursor_opacity: f32,
+  pub cursor_effects: CursorEffects,
   /// The zoom/pan timeline. Empty exports unzoomed.
   pub zoom_regions: Vec<ZoomRegion>,
   /// Every file contributing sound, with the offset that puts it on the screen
@@ -354,6 +355,7 @@ fn run(shared: &Arc<Shared>, options: Options) -> Result<()> {
   }
   chain.set_cursor_track(CursorTrack::new(options.cursor_track));
   chain.set_cursor_style(options.cursor_size, options.cursor_opacity);
+  chain.set_cursor_effects(options.cursor_effects);
   chain.set_zoom_track(ZoomTrack::new(options.zoom_regions));
   chain.set_source_crop(options.crop);
 

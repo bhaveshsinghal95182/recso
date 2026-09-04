@@ -354,29 +354,35 @@ try {
     },
   ])
   player.setCursorStyle(CURSOR_PX, 1)
-  player.setCursorTrack([
-    { timestampMs: 0, x: 0.2, y: 0.2, imageId: 0 },
-    { timestampMs: duration * 0.5, x: 0.75, y: 0.75, imageId: 1 },
-  ])
+  player.setCursorTrack([{ timestampMs: 0, x: 0.2, y: 0.2, imageId: 0 }])
   await sleep(400)
 
-  check(
-    'the bitmap table loaded',
-    player.cursorImageCount() === 2,
-    `${player.cursorImageCount()} bitmaps`,
-  )
+  check('the bitmap table loaded', player.cursorImageCount() === 2, `${player.cursorImageCount()} bitmaps`)
 
-  player.seek(10, true)
-  await waitFrame()
-  await sleep(300)
+  // Find out which instant is actually on screen rather than seeking between
+  // two guessed times. A recording of an idle desktop can be a single frame --
+  // screen capture only emits on change -- and then a seek presents nothing
+  // new, the staged timestamp stays where it was, and the checks below silently
+  // resolve against the wrong sample.
+  //
+  // Setting the track is enough to move between shapes: it repaints, and a
+  // repaint re-stages the pointer against the frame already on screen.
+  player.seek(Math.min(10, duration * 0.5), true)
+  const shapeFrame = await waitFrame()
+  const shapeMs = shapeFrame ? shapeFrame.pts : 0
+
+  player.setCursorTrack([{ timestampMs: shapeMs - 100, x: 0.2, y: 0.2, imageId: 0 }])
+  await sleep(400)
   const firstShape = player.snapshotBgra()
 
   check('the first sample draws its own bitmap', findBgra(firstShape, isMagenta) !== null)
   check('and not the other one', findBgra(firstShape, isCyan) === null)
 
-  player.seek(duration * 0.75, true)
-  await waitFrame()
-  await sleep(300)
+  player.setCursorTrack([
+    { timestampMs: shapeMs - 100, x: 0.2, y: 0.2, imageId: 0 },
+    { timestampMs: shapeMs, x: 0.75, y: 0.75, imageId: 1 },
+  ])
+  await sleep(400)
   const secondShape = player.snapshotBgra()
 
   check('the second sample draws a different bitmap', findBgra(secondShape, isCyan) !== null)
@@ -384,16 +390,226 @@ try {
 
   // An id past the end of the table falls back to the default bitmap rather
   // than hiding the pointer: a missing image should look wrong, not absent.
-  player.setCursorTrack([{ timestampMs: 0, x: 0.2, y: 0.2, imageId: 99 }])
+  player.setCursorTrack([{ timestampMs: shapeMs - 100, x: 0.2, y: 0.2, imageId: 99 }])
   await sleep(400)
-  player.seek(10, true)
-  await waitFrame()
+
+  check('an unknown bitmap id falls back to the default pointer', findBgra(player.snapshotBgra(), isMagenta) !== null)
+
+  // ---- click pop and smear ------------------------------------------------
+  //
+  // Both change the pointer's *rectangle* rather than its bitmap, so both show
+  // up as magenta appearing where it was not before: more of it around the
+  // hotspot for a click, a tail of it behind the pointer for a smear.
+  //
+  // The tail is checked by comparing the same band of pixels with the effect on
+  // and off rather than by hunting for pure magenta. The smear fades out along
+  // its length, so most of it is magenta blended over whatever the desktop was
+  // showing, and an absolute colour threshold would only ever find the part
+  // nearest the head.
+
+  console.log('\nclick pop and smear')
+
+  /** Count pixels matching `test`, on the same coarse grid as findBgra. */
+  function countBgra(buf, test) {
+    let n = 0
+    if (!buf) return n
+    for (let row = 0; row < info.codedHeight; row += 4) {
+      for (let col = 0; col < info.codedWidth; col += 4) {
+        const i = row * stride * 4 + col * 4
+        if (test(buf[i], buf[i + 1], buf[i + 2])) n += 1
+      }
+    }
+    return n
+  }
+
+  /** Bounding box of the pixels matching `test`, or null if there are none. */
+  function boundsBgra(buf, test) {
+    let box = null
+    if (!buf) return box
+    for (let row = 0; row < info.codedHeight; row += 2) {
+      for (let col = 0; col < info.codedWidth; col += 2) {
+        const i = row * stride * 4 + col * 4
+        if (!test(buf[i], buf[i + 1], buf[i + 2])) continue
+        box ??= { minX: col, maxX: col, minY: row, maxY: row }
+        box.minX = Math.min(box.minX, col)
+        box.maxX = Math.max(box.maxX, col)
+        box.minY = Math.min(box.minY, row)
+        box.maxY = Math.max(box.maxY, row)
+      }
+    }
+    return box
+  }
+
+  // A hotspot in the middle, so a click grows the block evenly instead of
+  // pushing it off one edge, and the tail is easy to measure against it.
+  player.setCursorImages([])
+  player.setCursorImage({
+    width: CURSOR_PX,
+    height: CURSOR_PX,
+    pixels: solidRgba(CURSOR_PX, CURSOR_PX, [255, 0, 255, 255]),
+    hotspotX: CURSOR_PX / 2,
+    hotspotY: CURSOR_PX / 2,
+  })
+  player.setCursorStyle(CURSOR_PX, 1)
+  player.setCursorEffects({})
+  player.setCursorTrack([{ timestampMs: 0, x: 0.5, y: 0.5 }])
+
+  // Which frame a seek actually lands on. A recording of an idle desktop can be
+  // two frames long, and everything below is timed against the pointer being
+  // fresh at whatever instant is on screen -- guessing it from `duration` would
+  // quietly resolve to no motion at all and pass by drawing nothing.
+  player.seek(Math.min(10, duration * 0.5), true)
+  const landed = await waitFrame()
   await sleep(300)
+  const nowMs = landed ? landed.pts : 0
+
+  // A pointer that has been sitting still: no click to animate, and nothing to
+  // measure a velocity from. Everything else is compared against this.
+  const still = [
+    { timestampMs: nowMs - 100, x: 0.5, y: 0.5 },
+    { timestampMs: nowMs - 60, x: 0.5, y: 0.5 },
+  ]
+  player.setCursorTrack(still)
+  await sleep(300)
+  const plainArea = countBgra(player.snapshotBgra(), isMagenta)
+
+  check('the resting pointer is drawn', plainArea > 0, `${plainArea} samples`)
+
+  // The pop peaks 18% of the way through its duration.
+  const CLICK_MS = 500
+  const CLICK_PEAK_MS = CLICK_MS * 0.18
+
+  player.setCursorEffects({ clickScale: 2, clickDurationMs: CLICK_MS })
+  player.setCursorTrack([
+    { timestampMs: nowMs - 100, x: 0.5, y: 0.5 },
+    { timestampMs: nowMs - CLICK_PEAK_MS, x: 0.5, y: 0.5, click: true },
+  ])
+  await sleep(300)
+  const poppedArea = countBgra(player.snapshotBgra(), isMagenta)
+
+  // Twice the scale is four times the area; anything above 2.5x is unambiguous
+  // and leaves room for the block being clipped by an edge of the frame.
+  check('a click grows the pointer', poppedArea > plainArea * 2.5, `${poppedArea} vs ${plainArea} at rest`)
+
+  player.setCursorTrack([
+    { timestampMs: nowMs - CLICK_MS - 50, x: 0.5, y: 0.5, click: true },
+    { timestampMs: nowMs - 60, x: 0.5, y: 0.5 },
+  ])
+  await sleep(300)
+  const settledArea = countBgra(player.snapshotBgra(), isMagenta)
 
   check(
-    'an unknown bitmap id falls back to the default pointer',
-    findBgra(player.snapshotBgra(), isMagenta) !== null,
+    'and lets go of it once the pop is over',
+    Math.abs(settledArea - plainArea) <= 2,
+    `${settledArea} vs ${plainArea} at rest`,
   )
+
+  // The trap the click list exists to avoid. A drag emits a mousemove a few
+  // milliseconds after the click, and if the pop were a property of the sample
+  // in effect that move would end it -- exactly when a click most needs to be
+  // visible.
+  player.setCursorTrack([
+    { timestampMs: nowMs - CLICK_PEAK_MS, x: 0.5, y: 0.5, click: true },
+    { timestampMs: nowMs - CLICK_PEAK_MS + 10, x: 0.5, y: 0.5 },
+  ])
+  await sleep(300)
+  const draggedArea = countBgra(player.snapshotBgra(), isMagenta)
+
+  check(
+    'a move right after a click does not cut the pop short',
+    draggedArea > plainArea * 2.5,
+    `${draggedArea} vs ${plainArea} at rest`,
+  )
+
+  // ---- the smear ----------------------------------------------------------
+
+  // A quarter of the frame in twenty milliseconds: far past the cap, which is
+  // the point -- a real flick of the mouse always is.
+  const flick = [
+    { timestampMs: nowMs - 20, x: 0.35, y: 0.5 },
+    { timestampMs: nowMs, x: 0.6, y: 0.5 },
+  ]
+
+  player.setCursorEffects({})
+  player.setCursorTrack(flick)
+  await sleep(300)
+  const unsmeared = player.snapshotBgra()
+  const head = boundsBgra(unsmeared, isMagenta)
+
+  if (!head) {
+    skip('a fast pointer leaves a tail behind it', 'the pointer was not drawn')
+  } else {
+    // A band behind the pointer, clear of it, and well inside the cap.
+    const band = {
+      x: Math.max(0, head.minX - 160),
+      y: Math.max(0, Math.floor((head.minY + head.maxY) / 2) - 16),
+      w: 100,
+      h: 32,
+    }
+    // The mirror of it in front, where a smear must never reach: the pointer
+    // has not been there yet.
+    const ahead = { ...band, x: Math.min(info.codedWidth - band.w - 1, head.maxX + 60) }
+
+    const before = averageBgra(unsmeared, stride, band.x, band.y, band.w, band.h)
+    const aheadBefore = averageBgra(unsmeared, stride, ahead.x, ahead.y, ahead.w, ahead.h)
+
+    player.setCursorEffects({ smearStrength: 1 })
+    player.setCursorTrack(flick)
+    await sleep(300)
+    const smeared = player.snapshotBgra()
+
+    const after = averageBgra(smeared, stride, band.x, band.y, band.w, band.h)
+    const aheadAfter = averageBgra(smeared, stride, ahead.x, ahead.y, ahead.w, ahead.h)
+
+    // Magenta is red and blue without green, so the tail has to push both of
+    // those up. Checking "it changed" would also pass for a grey smudge.
+    check(
+      'a fast pointer leaves a tail behind it',
+      after[0] - before[0] > 30 && after[2] - before[2] > 30,
+      `r +${(after[0] - before[0]).toFixed(0)}, b +${(after[2] - before[2]).toFixed(0)}`,
+    )
+
+    check(
+      'and the tail is behind it, not in front',
+      difference(aheadAfter, aheadBefore) < 12,
+      `delta ${difference(aheadAfter, aheadBefore).toFixed(1)} ahead of the pointer`,
+    )
+
+    // The cap. This flick covers a quarter of the frame in twenty milliseconds,
+    // which uncapped is a streak most of the way across it; the cap holds the
+    // tail to a few times the pointer's height. Measured past where the tail is
+    // allowed to reach, because the fade means the *visibly* magenta part stops
+    // well before the geometry does -- checking the bright end would pass for
+    // any cap at all.
+    const beyond = {
+      ...band,
+      x: Math.max(0, head.minX - CURSOR_PX * 4 - 160),
+    }
+    const beyondBefore = averageBgra(unsmeared, stride, beyond.x, beyond.y, beyond.w, beyond.h)
+    const beyondAfter = averageBgra(smeared, stride, beyond.x, beyond.y, beyond.w, beyond.h)
+
+    check(
+      'the tail is capped however fast the pointer moves',
+      difference(beyondAfter, beyondBefore) < 12,
+      `delta ${difference(beyondAfter, beyondBefore).toFixed(1)} past the cap`,
+    )
+
+    // Snap back: the same flick, but sampled long enough after the last report
+    // that the pointer has plainly stopped. The track holds its last sample
+    // forever, so without this the streak would still be there.
+    player.setCursorTrack([
+      { timestampMs: nowMs - 220, x: 0.35, y: 0.5 },
+      { timestampMs: nowMs - 200, x: 0.6, y: 0.5 },
+    ])
+    await sleep(300)
+    const stopped = averageBgra(player.snapshotBgra(), stride, band.x, band.y, band.w, band.h)
+
+    check(
+      'a stopped pointer snaps out of its smear',
+      difference(stopped, before) < 12,
+      `delta ${difference(stopped, before).toFixed(1)}`,
+    )
+  }
 
   player.close()
 

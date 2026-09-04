@@ -20,7 +20,6 @@ export interface UnsupportedFeature {
 
 export function unsupportedFeatures(config: CompositionConfig): UnsupportedFeature[] {
   const missing: UnsupportedFeature[] = [];
-  const cursor = config.cursor;
 
   if (config.webcam?.enabled && config.webcam.shadows?.some((shadow) => shadow.blur > 0)) {
     missing.push({
@@ -41,18 +40,6 @@ export function unsupportedFeatures(config: CompositionConfig): UnsupportedFeatu
       label: 'Webcam zoom regions',
       detail: 'per-region camera size and the full-canvas transition',
     });
-  }
-
-  if (cursor?.enabled) {
-    if (cursor.showClickAnimations) {
-      missing.push({ label: 'Click animations', detail: 'the pointer draws without them' });
-    }
-    if (cursor.showMotionBlur) {
-      missing.push({
-        label: 'Cursor smear',
-        detail: 'the pointer draws without stretching along its motion',
-      });
-    }
   }
 
   if (config.layerStates?.length) {
