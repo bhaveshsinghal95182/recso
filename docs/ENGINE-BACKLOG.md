@@ -240,8 +240,8 @@ has the three layers; it does not have most of what the editor draws on them.
 | ~~Per-event cursor bitmaps~~       | yes    | a deduped bitmap table; each sample indexes into it                    |
 | Click effects                      | **no** | click animations and indicators                                        |
 | Cursor smear                       | **no** | stretch along the direction of travel; not the compositor's blur trail |
-| Per-region cursor overrides        | **no** | swap the bitmap for a time span; plugs into the table that now exists  |
-| I-beam detection                   | **no** | the known-handle special case                                          |
+| ~~Per-region cursor overrides~~    | yes    | a table entry, plus a sample injected at each boundary                 |
+| ~~I-beam detection~~               | yes    | the same known-handle check, choosing a table entry                    |
 | Webcam borders and shadows         | **no** | shape and radius exist; borders and shadows do not                     |
 | Canvas padding / layout            | **no** | the video's placement within a larger canvas                           |
 
@@ -252,9 +252,12 @@ once, with an `image_id` on each sample indexing into it — deduped on the way
 in, so the cost tracks the number of distinct shapes rather than the number of
 samples.
 
-What is left in the cursor row is no longer structural. Region overrides,
-I-beam detection, click animations and the smear all reduce to choosing a
-different id, or a different rect, for a given sample.
+Region overrides and I-beam detection followed immediately, with no engine
+change at all -- both reduce to choosing a different id for a sample, which the
+table already supports.
+
+What is left is click animations and the smear, and those do need engine work:
+they change the pointer's rect rather than its bitmap.
 
 ---
 

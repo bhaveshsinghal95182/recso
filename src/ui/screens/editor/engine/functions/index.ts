@@ -1,7 +1,13 @@
 export { drawBackground } from './background';
 export { lerp, roundRectPath, smoothstep } from './common';
 export { defaultConfig } from './config';
-export { drawArrowCursor, drawCrosshairCursor, drawCursorLayer, drawIBeamCursor } from './cursor';
+export {
+  drawArrowCursor,
+  drawCrosshairCursor,
+  drawCursorLayer,
+  drawIBeamCursor,
+  isIBeamCursorHandle,
+} from './cursor';
 export {
   getCutAdjustedDurationMs,
   isInCutRegion,

@@ -51,7 +51,7 @@ function parseCursorHandleHex(cursorHandleHex: string | undefined): number | nul
   return null;
 }
 
-function isIBeamCursorHandle(cursorHandleHex: string | undefined): boolean {
+export function isIBeamCursorHandle(cursorHandleHex: string | undefined): boolean {
   const value = parseCursorHandleHex(cursorHandleHex);
   if (value === null) {
     return false;

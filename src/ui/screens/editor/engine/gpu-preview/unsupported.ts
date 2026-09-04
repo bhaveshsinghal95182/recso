@@ -53,12 +53,6 @@ export function unsupportedFeatures(config: CompositionConfig): UnsupportedFeatu
         detail: 'the pointer draws without stretching along its motion',
       });
     }
-    if (cursor.cursorRegionOverrides?.length) {
-      missing.push({
-        label: 'Cursor region overrides',
-        detail: 'the recorded pointer is drawn instead of the override',
-      });
-    }
   }
 
   if (config.layerStates?.length) {

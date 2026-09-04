@@ -30,10 +30,13 @@ import type { CanvasSize } from '../preview-config/types';
 import { resolveSourceCrop } from '../source-crop';
 import type {
   CompositionConfig,
+  CompositionCursorConfig,
+  CompositionCursorEvent,
   CompositionCutRegion,
   CompositionZoomRegion,
   WebcamOverlayShape,
 } from '../types';
+import type { CursorBitmapTable } from './raster';
 import {
   backgroundColour,
   buildCursorBitmapTable,
@@ -65,6 +68,80 @@ function toEngineZoomRegions(regions: CompositionZoomRegion[] | undefined): Engi
       y: point.focalY,
     })),
   }));
+}
+
+/** A track sample, with the event it came from kept for override resolution. */
+interface TrackSample {
+  timestampMs: number;
+  x: number;
+  y: number;
+  visible?: boolean;
+  imageId?: number;
+  event: CompositionCursorEvent;
+}
+
+/**
+ * Add a sample at each override boundary, so an override starts and ends on
+ * time rather than on the next mouse event.
+ *
+ * This exists because the two paths resolve overrides against different things.
+ * The compositor asks "what override covers the playhead?" every frame. The
+ * engine holds the last sample until the next one, so an override can only take
+ * effect where a sample exists -- and a stationary pointer produces no events
+ * at all. Without this, an override that begins while the mouse is still would
+ * not appear until the user moved it, which is exactly when someone would be
+ * demonstrating the thing they added the override for.
+ *
+ * A boundary sample inherits the held position, since the pointer has not moved
+ * -- only its shape changes. The closing one takes the id the underlying event
+ * would have had anyway, which is the recorded bitmap, or another override if
+ * one starts where this ends.
+ */
+function withOverrideBoundaries(
+  samples: TrackSample[],
+  cursor: CompositionCursorConfig,
+  table: CursorBitmapTable,
+): TrackSample[] {
+  const overrides = cursor.cursorRegionOverrides;
+  if (!overrides || overrides.length === 0 || samples.length === 0) {
+    return samples;
+  }
+
+  const sorted = [...samples].sort((a, b) => a.timestampMs - b.timestampMs);
+
+  /** The sample in effect at a time: the last one at or before it. */
+  const heldAt = (timestampMs: number): TrackSample | undefined => {
+    let held: TrackSample | undefined;
+    for (const sample of sorted) {
+      if (sample.timestampMs > timestampMs) {
+        break;
+      }
+      held = sample;
+    }
+    return held;
+  };
+
+  const boundaries = overrides.flatMap((region) => [region.startMs, region.endMs]);
+  const added: TrackSample[] = [];
+
+  for (const boundary of boundaries) {
+    const held = heldAt(boundary);
+    // Nothing to inherit a position from: the override begins before the
+    // pointer was ever recorded, so there is no cursor to reshape.
+    if (!held || held.timestampMs === boundary) {
+      continue;
+    }
+
+    added.push({
+      ...held,
+      timestampMs: boundary,
+      imageId: table.idFor(held.event, boundary),
+    });
+  }
+
+  return added.length === 0
+    ? sorted
+    : [...sorted, ...added].sort((a, b) => a.timestampMs - b.timestampMs);
 }
 
 function toEngineCuts(cuts: CompositionCutRegion[] | undefined): EngineCutRegion[] {
@@ -143,21 +220,29 @@ export async function applyComposition(
     const bitmap = await rasteriseCursor(cursor);
     await player.setCursorImage(bitmap);
 
-    const table = await buildCursorBitmapTable(cursor);
+    // Overrides resolve against composition time, the same clock the track is
+    // built on and the same one the engine looks samples up at.
+    const at = (event: CompositionCursorEvent) =>
+      mapSourceTimeToCompositionTimeMs(event.timestampMs, cuts);
+
+    const table = await buildCursorBitmapTable(cursor, at);
     await player.setCursorImages(table.images);
 
+    const samples = cursor.events
+      .filter((event) => Number.isFinite(event.timestampMs))
+      // A pointer inside a cut belongs to a frame nobody will see.
+      .filter((event) => !isInCutRegion(event.timestampMs, cuts))
+      .map((event) => ({
+        timestampMs: at(event),
+        x: event.normalizedX ?? (cursor.sourceWidth > 0 ? event.x / cursor.sourceWidth : 0),
+        y: event.normalizedY ?? (cursor.sourceHeight > 0 ? event.y / cursor.sourceHeight : 0),
+        visible: event.visible,
+        imageId: table.idFor(event, at(event)),
+        event,
+      }));
+
     await player.setCursorTrack(
-      cursor.events
-        .filter((event) => Number.isFinite(event.timestampMs))
-        // A pointer inside a cut belongs to a frame nobody will see.
-        .filter((event) => !isInCutRegion(event.timestampMs, cuts))
-        .map((event) => ({
-          timestampMs: mapSourceTimeToCompositionTimeMs(event.timestampMs, cuts),
-          x: event.normalizedX ?? (cursor.sourceWidth > 0 ? event.x / cursor.sourceWidth : 0),
-          y: event.normalizedY ?? (cursor.sourceHeight > 0 ? event.y / cursor.sourceHeight : 0),
-          visible: event.visible,
-          imageId: table.idFor(event),
-        })),
+      withOverrideBoundaries(samples, cursor, table).map(({ event: _event, ...sample }) => sample),
     );
 
     // The compositor's base size is 22px scaled by the user's multiplier; the

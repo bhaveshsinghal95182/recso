@@ -12,8 +12,19 @@
  * drift by construction.
  */
 
-import { drawArrowCursor, drawBackground, drawCrosshairCursor } from '../functions';
-import type { BackgroundConfig, CompositionCursorConfig, CompositionCursorEvent } from '../types';
+import {
+  drawArrowCursor,
+  drawBackground,
+  drawCrosshairCursor,
+  drawIBeamCursor,
+  isIBeamCursorHandle,
+} from '../functions';
+import type {
+  BackgroundConfig,
+  CompositionCursorConfig,
+  CompositionCursorEvent,
+  CompositionCursorRegionOverride,
+} from '../types';
 
 /** What the engine's `setBackground`/`setCursorImage` want. */
 export interface RgbaBitmap {
@@ -224,36 +235,152 @@ export async function loadImageBitmap(src: string): Promise<RgbaBitmap | null> {
 /**
  * The distinct pointer bitmaps a recording used, plus the id for each event.
  *
- * The recorder captures the actual pointer at each event, so the shape changes
- * as it crosses the screen -- arrow, I-beam over a text field, hand over a
- * link. The engine takes those as a table indexed per sample rather than as an
- * image per event, because a ten minute recording holds thousands of events and
- * perhaps a dozen shapes: deduping here keeps what crosses the IPC boundary
- * proportional to the number of shapes instead of the number of samples.
+ * Four things can decide the pointer's shape at a given moment, and they are
+ * tried in the order `drawCursorGlyph` tries them, so the two paths agree:
  *
- * Keyed on the hotspot as well as the image. Two events sharing a bitmap almost
- * always share its hotspot too, but a table that assumed so would put the
- * pointer's tip in the wrong place for the ones that do not, and it would only
- * show up as a pointer that clicks slightly off.
+ *   1. a region override, which swaps the image for a span of the timeline
+ *   2. the I-beam glyph, when the recorded cursor handle is a known text caret
+ *   3. the bitmap the recorder captured with the event
+ *   4. the default pointer, which the engine holds separately
+ *
+ * All four collapse to one mechanism here: an index into a table the engine
+ * uploads once. The engine never learns which rule chose a shape, only which
+ * shape to draw -- which is why overrides and I-beam detection needed no engine
+ * changes at all once the table existed.
+ *
+ * Deduping matters because a ten minute recording holds thousands of events and
+ * perhaps a dozen shapes: keying the table on the image keeps what crosses the
+ * IPC boundary proportional to the shapes rather than the samples.
+ *
+ * The key includes the hotspot. Two events sharing a bitmap almost always share
+ * its hotspot too, but a table that assumed so would put the tip in the wrong
+ * place for the ones that do not, and that shows up only as clicks landing
+ * slightly off.
  */
 export interface CursorBitmapTable {
   /** Upload order. An event's id is its index here. */
   images: RgbaBitmap[];
-  /** The id for an event, or `undefined` to draw the default pointer. */
-  idFor: (event: CompositionCursorEvent) => number | undefined;
+  /**
+   * The id for an event at `compositionMs`, or `undefined` for the default.
+   *
+   * Takes the time as well as the event because an override is a property of
+   * the moment rather than of the pointer -- the same event inside an override
+   * span and outside it draws two different shapes.
+   */
+  idFor: (event: CompositionCursorEvent, compositionMs: number) => number | undefined;
 }
 
 const EMPTY_TABLE: CursorBitmapTable = { images: [], idFor: () => undefined };
 
-function bitmapKey(event: CompositionCursorEvent): string | null {
+/** The override covering `compositionMs`, if any. */
+function overrideAt(
+  cursor: CompositionCursorConfig,
+  compositionMs: number,
+): CompositionCursorRegionOverride | undefined {
+  const overrides = cursor.cursorRegionOverrides;
+  if (!overrides || overrides.length === 0) {
+    return undefined;
+  }
+
+  const covering = overrides.find(
+    (region) => compositionMs >= region.startMs && compositionMs < region.endMs,
+  );
+  if (covering) {
+    return covering;
+  }
+
+  // The compositor includes the last override's closing instant, so a playhead
+  // parked exactly on it keeps the override instead of flickering back to the
+  // recorded pointer for a single frame.
+  const last = overrides[overrides.length - 1];
+  return last && compositionMs === last.endMs ? last : undefined;
+}
+
+/** The key for the bitmap the recorder captured with an event, if it did. */
+function capturedKey(event: CompositionCursorEvent): string | null {
   if (typeof event.cursorDataUrl !== 'string' || event.cursorDataUrl.length === 0) {
     return null;
   }
-  return `${event.cursorDataUrl}|${event.cursorHotspotX ?? 0}|${event.cursorHotspotY ?? 0}`;
+  return `captured:${event.cursorDataUrl}|${event.cursorHotspotX ?? 0}|${event.cursorHotspotY ?? 0}`;
 }
 
+/** Which table entry an event wants, by the rules the compositor uses. */
+function keyFor(
+  cursor: CompositionCursorConfig,
+  event: CompositionCursorEvent,
+  compositionMs: number,
+): string | null {
+  const region = overrideAt(cursor, compositionMs);
+  if (region) {
+    return `override:${region.imagePath}`;
+  }
+  if (isIBeamCursorHandle(event.cursorHandleHex)) {
+    return 'ibeam';
+  }
+  return capturedKey(event);
+}
+
+/**
+ * The I-beam, rasterised.
+ *
+ * Drawn centred on its point -- the stem spans the height either side of it --
+ * so the sprite is symmetric and its hotspot is the middle. Padded by a couple
+ * of pixels, because the glyph draws a halo one pixel outside the bars.
+ */
+function rasteriseIBeam(): RgbaBitmap | null {
+  const stemHeight = GLYPH_SIZE_PX * 1.9;
+  const capWidth = Math.max(Math.max(2, GLYPH_SIZE_PX * 0.16) * 2.6, GLYPH_SIZE_PX * 0.64);
+  const width = Math.ceil(capWidth) + 4;
+  const height = Math.ceil(stemHeight) + 4;
+
+  const ctx = createContext(width, height);
+  if (!ctx) {
+    return null;
+  }
+
+  drawIBeamCursor(ctx, width / 2, height / 2, GLYPH_SIZE_PX);
+  return { ...readBack(ctx), hotspotX: width / 2, hotspotY: height / 2 };
+}
+
+/**
+ * Load the bitmap a key names.
+ *
+ * An override draws from its image's top-left, matching the compositor, which
+ * passes no hotspot for one. That is arguably wrong -- a replacement pointer
+ * has a tip too -- but it is what the other path does, and the two disagreeing
+ * would be worse than both being slightly off.
+ */
+async function loadForKey(key: string, event: CompositionCursorEvent): Promise<RgbaBitmap | null> {
+  if (key === 'ibeam') {
+    return rasteriseIBeam();
+  }
+
+  if (key.startsWith('override:')) {
+    const loaded = await loadImageBitmap(key.slice('override:'.length));
+    return loaded && { ...loaded, hotspotX: 0, hotspotY: 0 };
+  }
+
+  const loaded = await loadImageBitmap(event.cursorDataUrl as string);
+  return (
+    loaded && {
+      ...loaded,
+      hotspotX: event.cursorHotspotX ?? 0,
+      hotspotY: event.cursorHotspotY ?? 0,
+    }
+  );
+}
+
+/**
+ * Build the table for a recording.
+ *
+ * `timeOf` maps an event to the composition time the engine will look it up at,
+ * so overrides resolve against the same clock the track is built on. Getting
+ * this wrong would change the pointer's shape at the right instant of the wrong
+ * timeline, which after a cut is a quiet drift rather than an obvious break.
+ */
 export async function buildCursorBitmapTable(
   cursor: CompositionCursorConfig | undefined,
+  timeOf: (event: CompositionCursorEvent) => number,
 ): Promise<CursorBitmapTable> {
   if (!cursor?.enabled || cursor.events.length === 0) {
     return EMPTY_TABLE;
@@ -262,7 +389,7 @@ export async function buildCursorBitmapTable(
   // One entry per distinct shape, in first-seen order.
   const firstSeen = new Map<string, CompositionCursorEvent>();
   for (const event of cursor.events) {
-    const key = bitmapKey(event);
+    const key = keyFor(cursor, event, timeOf(event));
     if (key !== null && !firstSeen.has(key)) {
       firstSeen.set(key, event);
     }
@@ -276,24 +403,20 @@ export async function buildCursorBitmapTable(
   const idByKey = new Map<string, number>();
 
   for (const [key, event] of firstSeen) {
-    const loaded = await loadImageBitmap(event.cursorDataUrl as string);
+    const loaded = await loadForKey(key, event);
     if (!loaded) {
-      // One shape failing to decode should cost that shape, not the table --
-      // the events that used it fall back to the default pointer.
+      // One shape failing to decode costs that shape, not the table -- the
+      // events that wanted it fall back to the default pointer.
       continue;
     }
     idByKey.set(key, images.length);
-    images.push({
-      ...loaded,
-      hotspotX: event.cursorHotspotX ?? 0,
-      hotspotY: event.cursorHotspotY ?? 0,
-    });
+    images.push(loaded);
   }
 
   return {
     images,
-    idFor: (event) => {
-      const key = bitmapKey(event);
+    idFor: (event, compositionMs) => {
+      const key = keyFor(cursor, event, compositionMs);
       return key === null ? undefined : idByKey.get(key);
     },
   };
