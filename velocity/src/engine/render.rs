@@ -28,8 +28,8 @@ use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::engine::composite::{
-  fit_source, CursorTrack, Fill, Grade, OverlayShape, Overlays, Quad, Rect, SpriteTexture, UvRect,
-  WebcamLayout,
+  fit_source, CursorImages, CursorTrack, Fill, Grade, OverlayShape, Overlays, Quad, Rect,
+  SpriteTexture, UvRect, WebcamLayout,
 };
 use crate::engine::d3d::{gpu, Gpu};
 use crate::engine::zoom::{ZoomState, ZoomTrack};
@@ -281,6 +281,18 @@ struct WebcamLayer {
   bgra: ID3D11Texture2D,
 }
 
+/// What was resolved for a slot at stage time: where the pointer goes, and
+/// which bitmap that rectangle was measured against.
+///
+/// The bitmap matters as much as the rect. Size and hotspot offset both come
+/// from the image, so a rect resolved against one shape and drawn with another
+/// puts the pointer's tip in the wrong place.
+#[derive(Clone, Copy)]
+struct StagedCursor {
+  rect: Rect,
+  image_id: Option<u32>,
+}
+
 pub struct RenderChain {
   /// Coded size of the *source*: what the NV12 textures are, macroblock padding
   /// included.
@@ -349,10 +361,12 @@ pub struct RenderChain {
   /// stage time and remembered -- a re-render must put the cursor back exactly
   /// where it was, not where the playhead has since moved to.
   cursor: Option<SpriteTexture>,
+  /// The per-sample bitmaps. Empty means every sample draws `cursor`.
+  cursor_images: CursorImages,
   cursor_track: CursorTrack,
   cursor_size: f32,
   cursor_opacity: f32,
-  slot_cursor: Vec<Option<Rect>>,
+  slot_cursor: Vec<Option<StagedCursor>>,
 
   /// The zoom timeline, and where each staged slot sat on it.
   ///
@@ -419,7 +433,11 @@ impl RenderChain {
     // NV12 output needs even dimensions, and a zero-sized target is not a
     // recoverable state, so the canvas is forced into something renderable here
     // rather than trusted.
-    let canvas_width = if canvas.0 < 2 { display_width } else { canvas.0 } & !1;
+    let canvas_width = if canvas.0 < 2 {
+      display_width
+    } else {
+      canvas.0
+    } & !1;
     let canvas_height = if canvas.1 < 2 {
       display_height
     } else {
@@ -587,6 +605,7 @@ impl RenderChain {
       webcam: None,
       webcam_layout: WebcamLayout::default(),
       cursor: None,
+      cursor_images: CursorImages::default(),
       cursor_track: CursorTrack::default(),
       cursor_size: DEFAULT_CURSOR_SIZE_PX,
       cursor_opacity: 1.0,
@@ -724,7 +743,12 @@ impl RenderChain {
   /// Slots without one keep whatever they had; the caller decides whether that
   /// is the right frame, because holding the previous camera image is correct
   /// when the camera is slower than the screen and wrong after a seek.
-  pub fn stage_webcam(&mut self, slot: usize, src: &ID3D11Texture2D, subresource: u32) -> Result<()> {
+  pub fn stage_webcam(
+    &mut self,
+    slot: usize,
+    src: &ID3D11Texture2D,
+    subresource: u32,
+  ) -> Result<()> {
     let _guard = crate::engine::d3d::render_lock();
     self.stage_webcam_locked(slot, src, subresource)
   }
@@ -801,6 +825,10 @@ impl RenderChain {
     }
   }
 
+  pub fn set_cursor_images(&mut self, images: CursorImages) {
+    self.cursor_images = images;
+  }
+
   pub fn set_cursor_image(&mut self, sprite: Option<SpriteTexture>) {
     self.cursor = sprite;
   }
@@ -813,7 +841,6 @@ impl RenderChain {
   pub fn set_zoom_track(&mut self, track: ZoomTrack) {
     self.zoom_track = track;
   }
-
 
   pub fn set_cursor_style(&mut self, size: f32, opacity: f32) {
     self.cursor_size = size.max(0.0);
@@ -837,13 +864,23 @@ impl RenderChain {
     self.slot_zoom[index] = self.zoom_track.state_at(timestamp_ms, self.layout.rect);
   }
 
-  fn resolve_cursor_rect(&self, timestamp_ms: f64) -> Option<Rect> {
+  /// The bitmap a sample should be drawn with: its own, or the default.
+  ///
+  /// An id the table does not have falls through to the default rather than
+  /// hiding the pointer -- a missing image should look wrong, not absent.
+  fn sprite_for(&self, image_id: Option<u32>) -> Option<&SpriteTexture> {
+    image_id
+      .and_then(|id| self.cursor_images.get(id))
+      .or(self.cursor.as_ref())
+  }
+
+  fn resolve_cursor_rect(&self, timestamp_ms: f64) -> Option<StagedCursor> {
     if self.cursor_opacity <= 0.0 || self.cursor_size <= 0.0 {
       return None;
     }
 
-    let sprite = self.cursor.as_ref()?;
     let sample = self.cursor_track.sample_at(timestamp_ms)?;
+    let sprite = self.sprite_for(sample.image_id)?;
 
     // Cursor positions are recorded against the whole frame, so a crop moves
     // them: what was 50% across an uncropped frame is further right once the
@@ -875,11 +912,14 @@ impl RenderChain {
     // so they follow the video when it is inset, scaled or moved -- and the
     // macroblock padding was never part of that picture either.
     let video = self.layout.rect;
-    Some(Rect {
-      x: video.x + sample_x * video.width - sprite.hotspot_x * scale,
-      y: video.y + sample_y * video.height - sprite.hotspot_y * scale,
-      width,
-      height,
+    Some(StagedCursor {
+      rect: Rect {
+        x: video.x + sample_x * video.width - sprite.hotspot_x * scale,
+        y: video.y + sample_y * video.height - sprite.hotspot_y * scale,
+        width,
+        height,
+      },
+      image_id: sample.image_id,
     })
   }
 
@@ -1081,9 +1121,14 @@ impl RenderChain {
     source: &ID3D11ShaderResourceView,
     quad: Quad,
   ) -> Result<()> {
-    self
-      .overlays
-      .draw(ctx, dst_rtv, source, self.canvas_width, self.canvas_height, quad)
+    self.overlays.draw(
+      ctx,
+      dst_rtv,
+      source,
+      self.canvas_width,
+      self.canvas_height,
+      quad,
+    )
   }
 
   /// Place the converted video on the canvas, with its border under it.
@@ -1247,12 +1292,15 @@ impl RenderChain {
     dst_rtv: &ID3D11RenderTargetView,
     zoom: ZoomState,
   ) -> Result<()> {
-    let Some(sprite) = self.cursor.as_ref() else {
+    let Some(staged) = self.slot_cursor[slot % self.slot_cursor.len()] else {
       return Ok(());
     };
-    let Some(rect) = self.slot_cursor[slot % self.slot_cursor.len()] else {
+    // The one staged with the frame, not the one the track would pick now: a
+    // re-render after a grading change must not swap the pointer's shape.
+    let Some(sprite) = self.sprite_for(staged.image_id) else {
       return Ok(());
     };
+    let rect = staged.rect;
 
     // In zoomed space with the video, so it grows and moves with it -- the
     // compositor draws the cursor inside the same transform.

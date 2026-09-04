@@ -34,7 +34,13 @@ import type {
   CompositionZoomRegion,
   WebcamOverlayShape,
 } from '../types';
-import { backgroundColour, parseCssColour, rasteriseBackground, rasteriseCursor } from './raster';
+import {
+  backgroundColour,
+  buildCursorBitmapTable,
+  parseCssColour,
+  rasteriseBackground,
+  rasteriseCursor,
+} from './raster';
 
 type EnginePlayer = typeof window.electron.engine.player;
 
@@ -131,8 +137,14 @@ export async function applyComposition(
 
   const cursor = config.cursor;
   if (cursor?.enabled && cursor.events.length > 0) {
+    // The default pointer, drawn for any sample the recorder captured no
+    // bitmap for -- and for every sample at all, on a recording from before
+    // the recorder captured them.
     const bitmap = await rasteriseCursor(cursor);
     await player.setCursorImage(bitmap);
+
+    const table = await buildCursorBitmapTable(cursor);
+    await player.setCursorImages(table.images);
 
     await player.setCursorTrack(
       cursor.events
@@ -144,6 +156,7 @@ export async function applyComposition(
           x: event.normalizedX ?? (cursor.sourceWidth > 0 ? event.x / cursor.sourceWidth : 0),
           y: event.normalizedY ?? (cursor.sourceHeight > 0 ? event.y / cursor.sourceHeight : 0),
           visible: event.visible,
+          imageId: table.idFor(event),
         })),
     );
 
@@ -152,6 +165,7 @@ export async function applyComposition(
     await player.setCursorStyle(22 * Math.max(0.2, cursor.size), 1);
   } else {
     await player.setCursorImage(null);
+    await player.setCursorImages([]);
     await player.setCursorTrack([]);
   }
 

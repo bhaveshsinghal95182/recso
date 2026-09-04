@@ -13,7 +13,7 @@
  */
 
 import { drawArrowCursor, drawBackground, drawCrosshairCursor } from '../functions';
-import type { BackgroundConfig, CompositionCursorConfig } from '../types';
+import type { BackgroundConfig, CompositionCursorConfig, CompositionCursorEvent } from '../types';
 
 /** What the engine's `setBackground`/`setCursorImage` want. */
 export interface RgbaBitmap {
@@ -219,4 +219,82 @@ export async function loadImageBitmap(src: string): Promise<RgbaBitmap | null> {
     // simply draws no pointer.
     return null;
   }
+}
+
+/**
+ * The distinct pointer bitmaps a recording used, plus the id for each event.
+ *
+ * The recorder captures the actual pointer at each event, so the shape changes
+ * as it crosses the screen -- arrow, I-beam over a text field, hand over a
+ * link. The engine takes those as a table indexed per sample rather than as an
+ * image per event, because a ten minute recording holds thousands of events and
+ * perhaps a dozen shapes: deduping here keeps what crosses the IPC boundary
+ * proportional to the number of shapes instead of the number of samples.
+ *
+ * Keyed on the hotspot as well as the image. Two events sharing a bitmap almost
+ * always share its hotspot too, but a table that assumed so would put the
+ * pointer's tip in the wrong place for the ones that do not, and it would only
+ * show up as a pointer that clicks slightly off.
+ */
+export interface CursorBitmapTable {
+  /** Upload order. An event's id is its index here. */
+  images: RgbaBitmap[];
+  /** The id for an event, or `undefined` to draw the default pointer. */
+  idFor: (event: CompositionCursorEvent) => number | undefined;
+}
+
+const EMPTY_TABLE: CursorBitmapTable = { images: [], idFor: () => undefined };
+
+function bitmapKey(event: CompositionCursorEvent): string | null {
+  if (typeof event.cursorDataUrl !== 'string' || event.cursorDataUrl.length === 0) {
+    return null;
+  }
+  return `${event.cursorDataUrl}|${event.cursorHotspotX ?? 0}|${event.cursorHotspotY ?? 0}`;
+}
+
+export async function buildCursorBitmapTable(
+  cursor: CompositionCursorConfig | undefined,
+): Promise<CursorBitmapTable> {
+  if (!cursor?.enabled || cursor.events.length === 0) {
+    return EMPTY_TABLE;
+  }
+
+  // One entry per distinct shape, in first-seen order.
+  const firstSeen = new Map<string, CompositionCursorEvent>();
+  for (const event of cursor.events) {
+    const key = bitmapKey(event);
+    if (key !== null && !firstSeen.has(key)) {
+      firstSeen.set(key, event);
+    }
+  }
+
+  if (firstSeen.size === 0) {
+    return EMPTY_TABLE;
+  }
+
+  const images: RgbaBitmap[] = [];
+  const idByKey = new Map<string, number>();
+
+  for (const [key, event] of firstSeen) {
+    const loaded = await loadImageBitmap(event.cursorDataUrl as string);
+    if (!loaded) {
+      // One shape failing to decode should cost that shape, not the table --
+      // the events that used it fall back to the default pointer.
+      continue;
+    }
+    idByKey.set(key, images.length);
+    images.push({
+      ...loaded,
+      hotspotX: event.cursorHotspotX ?? 0,
+      hotspotY: event.cursorHotspotY ?? 0,
+    });
+  }
+
+  return {
+    images,
+    idFor: (event) => {
+      const key = bitmapKey(event);
+      return key === null ? undefined : idByKey.get(key);
+    },
+  };
 }

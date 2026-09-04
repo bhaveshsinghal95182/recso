@@ -56,13 +56,7 @@ export function unsupportedFeatures(config: CompositionConfig): UnsupportedFeatu
     if (cursor.cursorRegionOverrides?.length) {
       missing.push({
         label: 'Cursor region overrides',
-        detail: 'one bitmap is used for the whole track',
-      });
-    }
-    if (cursor.events.some((event) => event.cursorDataUrl)) {
-      missing.push({
-        label: 'Per-event cursor shapes',
-        detail: 'the pointer will not change over text fields and links',
+        detail: 'the recorded pointer is drawn instead of the override',
       });
     }
   }

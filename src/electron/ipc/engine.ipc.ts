@@ -225,6 +225,17 @@ export function registerEngineHandlers(): void {
     },
   );
 
+  ipcMain.handle(
+    'engine:player:cursor-images',
+    (_event, images: (Omit<CursorBitmap, 'pixels'> & { pixels: ArrayBuffer })[]) => {
+      requirePlayer().setCursorImages(
+        images.map((image) => ({ ...image, pixels: Buffer.from(image.pixels) })),
+      );
+    },
+  );
+
+  ipcMain.handle('engine:player:cursor-image-count', () => requirePlayer().cursorImageCount());
+
   ipcMain.handle('engine:player:cursor-track', (_event, samples: CursorPoint[]) => {
     requirePlayer().setCursorTrack(samples);
   });

@@ -310,6 +310,12 @@ export interface EngineCursorPoint {
   y: number;
   /** Defaults to true. A hidden sample hides the cursor until the next one. */
   visible?: boolean;
+  /**
+   * Which bitmap this sample wore, as an index into `setCursorImages`.
+   *
+   * Omitted, or past the end of the table, draws the default pointer.
+   */
+  imageId?: number;
 }
 
 export interface EngineAPI {
@@ -391,11 +397,14 @@ export interface EngineAPI {
 
     /** `pixels` must be an ArrayBuffer of tightly packed RGBA8. */
     setCursorImage: (image: EngineCursorBitmap | null) => Promise<void>;
+    setCursorImages: (images: EngineCursorBitmap[]) => Promise<void>;
     setCursorTrack: (samples: EngineCursorPoint[]) => Promise<void>;
     /** Cursor height in destination pixels, and opacity. Size 0 hides it. */
     setCursorStyle: (size: number, opacity: number) => Promise<void>;
     /** Applied asynchronously, so this reads 0 for a moment after setCursorTrack. */
     cursorSampleCount: () => Promise<number>;
+    /** Pointer bitmaps resident. Asynchronous like the sample count. */
+    cursorImageCount: () => Promise<number>;
 
     /**
      * The composited frame as raw BGRA -- grading, webcam and cursor included.

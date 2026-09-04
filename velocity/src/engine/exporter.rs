@@ -19,7 +19,9 @@ use std::time::Instant;
 use windows::core::Result;
 
 use crate::engine::audio::{AudioMixer, MIX_SAMPLE_RATE};
-use crate::engine::composite::{CursorSample, CursorTrack, SpriteTexture, WebcamLayout};
+use crate::engine::composite::{
+  CursorImages, CursorSample, CursorTrack, SpriteTexture, WebcamLayout,
+};
 use crate::engine::cuts::{Cut, CutTrack};
 use crate::engine::decode::Decoder;
 use crate::engine::encode::{AudioSpec, Encoder};
@@ -58,7 +60,13 @@ pub struct Options {
   /// Where the camera goes. `None` leaves the overlay out.
   pub webcam_layout: Option<WebcamLayout>,
   /// The pointer bitmap. `None` leaves the cursor out.
+  ///
+  /// Drawn for any sample that does not name one of `cursor_images`, so a
+  /// recording with a full bitmap table never reaches it.
   pub cursor_image: Option<CursorImage>,
+  /// The distinct pointer bitmaps the recording used, indexed by each
+  /// sample's `image_id`.
+  pub cursor_images: Vec<CursorImage>,
   pub cursor_track: Vec<CursorSample>,
   /// Cursor height in destination pixels, and its opacity.
   pub cursor_size: f32,
@@ -152,9 +160,10 @@ impl Exporter {
             e.code().0 as u32
           ));
         }
-        thread_shared
-          .elapsed_us
-          .store(thread_shared.started_at.elapsed().as_micros() as u64, Ordering::Relaxed);
+        thread_shared.elapsed_us.store(
+          thread_shared.started_at.elapsed().as_micros() as u64,
+          Ordering::Relaxed,
+        );
         thread_shared.finished.store(true, Ordering::Release);
       })
       .expect("spawn export thread");
@@ -195,11 +204,7 @@ impl Exporter {
       // from the range and the frame rate, so a file whose real rate differs
       // slightly can overshoot it -- and a progress bar reading 104% is a
       // worse lie than one that sits at 100 for a moment.
-      frames_total: self
-        .shared
-        .frames_total
-        .load(Ordering::Relaxed)
-        .max(done),
+      frames_total: self.shared.frames_total.load(Ordering::Relaxed).max(done),
       finished,
       cancelled: self.shared.cancel.load(Ordering::Acquire),
       error: self.shared.error.lock().unwrap().clone(),
@@ -330,6 +335,23 @@ fn run(shared: &Arc<Shared>, options: Options) -> Result<()> {
       image.hotspot_y,
     )?));
   }
+  if !options.cursor_images.is_empty() {
+    stage("upload cursor bitmaps");
+    // Fallible here, unlike in the player: an export runs once and is kept, so
+    // a pointer silently falling back to the wrong shape for its whole length
+    // is worse than refusing to start.
+    let mut uploaded = Vec::with_capacity(options.cursor_images.len());
+    for image in &options.cursor_images {
+      uploaded.push(SpriteTexture::new(
+        image.width,
+        image.height,
+        &image.pixels,
+        image.hotspot_x,
+        image.hotspot_y,
+      )?);
+    }
+    chain.set_cursor_images(CursorImages::new(uploaded));
+  }
   chain.set_cursor_track(CursorTrack::new(options.cursor_track));
   chain.set_cursor_style(options.cursor_size, options.cursor_opacity);
   chain.set_zoom_track(ZoomTrack::new(options.zoom_regions));
@@ -352,7 +374,10 @@ fn run(shared: &Arc<Shared>, options: Options) -> Result<()> {
     mixer.skip_to(export_origin_ms)?;
   }
   if let Some(mixer) = mixer.as_ref() {
-    eprintln!("[engine] export mixing {} audio source(s)", mixer.source_count());
+    eprintln!(
+      "[engine] export mixing {} audio source(s)",
+      mixer.source_count()
+    );
   }
 
   stage("create encoder");
@@ -473,9 +498,10 @@ fn run(shared: &Arc<Shared>, options: Options) -> Result<()> {
     shared.render_us.fetch_add(render_us, Ordering::Relaxed);
     shared.encode_us.fetch_add(encode_us, Ordering::Relaxed);
     if shared.frames_done.fetch_add(1, Ordering::Relaxed) == 0 {
-      shared
-        .setup_us
-        .store(shared.started_at.elapsed().as_micros() as u64, Ordering::Relaxed);
+      shared.setup_us.store(
+        shared.started_at.elapsed().as_micros() as u64,
+        Ordering::Relaxed,
+      );
     }
   }
 

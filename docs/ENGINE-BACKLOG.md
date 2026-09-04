@@ -228,26 +228,33 @@ and it should be revisited if the engine is ever abandoned.
 What the editor's `CompositionEngine` does that the engine does not. The engine
 has the three layers; it does not have most of what the editor draws on them.
 
-| Feature                            | Engine | Notes                                                                                              |
-| ---------------------------------- | ------ | -------------------------------------------------------------------------------------------------- |
-| Screen video                       | yes    |                                                                                                    |
-| Webcam overlay                     | yes    | shape, corner radius, and aspect fit                                                               |
-| Cursor sprite                      | yes    | one global bitmap; see below                                                                       |
-| Brightness / contrast / saturation | yes    | one hardcoded pass                                                                                 |
-| Backgrounds                        | **no** | colour, pattern, image                                                                             |
-| Zoom regions                       | **no** | the animated zoom/pan timeline                                                                     |
-| Cuts / trim                        | **no** | no timeline model at all                                                                           |
-| Click effects                      | **no** | click animations and indicators                                                                    |
-| Cursor smear                       | **no** | stretch along the direction of travel; not the compositor's blur trail                             |
-| Per-region cursor overrides        | **no** | recso's track carries a `cursorDataUrl` _per event_; the engine has one bitmap for the whole track |
-| I-beam detection                   | **no** | the known-handle special case                                                                      |
-| Webcam borders and shadows         | **no** | shape and radius exist; borders and shadows do not                                                 |
-| Canvas padding / layout            | **no** | the video's placement within a larger canvas                                                       |
+| Feature                            | Engine | Notes                                                                  |
+| ---------------------------------- | ------ | ---------------------------------------------------------------------- |
+| Screen video                       | yes    |                                                                        |
+| Webcam overlay                     | yes    | shape, corner radius, and aspect fit                                   |
+| Cursor sprite                      | yes    | one global bitmap; see below                                           |
+| Brightness / contrast / saturation | yes    | one hardcoded pass                                                     |
+| Backgrounds                        | **no** | colour, pattern, image                                                 |
+| ~~Zoom regions~~                   | yes    | the animated zoom/pan timeline                                         |
+| ~~Cuts / trim~~                    | yes    | source↔composition mapping, and cut-aware audio                        |
+| ~~Per-event cursor bitmaps~~       | yes    | a deduped bitmap table; each sample indexes into it                    |
+| Click effects                      | **no** | click animations and indicators                                        |
+| Cursor smear                       | **no** | stretch along the direction of travel; not the compositor's blur trail |
+| Per-region cursor overrides        | **no** | swap the bitmap for a time span; plugs into the table that now exists  |
+| I-beam detection                   | **no** | the known-handle special case                                          |
+| Webcam borders and shadows         | **no** | shape and radius exist; borders and shadows do not                     |
+| Canvas padding / layout            | **no** | the video's placement within a larger canvas                           |
 
-The per-region cursor override is the structural one. The engine's cursor is a
-single `SpriteTexture` plus a track of positions; recso's model allows the
-bitmap to change per sample. Supporting that means an atlas or a small texture
-cache keyed by image, not just another field.
+The structural one here was per-event bitmaps, and it is done. The engine's
+cursor used to be a single `SpriteTexture` plus a track of positions, against a
+model where the bitmap changes per sample. It is now a table of bitmaps uploaded
+once, with an `image_id` on each sample indexing into it — deduped on the way
+in, so the cost tracks the number of distinct shapes rather than the number of
+samples.
+
+What is left in the cursor row is no longer structural. Region overrides,
+I-beam detection, click animations and the smear all reduce to choosing a
+different id, or a different rect, for a given sample.
 
 ---
 

@@ -154,12 +154,23 @@ export declare class VideoPlayer {
    */
   cursorSampleCount(): number
   /**
+   * How many pointer bitmaps `setCursorImages` left resident. Asynchronous
+   * like the sample count, and zero for a moment after the call.
+   */
+  cursorImageCount(): number
+  /**
    * Set the cursor bitmap.
    *
    * `pixels` is tightly packed RGBA8. The hotspot is where the pointer's tip
    * actually is within the image -- without it an arrow lands below and right
    * of the place that was clicked. Pass `None` to remove the cursor.
+   * The pointer bitmaps this recording used, indexed by `CursorPoint.imageId`.
+   *
+   * Replaces the whole table. Uploaded once, so a long recording costs the
+   * same as a short one: it is the number of distinct shapes that matters,
+   * not the number of samples.
    */
+  setCursorImages(images: Array<CursorBitmap>): void
   setCursorImage(image?: CursorBitmap | undefined | null): void
   /**
    * Set the recorded pointer path.
@@ -323,6 +334,16 @@ export interface CursorPoint {
   y: number
   /** Defaults to true. A hidden sample hides the cursor until the next one. */
   visible?: boolean
+  /**
+   * Which bitmap this sample wore, as an index into `setCursorImages`.
+   *
+   * An index rather than the image because a recording holds thousands of
+   * samples and a handful of shapes. Dedupe on the way in -- hash the pixels
+   * or the source data URL -- and send each distinct bitmap once.
+   *
+   * Omitted, or past the end of the table, draws the default pointer.
+   */
+  imageId?: number
 }
 
 /**
@@ -380,8 +401,13 @@ export interface ExportOptions {
    * values passed to `setWebcamLayout`.
    */
   webcam?: WebcamOverlay
-  /** The pointer bitmap, as passed to `setCursorImage`. */
+  /**
+   * The pointer bitmap, as passed to `setCursorImage`. Drawn for samples
+   * that do not name one of `cursorImages`.
+   */
   cursor?: CursorBitmap
+  /** The pointer bitmap table, as passed to `setCursorImages`. */
+  cursorImages?: Array<CursorBitmap>
   /** The recorded pointer path, as passed to `setCursorTrack`. */
   cursorTrack?: Array<CursorPoint>
   /**

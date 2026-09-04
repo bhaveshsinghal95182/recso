@@ -37,12 +37,12 @@ GPU engine (Rust/D3D11, in `velocity/src/engine/`). This document says
 
 ---
 
-> **Status.** Steps 1-4 of the order at the bottom are done, plus zoom, cuts and
-> audio-on-export: the canvas is no
-> longer tied to the source, backgrounds and the video's own rect/radius/border
-> exist, and grading is per-layer. The tables below are marked accordingly. What
-> is left is the timeline, per-event cursors and audio -- and the integration
-> itself, which is now the next thing rather than a thing waiting on the engine.
+> **Status.** Steps 1-4 of the order at the bottom are done, plus zoom, cuts,
+> audio-on-export and per-event cursor bitmaps: the canvas is no longer tied to
+> the source, backgrounds and the video's own rect/radius/border exist, grading
+> is per-layer, and the pointer can change shape as it moves. The tables below
+> are marked accordingly. What is left is the rest of the cursor work, audio in
+> playback, and the test suite before the cutover.
 
 ---
 
@@ -150,20 +150,20 @@ colour is the exception, because a clear is free.
 
 ### Cursor
 
-| Feature                                    | Compositor | Engine | Notes                                                                      |
-| ------------------------------------------ | ---------- | ------ | -------------------------------------------------------------------------- |
-| Position track                             | yes        | yes    | Both hold the last sample rather than interpolating.                       |
-| Hotspot                                    | yes        | yes    |                                                                            |
-| Size                                       | yes        | yes    | Compositor scales by source-to-canvas ratio too; engine takes pixels.      |
-| Opacity                                    | **no**     | yes    | Engine-only.                                                               |
-| Visibility flag                            | yes        | yes    |                                                                            |
-| Built-in glyphs (arrow, crosshair, I-beam) | yes        | **no** | Drawn as paths. The engine takes a bitmap, so these rasterise caller-side. |
-| Custom image                               | yes        | yes    |                                                                            |
-| **Per-event bitmap**                       | yes        | **no** | `cursorDataUrl` per sample vs one global sprite. Structural — see below.   |
-| Region overrides by time                   | yes        | **no** | `cursorRegionOverrides` swap the image for a span.                         |
-| I-beam detection by handle                 | yes        | **no** | `KNOWN_IBEAM_CURSOR_HANDLES` special case.                                 |
-| Click animations                           | yes        | **no** | Scale + duration on click events.                                          |
-| Cursor smear                               | partial    | **no** | Wanted: the pointer stretches along its motion. See below.                 |
+| Feature                                    | Compositor | Engine  | Notes                                                                      |
+| ------------------------------------------ | ---------- | ------- | -------------------------------------------------------------------------- |
+| Position track                             | yes        | yes     | Both hold the last sample rather than interpolating.                       |
+| Hotspot                                    | yes        | yes     |                                                                            |
+| Size                                       | yes        | yes     | Compositor scales by source-to-canvas ratio too; engine takes pixels.      |
+| Opacity                                    | **no**     | yes     | Engine-only.                                                               |
+| Visibility flag                            | yes        | yes     |                                                                            |
+| Built-in glyphs (arrow, crosshair, I-beam) | yes        | **no**  | Drawn as paths. The engine takes a bitmap, so these rasterise caller-side. |
+| Custom image                               | yes        | yes     |                                                                            |
+| **Per-event bitmap**                       | yes        | **yes** | A deduped bitmap table; each sample carries an index into it.              |
+| Region overrides by time                   | yes        | **no**  | `cursorRegionOverrides` swap the image for a span.                         |
+| I-beam detection by handle                 | yes        | **no**  | `KNOWN_IBEAM_CURSOR_HANDLES` special case.                                 |
+| Click animations                           | yes        | **no**  | Scale + duration on click events.                                          |
+| Cursor smear                               | partial    | **no**  | Wanted: the pointer stretches along its motion. See below.                 |
 
 ### Timeline
 
@@ -315,11 +315,29 @@ resolve against that rect, so the pointer follows the video when it is inset.
 Zoom still needs a transform on top of this, but it now has a coordinate system
 to be a transform _of_.
 
-**2. Per-event cursor bitmaps.** recso's track carries a `cursorDataUrl` _per
-sample_ — the pointer changes as it moves over a text field, a link, a resize
-handle. The engine has one `SpriteTexture` for the whole track. Supporting this
-means a texture cache keyed by image, or an atlas, not another field. Everything
-else in the cursor row is easy by comparison; this one is a data structure.
+**2. ~~Per-event cursor bitmaps.~~ Done.** recso's track carries a
+`cursorDataUrl` _per sample_ — the pointer changes as it moves over a text
+field, a link, a resize handle — against the engine's one `SpriteTexture` for
+the whole track. It was on this list because it was a data structure rather than
+a field.
+
+What it became: a bitmap table uploaded once, and an `image_id` on each sample
+indexing into it. The dedupe is the whole trick. A ten minute recording holds
+thousands of samples and perhaps a dozen distinct shapes, so keying the table on
+the image and sending each one once keeps what crosses the boundary proportional
+to the shapes rather than the samples — an image per event would have been
+megabytes of the same few kilobytes.
+
+One subtlety that is easy to get wrong: the pointer's rect is resolved at stage
+time, and its size and hotspot offset both come from the bitmap. So the slot has
+to remember _which_ bitmap it was measured against, not just where the rect was.
+Resolving the rect against one shape and drawing it with another puts the tip in
+the wrong place, and only on frames that get re-rendered — which is to say, only
+when you drag a slider.
+
+The remaining cursor work — region overrides, I-beam detection, click
+animations, the smear — all plugs into this table rather than needing its own
+mechanism.
 
 **3. No timeline model.** ~~Cuts, zoom regions~~ and layer ordering were all the
 same missing thing: the engine played one source linearly with no representation
@@ -386,7 +404,9 @@ Sequenced so each step is independently shippable and nothing is wasted.
    transform does to it, so no transform stack was needed. Cuts next (a
    source↔composition mapping the engine already almost has in its seek path),
    then layer ordering.
-7. **Per-event cursor bitmaps**, then the cursor effects that depend on them.
+7. ~~**Per-event cursor bitmaps**~~ **done.** The table exists and the preview
+   uses it. The cursor effects that depend on it — region overrides, I-beam
+   detection, click animations, the smear — are next.
 8. ~~**Audio**~~ **half done.** Export has sound: decode, mix, cut-aware
    placement and an AAC stream. Preview does not, and that is the half that
    forces the clock rework — audio has to become the master and `Clock` has to

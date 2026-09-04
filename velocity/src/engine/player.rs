@@ -23,14 +23,16 @@ use windows::core::Result;
 use windows::Win32::Graphics::Direct3D11::ID3D11RenderTargetView;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 
-use crate::engine::composite::{CursorSample, CursorTrack, SpriteTexture, WebcamLayout};
+use crate::engine::composite::{
+  CursorImages, CursorSample, CursorTrack, SpriteTexture, WebcamLayout,
+};
+use crate::engine::cuts::{Cut, CutTrack};
 use crate::engine::d3d::{gpu, SharedTexture, Sharing};
 use crate::engine::decode::Decoder;
 use crate::engine::render::{
   create_rtv, Background, BackgroundRequest, EffectParams, RenderChain, SourceCrop,
   VideoLayout as RenderVideoLayout,
 };
-use crate::engine::cuts::{Cut, CutTrack};
 use crate::engine::zoom::{ZoomRegion, ZoomTrack};
 
 /// How far ahead of the playhead we decode.
@@ -122,6 +124,7 @@ pub struct Shared {
   /// Pointer samples currently loaded, published once the decode thread has
   /// taken the track on.
   cursor_samples: AtomicU64,
+  cursor_images: AtomicU64,
   zoom_regions: AtomicU64,
   cut_count: AtomicU64,
   /// Present the next available frame regardless of the clock. Set after a
@@ -187,6 +190,20 @@ pub struct CursorImage {
   pub hotspot_y: f32,
 }
 
+impl CursorImage {
+  /// Upload to the GPU. Only valid on the decode thread, which owns the chain.
+  fn upload(&self) -> Option<SpriteTexture> {
+    SpriteTexture::new(
+      self.width,
+      self.height,
+      &self.pixels,
+      self.hotspot_x,
+      self.hotspot_y,
+    )
+    .ok()
+  }
+}
+
 enum Command {
   Seek(f64, SeekMode),
   SetEffects(EffectParams),
@@ -198,6 +215,7 @@ enum Command {
   SetSourceCrop(Option<SourceCrop>),
   SetWebcamLayout(WebcamLayout),
   SetCursorImage(Option<CursorImage>),
+  SetCursorImages(Vec<CursorImage>),
   SetCursorTrack(Vec<CursorSample>),
   SetCursorStyle(f32, f32),
   /// Read the composited frame currently on screen back to system memory.
@@ -320,6 +338,7 @@ impl Player {
       // will not appear.
       has_webcam: AtomicBool::new(webcam.is_some()),
       cursor_samples: AtomicU64::new(0),
+      cursor_images: AtomicU64::new(0),
       zoom_regions: AtomicU64::new(0),
       cut_count: AtomicU64::new(0),
       current: Mutex::new(None),
@@ -505,9 +524,24 @@ impl Player {
     self.shared.cursor_samples.load(Ordering::Acquire)
   }
 
+  /// How many pointer bitmaps are resident. Zero means every sample draws the
+  /// default, which is what a table that failed to upload also looks like.
+  pub fn cursor_image_count(&self) -> u64 {
+    self.shared.cursor_images.load(Ordering::Acquire)
+  }
+
   pub fn set_webcam_layout(&self, layout: WebcamLayout) {
     let _ = self.tx.send(Command::SetWebcamLayout(layout));
     self.shared.space.notify_all();
+  }
+
+  /// The per-sample bitmap table, indexed by `CursorPoint::image_id`.
+  ///
+  /// Replaces the table wholesale rather than appending: the set of shapes
+  /// belongs to a recording, and a caller switching recordings should not
+  /// inherit the last one's indices.
+  pub fn set_cursor_images(&self, images: Vec<CursorImage>) {
+    let _ = self.tx.send(Command::SetCursorImages(images));
   }
 
   pub fn set_cursor_image(&self, image: Option<CursorImage>) {
@@ -569,8 +603,8 @@ impl Player {
     // could never come due: the queue would sit at one entry forever and
     // playback would stall a frame short of the end. Once the decoder is
     // finished and the clock has reached its ceiling, drain whatever is left.
-    let draining = self.shared.eof.load(Ordering::Acquire)
-      && now >= self.shared.duration_ms - 0.001;
+    let draining =
+      self.shared.eof.load(Ordering::Acquire) && now >= self.shared.duration_ms - 0.001;
 
     let mut chosen: Option<QueuedFrame> = None;
     while let Some(&front) = queue.front() {
@@ -654,7 +688,12 @@ impl Drop for Player {
   }
 }
 
-fn make_frame(shared: &Shared, slot_index: usize, slot: &SharedTexture, pts_ms: f64) -> QueuedFrame {
+fn make_frame(
+  shared: &Shared,
+  slot_index: usize,
+  slot: &SharedTexture,
+  pts_ms: f64,
+) -> QueuedFrame {
   QueuedFrame {
     slot: slot_index,
     pts_ms,
@@ -778,6 +817,7 @@ fn decode_loop(
     let mut pending_seek: Option<(f64, SeekMode)> = None;
     let mut pending_webcam_layout: Option<WebcamLayout> = None;
     let mut pending_cursor_image: Option<Option<CursorImage>> = None;
+    let mut pending_cursor_images: Option<Vec<CursorImage>> = None;
     let mut pending_cursor_track: Option<Vec<CursorSample>> = None;
     let mut pending_cursor_style: Option<(f32, f32)> = None;
     let mut stopping = false;
@@ -797,6 +837,7 @@ fn decode_loop(
         Ok(Command::SetSourceCrop(crop)) => pending_crop = Some(crop),
         Ok(Command::SetWebcamLayout(layout)) => pending_webcam_layout = Some(layout),
         Ok(Command::SetCursorImage(image)) => pending_cursor_image = Some(image),
+        Ok(Command::SetCursorImages(images)) => pending_cursor_images = Some(images),
         Ok(Command::SetCursorTrack(samples)) => pending_cursor_track = Some(samples),
         Ok(Command::SetCursorStyle(size, opacity)) => pending_cursor_style = Some((size, opacity)),
         // Answered inline rather than coalesced: a snapshot is a question, and
@@ -873,7 +914,9 @@ fn decode_loop(
 
     if let Some(regions) = pending_zoom {
       let track = ZoomTrack::new(regions);
-      shared.zoom_regions.store(track.len() as u64, Ordering::Release);
+      shared
+        .zoom_regions
+        .store(track.len() as u64, Ordering::Release);
       chain.set_zoom_track(track);
       // `repaint_slots` re-stages every queued frame before re-rendering it,
       // which is exactly what a zoom change needs: the state is resolved per
@@ -901,17 +944,31 @@ fn decode_loop(
     }
 
     if let Some(image) = pending_cursor_image {
-      let sprite = image.and_then(|image| {
-        SpriteTexture::new(
-          image.width,
-          image.height,
-          &image.pixels,
-          image.hotspot_x,
-          image.hotspot_y,
-        )
-        .ok()
-      });
-      chain.set_cursor_image(sprite);
+      chain.set_cursor_image(image.and_then(|image| image.upload()));
+      needs_repaint = true;
+    }
+
+    if let Some(images) = pending_cursor_images {
+      // A bitmap that fails to upload still takes its slot, so the ids the
+      // caller sent keep pointing at the images they were meant to.
+      let uploaded = images
+        .iter()
+        .filter_map(CursorImage::upload)
+        .collect::<Vec<_>>();
+      if uploaded.len() == images.len() {
+        shared
+          .cursor_images
+          .store(uploaded.len() as u64, Ordering::Release);
+        chain.set_cursor_images(CursorImages::new(uploaded));
+      } else {
+        eprintln!(
+          "[engine] {} of {} cursor bitmaps failed to upload; using the default pointer",
+          images.len() - uploaded.len(),
+          images.len()
+        );
+        shared.cursor_images.store(0, Ordering::Release);
+        chain.set_cursor_images(CursorImages::default());
+      }
       needs_repaint = true;
     }
 
@@ -1044,7 +1101,12 @@ fn decode_loop(
     // the preview shows exactly what an export would write. The NV12 source
     // stays in the slot afterwards so the frame can be re-rendered.
     if chain
-      .process(slot_index, source, sample.subresource, &pool_rtvs[slot_index])
+      .process(
+        slot_index,
+        source,
+        sample.subresource,
+        &pool_rtvs[slot_index],
+      )
       .is_err()
     {
       shared.skipped_render_error.fetch_add(1, Ordering::Relaxed);
@@ -1166,7 +1228,11 @@ fn do_seek(
   let mut chosen: Option<(usize, f64)> = None;
 
   // Fast mode wants exactly one frame: whatever the keyframe seek landed on.
-  let budget = if mode == SeekMode::Fast { 1 } else { MAX_SEEK_DECODE };
+  let budget = if mode == SeekMode::Fast {
+    1
+  } else {
+    MAX_SEEK_DECODE
+  };
 
   for _ in 0..budget {
     let sample = match decoder.read_sample() {
@@ -1232,7 +1298,10 @@ fn do_seek(
     );
     chain.stage_timeline(slot_index, composition_ms);
 
-    if chain.render_slot(slot_index, &pool_rtvs[slot_index]).is_ok() {
+    if chain
+      .render_slot(slot_index, &pool_rtvs[slot_index])
+      .is_ok()
+    {
       // Anchor playback to where we actually landed, not where we aimed, so
       // the clock and the picture agree.
       shared.clock.lock().unwrap().jump_to(composition_ms);

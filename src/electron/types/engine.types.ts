@@ -131,8 +131,11 @@ export interface ExportOptions {
   webcamPath?: string;
   /** Where the camera goes -- the same value passed to `setWebcamLayout`. */
   webcam?: WebcamOverlay;
-  /** The pointer bitmap, as passed to `setCursorImage`. */
+  /** The pointer bitmap, as passed to `setCursorImage`. Drawn for samples
+   *  that do not name one of `cursorImages`. */
   cursor?: CursorBitmap;
+  /** The per-sample pointer bitmaps, as passed to `setCursorImages`. */
+  cursorImages?: CursorBitmap[];
   /** The recorded pointer path, as passed to `setCursorTrack`. */
   cursorTrack?: CursorPoint[];
   /** Cursor height in destination pixels. Defaults to 22, as the editor does. */
@@ -238,11 +241,15 @@ export interface VideoPlayerInstance {
   hasWebcam(): boolean;
 
   setCursorImage(image?: CursorBitmap | null): void;
+  /** The per-sample bitmap table. Replaces it wholesale. */
+  setCursorImages(images: CursorBitmap[]): void;
   setCursorTrack(samples: CursorPoint[]): void;
   /** Cursor height in destination pixels, and its opacity. Size 0 hides it. */
   setCursorStyle(size: number, opacity: number): void;
   /** Pointer samples the decode thread has loaded. Applied asynchronously. */
   cursorSampleCount(): number;
+  /** Pointer bitmaps resident. Applied asynchronously, like the sample count. */
+  cursorImageCount(): number;
 
   /**
    * The composited frame currently on screen, as BGRA bytes.
@@ -508,6 +515,12 @@ export interface CursorPoint {
   y: number;
   /** Defaults to true. A hidden sample hides the cursor until the next one. */
   visible?: boolean;
+  /**
+   * Which bitmap this sample wore, as an index into `setCursorImages`.
+   *
+   * Omitted, or past the end of the table, draws the default pointer.
+   */
+  imageId?: number;
 }
 
 /** What to open, when a recording is more than one file. */

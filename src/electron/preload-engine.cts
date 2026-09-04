@@ -298,10 +298,21 @@ export const engineBridge = {
         hotspotY?: number;
       } | null,
     ) => invoke('engine:player:cursor-image', image),
+    /** The per-sample bitmap table. `pixels` must be ArrayBuffers, as above. */
+    setCursorImages: (
+      images: {
+        width: number;
+        height: number;
+        pixels: ArrayBuffer;
+        hotspotX?: number;
+        hotspotY?: number;
+      }[],
+    ) => invoke('engine:player:cursor-images', images),
     setCursorTrack: (samples: unknown[]) => invoke('engine:player:cursor-track', samples),
     setCursorStyle: (size: number, opacity: number) =>
       invoke('engine:player:cursor-style', size, opacity),
     cursorSampleCount: () => invoke('engine:player:cursor-sample-count'),
+    cursorImageCount: () => invoke('engine:player:cursor-image-count'),
 
     /** The composited frame as raw BGRA. Stalls the GPU; for stills, not playback. */
     snapshot: () => invoke('engine:player:snapshot'),

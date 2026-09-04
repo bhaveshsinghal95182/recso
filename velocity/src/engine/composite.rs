@@ -546,17 +546,52 @@ impl SpriteTexture {
   }
 }
 
+/// The distinct pointer bitmaps a recording used, indexed by `CursorSample`.
+///
+/// Uploaded once when the table is set rather than per frame: the shapes are
+/// fixed for the whole edit, and there are few enough of them that keeping
+/// every one resident costs less than a megabyte.
+#[derive(Default)]
+pub struct CursorImages {
+  images: Vec<SpriteTexture>,
+}
+
+impl CursorImages {
+  pub fn new(images: Vec<SpriteTexture>) -> Self {
+    Self { images }
+  }
+
+  /// The bitmap for an id, or `None` if the id is past the end.
+  ///
+  /// Out of range is not an error worth failing an export over: a track that
+  /// references an image the caller did not send should draw the default
+  /// pointer, not stop the render.
+  pub fn get(&self, id: u32) -> Option<&SpriteTexture> {
+    self.images.get(id as usize)
+  }
+}
+
 /// One recorded cursor position.
 ///
 /// Positions are normalised 0..1 against the *source* video, so they survive
 /// the video being scaled into a different canvas. That is the same convention
 /// the editor's compositor uses.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct CursorSample {
   pub timestamp_ms: f64,
   pub x: f32,
   pub y: f32,
   pub visible: bool,
+  /// Which bitmap the pointer was wearing, as an index into `CursorImages`.
+  ///
+  /// An index rather than the pixels because a recording contains thousands of
+  /// samples and perhaps a dozen distinct shapes -- arrow, hand, I-beam, the
+  /// resize variants. Carrying the image per sample would send the same few
+  /// kilobytes across the boundary over and over.
+  ///
+  /// `None` falls back to the single default bitmap, which is what a caller
+  /// that never sets a table gets for every sample.
+  pub image_id: Option<u32>,
 }
 
 /// The recorded cursor path, searchable by playback position.
@@ -616,6 +651,7 @@ mod tests {
       x,
       y: 0.5,
       visible: true,
+      image_id: None,
     }
   }
 
@@ -814,6 +850,68 @@ mod tests {
   }
 
   #[test]
+  fn a_sample_carries_the_bitmap_it_was_wearing() {
+    // The point of the whole feature: the pointer's shape is a property of the
+    // moment, not of the recording.
+    let track = CursorTrack::new(vec![
+      CursorSample {
+        timestamp_ms: 0.0,
+        image_id: Some(3),
+        visible: true,
+        ..Default::default()
+      },
+      CursorSample {
+        timestamp_ms: 100.0,
+        image_id: Some(7),
+        visible: true,
+        ..Default::default()
+      },
+    ]);
+
+    assert_eq!(track.sample_at(50.0).unwrap().image_id, Some(3));
+    assert_eq!(track.sample_at(150.0).unwrap().image_id, Some(7));
+  }
+
+  #[test]
+  fn sorting_keeps_a_sample_with_its_own_bitmap() {
+    // Samples are sorted on the way in. A sort that moved timestamps without
+    // their ids would give every pointer the wrong shape, and only on tracks
+    // that arrived out of order -- which is the hard kind of bug to notice.
+    let track = CursorTrack::new(vec![
+      CursorSample {
+        timestamp_ms: 200.0,
+        image_id: Some(2),
+        visible: true,
+        ..Default::default()
+      },
+      CursorSample {
+        timestamp_ms: 0.0,
+        image_id: Some(1),
+        visible: true,
+        ..Default::default()
+      },
+    ]);
+
+    assert_eq!(track.sample_at(50.0).unwrap().image_id, Some(1));
+    assert_eq!(track.sample_at(250.0).unwrap().image_id, Some(2));
+  }
+
+  #[test]
+  fn a_sample_without_a_bitmap_asks_for_the_default() {
+    let track = CursorTrack::new(vec![sample(0.0, 0.5)]);
+    assert_eq!(track.sample_at(10.0).unwrap().image_id, None);
+  }
+
+  #[test]
+  fn an_empty_table_has_nothing_at_any_id() {
+    // The fallback path: no table set at all, which is what every caller from
+    // before per-sample bitmaps looks like.
+    let images = CursorImages::default();
+    assert!(images.get(0).is_none());
+    assert!(images.get(9).is_none());
+  }
+
+  #[test]
   fn a_hidden_sample_hides_the_cursor() {
     let track = CursorTrack::new(vec![
       sample(0.0, 0.0),
@@ -822,6 +920,7 @@ mod tests {
         x: 1.0,
         y: 1.0,
         visible: false,
+        image_id: None,
       },
     ]);
 

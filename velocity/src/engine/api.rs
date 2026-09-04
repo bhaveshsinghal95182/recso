@@ -230,10 +230,7 @@ impl VideoDecoder {
   /// Seek to a millisecond offset. Lands on the preceding keyframe.
   #[napi]
   pub fn seek(&mut self, ms: f64) -> Result<()> {
-    self
-      .inner
-      .seek((ms * 10_000.0) as i64)
-      .map_err(win_err)
+    self.inner.seek((ms * 10_000.0) as i64).map_err(win_err)
   }
 }
 
@@ -315,7 +312,10 @@ pub fn adapter_info() -> Result<Vec<String>> {
     "RECSO_ENGINE_GPU={}",
     std::env::var("RECSO_ENGINE_GPU").unwrap_or_else(|_| "auto (follows power policy)".into())
   ));
-  out.push(format!("active: {}", d3d::active_adapter().map_err(win_err)?));
+  out.push(format!(
+    "active: {}",
+    d3d::active_adapter().map_err(win_err)?
+  ));
   Ok(out)
 }
 
@@ -344,20 +344,12 @@ pub struct PatternEncoder {
 #[napi]
 impl PatternEncoder {
   #[napi(constructor)]
-  pub fn new(
-    path: String,
-    width: u32,
-    height: u32,
-    fps: u32,
-    bitrate: u32,
-  ) -> Result<Self> {
+  pub fn new(path: String, width: u32, height: u32, fps: u32, bitrate: u32) -> Result<Self> {
     use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_NV12;
 
     let gpu = d3d::gpu().map_err(win_err)?;
-    let inner =
-      encode::Encoder::create(&path, width, height, fps, 1, bitrate).map_err(win_err)?;
-    let source =
-      d3d::create_texture(gpu, width, height, DXGI_FORMAT_NV12).map_err(win_err)?;
+    let inner = encode::Encoder::create(&path, width, height, fps, 1, bitrate).map_err(win_err)?;
+    let source = d3d::create_texture(gpu, width, height, DXGI_FORMAT_NV12).map_err(win_err)?;
 
     Ok(Self {
       inner,
@@ -385,10 +377,7 @@ impl PatternEncoder {
         0,
       );
     }
-    self
-      .inner
-      .write_texture(&self.source, 0)
-      .map_err(win_err)?;
+    self.inner.write_texture(&self.source, 0).map_err(win_err)?;
 
     Ok(started.elapsed().as_secs_f64() * 1000.0)
   }
@@ -787,6 +776,14 @@ pub struct CursorPoint {
   pub y: f64,
   /// Defaults to true. A hidden sample hides the cursor until the next one.
   pub visible: Option<bool>,
+  /// Which bitmap this sample wore, as an index into `setCursorImages`.
+  ///
+  /// An index rather than the image because a recording holds thousands of
+  /// samples and a handful of shapes. Dedupe on the way in -- hash the pixels
+  /// or the source data URL -- and send each distinct bitmap once.
+  ///
+  /// Omitted, or past the end of the table, draws the default pointer.
+  pub image_id: Option<u32>,
 }
 
 impl From<CursorPoint> for CursorSample {
@@ -796,6 +793,7 @@ impl From<CursorPoint> for CursorSample {
       x: point.x as f32,
       y: point.y as f32,
       visible: point.visible.unwrap_or(true),
+      image_id: point.image_id,
     }
   }
 }
@@ -947,7 +945,7 @@ impl VideoPlayer {
     };
     let inner =
       player::Player::open_with_webcam(&sources.path, sources.webcam_path.as_deref(), canvas)
-      .map_err(win_err)?;
+        .map_err(win_err)?;
     Ok(Self { inner })
   }
 
@@ -1078,11 +1076,33 @@ impl VideoPlayer {
     self.inner.cursor_sample_count() as f64
   }
 
+  /// How many pointer bitmaps `setCursorImages` left resident. Asynchronous
+  /// like the sample count, and zero for a moment after the call.
+  #[napi]
+  pub fn cursor_image_count(&self) -> f64 {
+    self.inner.cursor_image_count() as f64
+  }
+
   /// Set the cursor bitmap.
   ///
   /// `pixels` is tightly packed RGBA8. The hotspot is where the pointer's tip
   /// actually is within the image -- without it an arrow lands below and right
   /// of the place that was clicked. Pass `None` to remove the cursor.
+  /// The pointer bitmaps this recording used, indexed by `CursorPoint.imageId`.
+  ///
+  /// Replaces the whole table. Uploaded once, so a long recording costs the
+  /// same as a short one: it is the number of distinct shapes that matters,
+  /// not the number of samples.
+  #[napi]
+  pub fn set_cursor_images(&self, images: Vec<CursorBitmap>) -> Result<()> {
+    let images = images
+      .into_iter()
+      .map(CursorBitmap::into_image)
+      .collect::<Result<Vec<_>>>()?;
+    self.inner.set_cursor_images(images);
+    Ok(())
+  }
+
   #[napi]
   pub fn set_cursor_image(&self, image: Option<CursorBitmap>) -> Result<()> {
     self
@@ -1271,8 +1291,11 @@ pub struct ExportOptions {
   /// Where the camera goes, in the screen recording's own pixels -- the same
   /// values passed to `setWebcamLayout`.
   pub webcam: Option<WebcamOverlay>,
-  /// The pointer bitmap, as passed to `setCursorImage`.
+  /// The pointer bitmap, as passed to `setCursorImage`. Drawn for samples
+  /// that do not name one of `cursorImages`.
   pub cursor: Option<CursorBitmap>,
+  /// The pointer bitmap table, as passed to `setCursorImages`.
+  pub cursor_images: Option<Vec<CursorBitmap>>,
   /// The recorded pointer path, as passed to `setCursorTrack`.
   pub cursor_track: Option<Vec<CursorPoint>>,
   /// The zoom/pan timeline. Omit it and the export is unzoomed, however the
@@ -1364,6 +1387,12 @@ impl VideoExporter {
     // front rather than discovering as a silent missing layer minutes into an
     // export.
     let cursor_image = options.cursor.map(CursorBitmap::into_image).transpose()?;
+    let cursor_images = options
+      .cursor_images
+      .unwrap_or_default()
+      .into_iter()
+      .map(CursorBitmap::into_image)
+      .collect::<Result<Vec<_>>>()?;
 
     Ok(Self {
       inner: exporter::Exporter::start(exporter::Options {
@@ -1391,6 +1420,7 @@ impl VideoExporter {
         webcam_path: options.webcam_path,
         webcam_layout: options.webcam.map(WebcamLayout::from),
         cursor_image,
+        cursor_images,
         cursor_track: options
           .cursor_track
           .unwrap_or_default()

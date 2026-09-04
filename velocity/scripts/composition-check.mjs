@@ -308,6 +308,93 @@ try {
   await sleep(400)
   check('size 0 hides the cursor', findMagenta(player.snapshotBgra()) === null)
 
+  // ---- per-sample bitmaps -------------------------------------------------
+  //
+  // A real pointer changes shape as it crosses the screen: arrow, then I-beam
+  // over text, then a hand over a link. The engine drew one bitmap for the
+  // whole track, so what is checked here is that a sample can name its own.
+  //
+  // Cyan for the second one, because like magenta nothing in a screen
+  // recording produces it -- finding either proves which bitmap was chosen,
+  // not merely that something was drawn.
+
+  console.log('\nper-sample cursor bitmaps')
+
+  /** Scan for a pixel matching `test`, which is handed (b, g, r). */
+  function findBgra(buf, test) {
+    if (!buf) return null
+    for (let row = 0; row < info.codedHeight; row += 4) {
+      for (let col = 0; col < info.codedWidth; col += 4) {
+        const i = row * stride * 4 + col * 4
+        if (test(buf[i], buf[i + 1], buf[i + 2])) {
+          return { x: col, y: row }
+        }
+      }
+    }
+    return null
+  }
+
+  const isMagenta = (b, g, r) => b > 200 && g < 60 && r > 200
+  const isCyan = (b, g, r) => b > 200 && g > 200 && r < 60
+
+  player.setCursorImages([
+    {
+      width: CURSOR_PX,
+      height: CURSOR_PX,
+      pixels: solidRgba(CURSOR_PX, CURSOR_PX, [255, 0, 255, 255]),
+      hotspotX: 0,
+      hotspotY: 0,
+    },
+    {
+      width: CURSOR_PX,
+      height: CURSOR_PX,
+      pixels: solidRgba(CURSOR_PX, CURSOR_PX, [0, 255, 255, 255]),
+      hotspotX: 0,
+      hotspotY: 0,
+    },
+  ])
+  player.setCursorStyle(CURSOR_PX, 1)
+  player.setCursorTrack([
+    { timestampMs: 0, x: 0.2, y: 0.2, imageId: 0 },
+    { timestampMs: duration * 0.5, x: 0.75, y: 0.75, imageId: 1 },
+  ])
+  await sleep(400)
+
+  check(
+    'the bitmap table loaded',
+    player.cursorImageCount() === 2,
+    `${player.cursorImageCount()} bitmaps`,
+  )
+
+  player.seek(10, true)
+  await waitFrame()
+  await sleep(300)
+  const firstShape = player.snapshotBgra()
+
+  check('the first sample draws its own bitmap', findBgra(firstShape, isMagenta) !== null)
+  check('and not the other one', findBgra(firstShape, isCyan) === null)
+
+  player.seek(duration * 0.75, true)
+  await waitFrame()
+  await sleep(300)
+  const secondShape = player.snapshotBgra()
+
+  check('the second sample draws a different bitmap', findBgra(secondShape, isCyan) !== null)
+  check('and the first is gone', findBgra(secondShape, isMagenta) === null)
+
+  // An id past the end of the table falls back to the default bitmap rather
+  // than hiding the pointer: a missing image should look wrong, not absent.
+  player.setCursorTrack([{ timestampMs: 0, x: 0.2, y: 0.2, imageId: 99 }])
+  await sleep(400)
+  player.seek(10, true)
+  await waitFrame()
+  await sleep(300)
+
+  check(
+    'an unknown bitmap id falls back to the default pointer',
+    findBgra(player.snapshotBgra(), isMagenta) !== null,
+  )
+
   player.close()
 
   // ---- canvas, background, video placement --------------------------------
