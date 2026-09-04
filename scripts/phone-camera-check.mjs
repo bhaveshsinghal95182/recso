@@ -77,21 +77,26 @@ try {
   console.log('\nthe capture plan');
   const plan = await load(path.join(build, 'services/recorder-capture-plan.js'));
 
+  check('native is the default', plan.shouldUseNativeSingularClock({}) === true);
   check(
-    'a phone turns the native path on by itself',
+    'a phone turns it on by itself',
     plan.shouldUseNativeSingularClock({ cameraSource: 'phone' }) === true,
   );
   check(
-    'a local camera leaves the default alone',
-    plan.shouldUseNativeSingularClock({ cameraSource: 'local' }) === false,
+    'an explicit legacy mode opts out',
+    plan.shouldUseNativeSingularClock({ nativeCaptureMode: 'legacy' }) === false,
   );
   check(
-    'and an explicit native mode still wins',
-    plan.shouldUseNativeSingularClock({ nativeCaptureMode: 'native-singular-clock' }) === true,
+    'and so does the environment escape hatch',
+    plan.shouldUseNativeSingularClock({ legacyForced: true }) === false,
   );
   check(
-    'as does the environment override',
-    plan.shouldUseNativeSingularClock({ nativeClockForced: true }) === true,
+    'but neither can strand a phone with no camera track',
+    plan.shouldUseNativeSingularClock({ cameraSource: 'phone', legacyForced: true }) === true &&
+      plan.shouldUseNativeSingularClock({
+        cameraSource: 'phone',
+        nativeCaptureMode: 'legacy',
+      }) === true,
   );
 
   check(

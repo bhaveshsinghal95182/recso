@@ -64,11 +64,16 @@ export function EnginePreview() {
   /**
    * Which compositor is driving the preview.
    *
-   * Off by default, and deliberately a toggle rather than a swap: the engine is
-   * not at parity yet, so the only honest way to use it is beside the thing it
-   * is replacing. `unsupportedFeatures` names what this project would lose.
+   * The engine now, by default. The `<video>` path asks Chromium to decode the
+   * whole recording in the renderer, which is where a long 4K take stops being
+   * viable -- the engine streams it through Media Foundation instead and never
+   * holds more than a few frames.
+   *
+   * The toggle stays, because the engine is not at parity: `unsupportedFeatures`
+   * names what a given project would lose, and being able to flip back and
+   * compare is how you tell an engine bug from an editing mistake.
    */
-  const [useGpuEngine, setUseGpuEngine] = useState(false);
+  const [preferGpuEngine, setPreferGpuEngine] = useState(true);
   const [isCropDialogOpen, setIsCropDialogOpen] = useState(false);
   const {
     canvasSize,
@@ -122,10 +127,18 @@ export function EnginePreview() {
 
   // The engine's playhead is in composition time, which is what the editor's
   // store holds while previewing an export and what the timeline shows.
-  const gpuSeekMs = useGpuEngine && !isPlaying ? currentTime : null;
+  // Against the preference rather than what is driving, because the value feeds
+  // the hook that produces the error the driving flag is derived from. Seeking a
+  // player that failed to open costs nothing.
+  const gpuSeekMs = preferGpuEngine && !isPlaying ? currentTime : null;
 
   const gpu = useGpuPreview({
-    enabled: useGpuEngine,
+    // Kept on the *preference*, not on what is currently driving. If the engine
+    // failed to open, disabling the hook would clear the error, which would
+    // re-enable it, which would fail again -- a loop with a flickering preview
+    // in the middle of it. It stays enabled and keeps its error, and a config
+    // change gets a genuine retry.
+    enabled: preferGpuEngine,
     canvasRef: gpuCanvasRef,
     canvasSelector: GPU_CANVAS_SELECTOR,
     project,
@@ -139,6 +152,16 @@ export function EnginePreview() {
     // engine preview silently opened with no camera at all.
     webcamPath: resolveProjectWebcamSourcePath(project),
   });
+
+  /**
+   * The engine drives the preview only if it actually opened.
+   *
+   * A recording it cannot decode, a machine with no bindings, a GPU that would
+   * not give up a device -- none of those should leave the editor with a blank
+   * canvas when there is a working compositor sitting right there. The banner
+   * says what happened.
+   */
+  const useGpuEngine = preferGpuEngine && !gpu.error;
 
   const gpuGaps = useMemo(
     () => (useGpuEngine ? unsupportedFeatures(compositionConfig) : []),
@@ -437,7 +460,7 @@ export function EnginePreview() {
 
       <div className="bottom-toolbar absolute bottom-6 right-6 flex items-center text-white bg-black/60 backdrop-blur overflow-hidden">
         <button
-          onClick={() => setUseGpuEngine((on) => !on)}
+          onClick={() => setPreferGpuEngine((on) => !on)}
           className={`px-3 py-3 border-0 cursor-pointer transition-colors flex items-center justify-center ${
             useGpuEngine ? 'bg-emerald-500/80 hover:bg-emerald-500' : 'hover:bg-black/70'
           }`}
@@ -483,12 +506,15 @@ export function EnginePreview() {
         </button>
       </div>
 
-      {useGpuEngine && (gpu.error || gpuGaps.length > 0) && (
+      {preferGpuEngine && (gpu.error || gpuGaps.length > 0) && (
         <div className="absolute top-6 left-6 max-w-sm rounded-lg bg-black/70 backdrop-blur px-4 py-3 text-white text-xs leading-relaxed">
           {gpu.error ? (
             <>
               <p className="font-semibold text-red-300">The GPU engine could not start</p>
               <p className="mt-1 opacity-80">{gpu.error}</p>
+              <p className="mt-1 opacity-60">
+                Showing the canvas compositor instead. Large recordings may be slow through it.
+              </p>
             </>
           ) : (
             <>

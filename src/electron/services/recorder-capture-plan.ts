@@ -12,28 +12,36 @@
 export interface CaptureModeInput {
   nativeCaptureMode?: 'legacy' | 'native-singular-clock';
   cameraSource?: 'local' | 'phone';
-  /** `RECSO_NATIVE_SINGULAR_CLOCK=1` in the environment. */
-  nativeClockForced?: boolean;
+  /** `RECSO_LEGACY_CAPTURE=1` in the environment: the escape hatch. */
+  legacyForced?: boolean;
 }
 
 /**
  * Whether to record through the native singular-clock path.
  *
- * A phone forces it on. That is not a preference -- a phone's frames only ever
- * reach a recording through the native webcam sidecar, so without this the whole
- * native block is skipped, no camera track is written, and (because the renderer
- * sidecar cannot open a phone either) nothing is recorded at all. Silently.
+ * Native is the default now. The legacy path drives the screen capture from the
+ * renderer and records the camera with a `MediaRecorder` sidecar, which means
+ * two independent clocks that have to be reconciled afterwards; the native path
+ * writes both tracks from one, which is the whole reason it exists.
+ *
+ * Two ways back to legacy, in order: an explicit `nativeCaptureMode: 'legacy'`
+ * on the recording, or `RECSO_LEGACY_CAPTURE=1` for when something is wrong and
+ * the question is whether the native path caused it.
+ *
+ * A phone overrides even those. Its frames only ever reach a recording through
+ * the native webcam sidecar, so falling back would not produce a worse camera
+ * track -- it would produce none, silently.
  */
 export function shouldUseNativeSingularClock(config: CaptureModeInput): boolean {
-  if (config.nativeCaptureMode === 'native-singular-clock') {
-    return true;
-  }
-
   if (config.cameraSource === 'phone') {
     return true;
   }
 
-  return Boolean(config.nativeClockForced);
+  if (config.nativeCaptureMode === 'legacy') {
+    return false;
+  }
+
+  return !config.legacyForced;
 }
 
 export interface PhoneReadiness {

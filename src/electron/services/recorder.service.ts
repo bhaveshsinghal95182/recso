@@ -942,12 +942,12 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
       return { success: false, error: phoneProblem };
     }
 
-    // A phone forces the native path on: its frames only reach a recording
-    // through the native webcam sidecar.
+    // Native unless something asks otherwise. A phone forces it regardless:
+    // its frames only reach a recording through the native webcam sidecar.
     const useNativeSingularClock = planNativeSingularClock({
       nativeCaptureMode: config.nativeCaptureMode,
       cameraSource: config.cameraSource,
-      nativeClockForced: process.env.RECSO_NATIVE_SINGULAR_CLOCK === '1',
+      legacyForced: process.env.RECSO_LEGACY_CAPTURE === '1',
     });
     const nativeClockOptions: NativeClockOptions = {
       useSingularClock: useNativeSingularClock,
