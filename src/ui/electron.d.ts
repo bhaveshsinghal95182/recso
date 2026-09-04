@@ -525,6 +525,8 @@ interface ElectronAPI {
     stop: () => Promise<void>;
     /** Null when nothing is paired. Poll it while the pairing panel is open. */
     state: () => Promise<PhoneCameraState | null>;
+    /** The newest JPEG from the phone, for showing its picture on the desktop. */
+    frame: () => Promise<ArrayBuffer | null>;
   };
 
   recorder: {

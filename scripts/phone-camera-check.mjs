@@ -149,15 +149,52 @@ try {
   check('a short token does not crash the compare', wrongLength.status === 404);
 
   console.log('\nthe page');
-  const page = await get(at('/'));
-  const html = await page.text();
-  check('the page is served', page.status === 200);
+  const page = await load(path.join(build, 'services/phone-camera.page.js'));
+  const served = await get(at('/'));
+  const html = await served.text();
+  check('the page is served', served.status === 200);
   check('it carries the session token', html.includes(token));
-  check('it is not cached', page.headers.get('cache-control') === 'no-store');
+  check('it is not cached', served.headers.get('cache-control') === 'no-store');
   check('it asks for the camera', html.includes('getUserMedia'));
   check(
-    'it draws into a fixed canvas, so rotating the phone cannot resize the track',
-    html.includes('canvas id="scratch" width="1280" height="720"'),
+    'it locks the capture size once, so rotating the phone cannot resize the track',
+    html.includes('captureSizeFor') && html.includes('if (captureWidth) return'),
+  );
+
+  // ---- the capture size ----------------------------------------------------
+  //
+  // The rule that decides whether the recording looks like what the phone is
+  // pointing at. Getting it wrong does not fail, it silently crops -- a
+  // hardcoded 16:9 canvas kept about a third of a portrait stream and looked
+  // like someone had zoomed in.
+
+  const size = (w, h) => page.captureSizeFor(w, h, 1280);
+
+  check(
+    'a portrait stream stays portrait',
+    size(1080, 1920).width === 720 && size(1080, 1920).height === 1280,
+    JSON.stringify(size(1080, 1920)),
+  );
+  check(
+    'a landscape stream is capped, not reshaped',
+    size(1920, 1080).width === 1280 && size(1920, 1080).height === 720,
+    JSON.stringify(size(1920, 1080)),
+  );
+  check(
+    'a 4:3 camera keeps its shape',
+    size(640, 480).width === 640 && size(640, 480).height === 480,
+    JSON.stringify(size(640, 480)),
+  );
+  check(
+    'nothing is scaled up past what the camera gave',
+    size(320, 240).width === 320 && size(320, 240).height === 240,
+    JSON.stringify(size(320, 240)),
+  );
+  check(
+    'dimensions come out even, because H.264 subsamples chroma 2x2',
+    [size(1281, 721), size(641, 481), size(999, 333)].every(
+      (dimensions) => dimensions.width % 2 === 0 && dimensions.height % 2 === 0,
+    ),
   );
 
   console.log('\nframes');
@@ -175,6 +212,16 @@ try {
 
   const posted = await get(at('/frame'), { method: 'POST', body: jpeg });
   check('a frame is accepted', posted.status === 204, `${posted.status}`);
+
+  // The desktop preview reads this, not the recorder's slot: the recorder
+  // empties its slot as soon as it writes a frame, so by the time a preview
+  // asked there would be nothing to show.
+  const held = service.latestPhoneFrame();
+  check(
+    'the newest frame is held for the desktop preview',
+    Boolean(held) && held.length === jpeg.length,
+    `${held ? held.length : 0} bytes`,
+  );
 
   const status = velocity.phoneCameraStatus();
   check('and reaches the recorder', status.live === true);

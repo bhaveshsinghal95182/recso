@@ -83,12 +83,31 @@ the recorder reads it, so "is there an unread frame" is a different question fro
 the time. Confusing the two would make the panel claim the phone had stopped
 while it was streaming perfectly well.
 
-**Fixed capture size.** The page draws into a fixed 1280×720 canvas rather than
-sending whatever the camera produces. The encoder locks its dimensions on the
-first frame and an MP4 track cannot change size partway through, so without this,
-rotating the phone mid-take would make the recorder reject every frame after
-that and the recording would freeze on the last upright picture. Rotation now
-changes the framing instead.
+**The capture size is locked to the camera, once.** The encoder fixes its
+dimensions on the first frame and an MP4 track cannot change size partway
+through, so the page must never change what it sends mid-session — rotating the
+phone would otherwise make the recorder reject every frame after the turn and
+freeze the take on the last upright picture.
+
+But the size has to come _from_ the camera rather than be assumed. A hardcoded
+16:9 canvas with a cover fit throws away most of a portrait stream: 1080×1920
+covered into 1280×720 keeps about a third of the height and looks like someone
+zoomed in without saying so. The first frame's real dimensions decide the canvas,
+capped to 1280 on the long side and rounded to even numbers because H.264
+subsamples chroma 2×2. A flip to a differently-shaped camera keeps the locked
+size and covers into it, which crops — the right trade against resizing a track
+mid-recording.
+
+`captureSizeFor` is defined once and stringified into the page, so the rule the
+phone runs is the rule `pnpm check:phone-camera` tests.
+
+**The desktop preview reads frames from the pairing server, not `getUserMedia`.**
+That API can only reach cameras attached to this machine, so a paired phone would
+otherwise show the laptop's own webcam in the recorder preview — the wrong face,
+with nothing on screen suggesting anything was wrong. The frames are already
+passing through the main process on their way to the recorder, so the newest one
+is held for the preview to draw. It is not mirrored: the phone is pointing at the
+room, not back at you.
 
 **One frame in flight.** The page waits for each POST to come back before
 capturing the next. That is the whole of the flow control: a good link runs at

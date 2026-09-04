@@ -165,6 +165,8 @@ electron.contextBridge.exposeInMainWorld('electron', {
       height: number;
       lastError?: string;
     } | null> => electron.ipcRenderer.invoke('phone-camera:state'),
+    /** The newest JPEG from the phone, for showing its picture on the desktop. */
+    frame: (): Promise<ArrayBuffer | null> => electron.ipcRenderer.invoke('phone-camera:frame'),
   },
 
   // Recording

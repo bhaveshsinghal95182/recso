@@ -142,6 +142,7 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
         isStopping={isStopping}
         recordCamera={recordCamera}
         cameraDeviceId={cameraDeviceId}
+        cameraSource={cameraSource}
         onRefresh={handleRefreshSources}
       />
 

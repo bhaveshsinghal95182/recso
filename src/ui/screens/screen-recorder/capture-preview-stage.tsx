@@ -14,6 +14,8 @@ interface CapturePreviewStageProps {
   isStopping: boolean;
   recordCamera: boolean;
   cameraDeviceId: string | null;
+  /** Where the camera picture comes from: this machine, or a paired phone. */
+  cameraSource?: 'local' | 'phone';
   onRefresh: () => void;
 }
 
@@ -25,6 +27,7 @@ export function CapturePreviewStage({
   isStopping,
   recordCamera,
   cameraDeviceId,
+  cameraSource = 'local',
   onRefresh,
 }: CapturePreviewStageProps) {
   const isActive = isRecording || isPaused || isStopping;
@@ -110,6 +113,7 @@ export function CapturePreviewStage({
               <CameraPreview
                 deviceId={cameraDeviceId}
                 isActive={recordCamera}
+                source={cameraSource}
                 className="absolute bottom-[clamp(14px,2.2vw,28px)] right-[clamp(14px,2.2vw,28px)] z-[3] w-[clamp(92px,12vw,156px)] border-white/35"
               />
             </div>

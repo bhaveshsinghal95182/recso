@@ -4,6 +4,7 @@ import { app, ipcMain } from 'electron';
 
 import {
   configurePhoneCamera,
+  latestPhoneFrame,
   phoneCameraState,
   startPhoneCamera,
   stopPhoneCamera,
@@ -36,6 +37,17 @@ export function registerPhoneCameraHandlers() {
   ipcMain.handle('phone-camera:start', () => startPhoneCamera());
   ipcMain.handle('phone-camera:stop', () => stopPhoneCamera());
   ipcMain.handle('phone-camera:state', () => phoneCameraState());
+
+  // Returned as a plain ArrayBuffer so it crosses without being turned into a
+  // tagged Buffer object on the far side, which structured clone would do to
+  // every frame.
+  ipcMain.handle('phone-camera:frame', () => {
+    const frame = latestPhoneFrame();
+    if (!frame) {
+      return null;
+    }
+    return frame.buffer.slice(frame.byteOffset, frame.byteOffset + frame.byteLength);
+  });
 
   // A pairing server outliving the window it was opened from would keep a port
   // open with nothing watching it.

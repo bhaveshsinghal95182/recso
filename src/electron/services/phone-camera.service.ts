@@ -128,6 +128,16 @@ interface RunningSession extends PhoneCameraSession {
   /** Open SSE responses, one per connected phone. */
   listeners: Set<ServerResponse>;
   lastError?: string;
+  /**
+   * The newest frame, kept so the desktop can show what the phone is pointing
+   * at before anyone presses record.
+   *
+   * It has to be kept here rather than read back out of the recorder: the
+   * native side hands its frame to the encoder and empties the slot, so by the
+   * time a preview asked, there would be nothing to show. This is the same
+   * buffer on its way past, held for one extra moment.
+   */
+  lastFrame?: Buffer;
 }
 
 let session: RunningSession | null = null;
@@ -428,6 +438,9 @@ async function handle(
 
     if (request.method === 'POST' && pathname === '/frame') {
       const jpeg = await readBody(request);
+      if (session) {
+        session.lastFrame = jpeg;
+      }
       await bindings().pushPhoneFrame(jpeg);
       send(response, 204, '');
       return;
@@ -478,6 +491,16 @@ export function notifyPhone(event: string, data: Record<string, unknown> = {}): 
       // A phone that walked out of range. The close handler will clean it up.
     }
   }
+}
+
+/**
+ * The newest frame from the phone, as JPEG bytes, or null.
+ *
+ * For showing the phone's picture on the desktop -- the recorder's camera
+ * preview opens a local device with `getUserMedia`, which a phone is not.
+ */
+export function latestPhoneFrame(): Buffer | null {
+  return session?.lastFrame ?? null;
 }
 
 /** What the pairing panel needs to render. */

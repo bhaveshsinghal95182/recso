@@ -8,14 +8,18 @@
  *
  * Two decisions here matter more than the rest:
  *
- * **The canvas is a fixed size.** The sidecar encoder locks its dimensions on
- * the first frame it is given, and an MP4 track cannot change size partway
- * through. If the page sent whatever the camera happened to produce, rotating
- * the phone mid-recording would flip the dimensions, the recorder would reject
- * every frame after that, and the take would freeze on the last upright picture
- * with nothing on screen saying why. So the page always draws into the same
- * canvas and covers it, and rotation changes the framing rather than breaking
- * the recording.
+ * **The canvas size is locked to the camera, once.** The sidecar encoder fixes
+ * its dimensions on the first frame and an MP4 track cannot change size partway
+ * through, so the page must never change what it sends mid-session -- rotating
+ * the phone would otherwise make the recorder reject every frame after the turn
+ * and freeze the take on the last upright picture.
+ *
+ * But the size has to come from the camera rather than be assumed. A hardcoded
+ * 16:9 canvas with a cover fit throws away most of a portrait stream: a
+ * 1080x1920 phone covered into 1280x720 keeps about a third of its height and
+ * looks like someone zoomed in and never said so. So the first frame's real
+ * dimensions decide the canvas, scaled down to a sensible long side, and every
+ * frame after that goes into the same one.
  *
  * **One frame in flight at a time.** The next frame is only captured once the
  * previous POST has come back. That is the whole of the flow control: on a good
@@ -25,10 +29,41 @@
  * does not get its own moment in the timeline, it gets somebody else's.
  */
 
-const CAPTURE_WIDTH = 1280;
-const CAPTURE_HEIGHT = 720;
+/**
+ * Longest side of a captured frame.
+ *
+ * A cap rather than a size, so the aspect ratio is the camera's. 1280 is about
+ * 2-3 MB/s as JPEG at 30fps, which a home network carries; the phone's sensor
+ * can do far more and the link cannot.
+ */
+const MAX_LONG_SIDE = 1280;
+
+/** Until the camera opens and says what it actually produces. */
+const FALLBACK_WIDTH = 1280;
+const FALLBACK_HEIGHT = 720;
 const TARGET_FPS = 30;
 const JPEG_QUALITY = 0.72;
+
+/**
+ * The capture size for a camera of this shape.
+ *
+ * Exported, and stringified into the page below rather than written out twice,
+ * because this is the rule that decides whether the recording looks like what
+ * the phone is pointing at. Getting it wrong does not fail -- it silently crops,
+ * which is how a portrait stream ended up looking zoomed in.
+ *
+ * Even numbers because H.264 subsamples chroma 2x2 and an odd dimension is
+ * either rejected or quietly rounded by the encoder.
+ */
+export function captureSizeFor(
+  sourceWidth: number,
+  sourceHeight: number,
+  maxLongSide: number,
+): { width: number; height: number } {
+  const scale = Math.min(1, maxLongSide / Math.max(sourceWidth, sourceHeight));
+  const even = (value: number) => Math.max(2, Math.round((value * scale) / 2) * 2);
+  return { width: even(sourceWidth), height: even(sourceHeight) };
+}
 
 export function capturePageHtml(token: string): string {
   // The token is hex from `randomBytes`, so there is nothing in it that needs
@@ -100,13 +135,14 @@ export function capturePageHtml(token: string): string {
   </div>
 </footer>
 
-<canvas id="scratch" width="${CAPTURE_WIDTH}" height="${CAPTURE_HEIGHT}"></canvas>
+<canvas id="scratch" width="${FALLBACK_WIDTH}" height="${FALLBACK_HEIGHT}"></canvas>
 
 <script>
 (() => {
   const TOKEN = ${JSON.stringify(token)};
-  const WIDTH = ${CAPTURE_WIDTH};
-  const HEIGHT = ${CAPTURE_HEIGHT};
+  const MAX_LONG_SIDE = ${MAX_LONG_SIDE};
+  // One definition, shared with the desktop so the rule can actually be tested.
+  const captureSizeFor = ${captureSizeFor.toString()};
   const FRAME_MS = ${Math.round(1000 / TARGET_FPS)};
   const QUALITY = ${JPEG_QUALITY};
 
@@ -125,6 +161,9 @@ export function capturePageHtml(token: string): string {
   let sending = false;
   let sent = 0;
   let failures = 0;
+  // Fixed for the whole session once the camera has said what it produces.
+  let captureWidth = 0;
+  let captureHeight = 0;
 
   const url = (route) => route + '?t=' + encodeURIComponent(TOKEN);
 
@@ -145,10 +184,12 @@ export function capturePageHtml(token: string): string {
       stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: facing,
-          // A hint, not a guarantee. Whatever we get is drawn into the fixed
-          // canvas below, so an unexpected size costs framing, not the take.
-          width: { ideal: WIDTH },
-          height: { ideal: HEIGHT },
+          // Hints only. What actually arrives decides the canvas, because a
+          // phone answers these in whatever orientation it feels like and
+          // assuming otherwise is what crops a portrait stream to a third of
+          // itself.
+          width: { ideal: MAX_LONG_SIDE },
+          height: { ideal: Math.round(MAX_LONG_SIDE * 9 / 16) },
           frameRate: { ideal: 30 },
         },
         audio: false,
@@ -172,8 +213,41 @@ export function capturePageHtml(token: string): string {
     // flipped, because the recording should match the room, not the mirror.
     preview.style.setProperty('--mirror', facing === 'user' ? '-1' : '1');
     await preview.play().catch(() => {});
+    await lockCaptureSize();
     flipButton.disabled = false;
     return true;
+  }
+
+  /**
+   * Fix the capture size to this camera's shape, the first time only.
+   *
+   * Once, because the recorder's encoder fixes its dimensions on the first
+   * frame and an MP4 track cannot change size partway through -- so a flip to a
+   * camera with a different aspect keeps the locked size and is covered into
+   * it, which crops, rather than resizing and breaking the take.
+   */
+  async function lockCaptureSize() {
+    if (captureWidth) return;
+
+    // videoWidth is 0 until metadata lands, which is usually but not always
+    // before play() resolves.
+    if (!preview.videoWidth) {
+      await new Promise((resolve) => {
+        const done = () => resolve();
+        preview.addEventListener('loadedmetadata', done, { once: true });
+        setTimeout(done, 2000);
+      });
+    }
+
+    const size = captureSizeFor(
+      preview.videoWidth || ${FALLBACK_WIDTH},
+      preview.videoHeight || ${FALLBACK_HEIGHT},
+      MAX_LONG_SIDE,
+    );
+    captureWidth = size.width;
+    captureHeight = size.height;
+    canvas.width = captureWidth;
+    canvas.height = captureHeight;
   }
 
   function stop() {
@@ -183,20 +257,27 @@ export function capturePageHtml(token: string): string {
     }
   }
 
-  /** Draw the camera into the fixed canvas, covering it. */
+  /**
+   * Draw the camera into the locked canvas, covering it.
+   *
+   * Normally a no-op scale: the canvas was sized from this camera, so the
+   * aspect ratios match and nothing is cropped. It only crops after a flip to a
+   * camera shaped differently from the one the session started with, which is
+   * the right trade against resizing a track mid-recording.
+   */
   function drawCovered() {
     const sourceWidth = preview.videoWidth;
     const sourceHeight = preview.videoHeight;
-    if (!sourceWidth || !sourceHeight) return false;
+    if (!sourceWidth || !sourceHeight || !captureWidth) return false;
 
-    const scale = Math.max(WIDTH / sourceWidth, HEIGHT / sourceHeight);
+    const scale = Math.max(captureWidth / sourceWidth, captureHeight / sourceHeight);
     const drawWidth = sourceWidth * scale;
     const drawHeight = sourceHeight * scale;
 
     context.drawImage(
       preview,
-      (WIDTH - drawWidth) / 2,
-      (HEIGHT - drawHeight) / 2,
+      (captureWidth - drawWidth) / 2,
+      (captureHeight - drawHeight) / 2,
       drawWidth,
       drawHeight,
     );
