@@ -42,7 +42,11 @@ function mapSourceAudioTimestampToComposition(
   return mapSourceTimeToCompositionTimeMs(sourceTimeMs, cuts) / 1000;
 }
 
-function resolveStartDelayCompensationSeconds(
+/**
+ * Exported so the native exporter applies the identical rule. Two ways of
+ * deciding how far to shift a sidecar would be two different sync bugs.
+ */
+export function resolveStartDelayCompensationSeconds(
   sourceDurationSeconds: number,
   sidecarDurationSeconds: number,
 ): number {

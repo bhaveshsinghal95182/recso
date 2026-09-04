@@ -8,6 +8,8 @@
  * - Exports folder management
  */
 
+import fs from 'node:fs';
+
 import { ipcMain, shell } from 'electron';
 
 import * as exporterService from '../services/exporter/exporter.service.js';
@@ -56,4 +58,20 @@ export function registerExporterHandlers(): void {
       return exporterService.writeOutputFile(outputPath, data);
     },
   );
+
+  /**
+   * How big a finished export is.
+   *
+   * The engine writes its output itself, so unlike the canvas path there is no
+   * buffer in the renderer to measure. 0 for a file that is not there, because
+   * a missing size is a cosmetic problem and should not fail an export that
+   * otherwise succeeded.
+   */
+  ipcMain.handle('exporter:file-size', async (_event, filePath: string) => {
+    try {
+      return (await fs.promises.stat(filePath)).size;
+    } catch {
+      return 0;
+    }
+  });
 }

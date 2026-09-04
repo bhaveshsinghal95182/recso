@@ -156,76 +156,99 @@ function toEngineCuts(cuts: CompositionCutRegion[] | undefined): EngineCutRegion
 }
 
 /**
- * Push a whole composition into the engine.
+ * A composition in the engine's vocabulary, with no engine attached to it yet.
  *
- * Everything here re-renders the frames already queued rather than going back
- * to the decoder, so this is cheap enough to call from a slider drag.
+ * Resolving and applying are split because there are two consumers now: the
+ * player, which takes setters, and the exporter, which takes one options object
+ * on its own thread. They must not each do their own translation -- an export
+ * that lays the webcam out differently from the preview it was approved in is
+ * the exact failure this file exists to prevent.
+ *
+ * Every field is the setter's own parameter type rather than a shape written
+ * out again here. Re-declaring them would be one more pair of things that have
+ * to agree, and the whole point of this file is to have exactly one.
  */
-export async function applyComposition(
-  player: EnginePlayer,
+export interface ResolvedComposition {
+  layout: Parameters<EnginePlayer['setLayout']>[0];
+  background: Parameters<EnginePlayer['setBackground']>[0];
+  crop: Parameters<EnginePlayer['setSourceCrop']>[0];
+  /** A zero-size box is the off switch, and costs nothing to render. */
+  webcam: Parameters<EnginePlayer['setWebcamLayout']>[0];
+  /** Null when the recording has no pointer, or it is switched off. */
+  cursor: {
+    image: Parameters<EnginePlayer['setCursorImage']>[0];
+    images: Parameters<EnginePlayer['setCursorImages']>[0];
+    track: Parameters<EnginePlayer['setCursorTrack']>[0];
+    sizePx: number;
+    effects: Parameters<EnginePlayer['setCursorEffects']>[0];
+  } | null;
+  zoomRegions: EngineZoomRegion[];
+  cuts: EngineCutRegion[];
+}
+
+/**
+ * Resolve a composition into engine terms. No IPC, no engine.
+ */
+export async function resolveComposition(
   config: CompositionConfig,
   canvas: CanvasSize,
   project: Project | null,
-): Promise<void> {
+): Promise<ResolvedComposition> {
   const cuts = config.cuts ?? [];
 
   // ---- the recording's place on the canvas ---------------------------------
 
-  const layout = computeVideoLayout(canvas.width, canvas.height, config);
-  const borderColour = parseCssColour(config.video.border.color) ?? undefined;
-
-  await player.setLayout({
-    x: layout.x,
-    y: layout.y,
-    width: layout.width,
-    height: layout.height,
+  const box = computeVideoLayout(canvas.width, canvas.height, config);
+  const layout = {
+    x: box.x,
+    y: box.y,
+    width: box.width,
+    height: box.height,
     cornerRadius: config.video.borderRadius,
     borderWidth: config.video.border.width,
-    borderColour,
-  });
+    borderColour: parseCssColour(config.video.border.color) ?? undefined,
+  };
 
   // ---- background ----------------------------------------------------------
 
   const image = rasteriseBackground(config.background, canvas.width, canvas.height);
-  await player.setBackground({
+  const background = {
     colour: backgroundColour(config.background),
     image: image ?? undefined,
-  });
+  };
 
   // ---- crop ----------------------------------------------------------------
 
   const crop = resolveSourceCrop(project?.cropConfig);
-  await player.setSourceCrop(crop);
 
   // ---- webcam --------------------------------------------------------------
 
-  if (config.webcam?.enabled) {
-    const box = computeWebcamLayout(canvas.width, canvas.height, config.webcam);
-    await player.setWebcamLayout({
-      x: box.x,
-      y: box.y,
-      width: box.width,
-      height: box.height,
-      shape: engineShape(config.webcam.shape),
-      cornerRadius: config.webcam.borderRadius,
-      opacity: config.webcam.opacity,
-      borderWidth: config.webcam.border.width,
-      borderColour: parseCssColour(config.webcam.border.color) ?? undefined,
-    });
-  } else {
-    // A zero-size box is the off switch, and costs nothing to render.
-    await player.setWebcamLayout({ x: 0, y: 0, width: 0, height: 0 });
-  }
+  const webcam = config.webcam?.enabled
+    ? (() => {
+        const camera = computeWebcamLayout(canvas.width, canvas.height, config.webcam!);
+        return {
+          x: camera.x,
+          y: camera.y,
+          width: camera.width,
+          height: camera.height,
+          shape: engineShape(config.webcam!.shape),
+          cornerRadius: config.webcam!.borderRadius,
+          opacity: config.webcam!.opacity,
+          borderWidth: config.webcam!.border.width,
+          borderColour: parseCssColour(config.webcam!.border.color) ?? undefined,
+        };
+      })()
+    : { x: 0, y: 0, width: 0, height: 0 };
 
   // ---- cursor --------------------------------------------------------------
 
+  let resolvedCursor: ResolvedComposition['cursor'] = null;
   const cursor = config.cursor;
   if (cursor?.enabled && cursor.events.length > 0) {
     // The default pointer, drawn for any sample the recorder captured no
     // bitmap for -- and for every sample at all, on a recording from before
     // the recorder captured them.
     const bitmap = await rasteriseCursor(cursor);
-    await player.setCursorImage(bitmap);
 
     // Overrides resolve against composition time, the same clock the track is
     // built on and the same one the engine looks samples up at.
@@ -233,7 +256,6 @@ export async function applyComposition(
       mapSourceTimeToCompositionTimeMs(event.timestampMs, cuts);
 
     const table = await buildCursorBitmapTable(cursor, at);
-    await player.setCursorImages(table.images);
 
     const samples = cursor.events
       .filter((event) => Number.isFinite(event.timestampMs))
@@ -249,31 +271,69 @@ export async function applyComposition(
         event,
       }));
 
-    await player.setCursorTrack(
-      withOverrideBoundaries(samples, cursor, table).map(({ event: _event, ...sample }) => sample),
-    );
+    resolvedCursor = {
+      image: bitmap,
+      images: table.images,
+      track: withOverrideBoundaries(samples, cursor, table).map(
+        ({ event: _event, ...sample }) => sample,
+      ),
+      // The compositor's base size is 22px scaled by the user's multiplier; the
+      // engine takes the resolved height in canvas pixels.
+      sizePx: 22 * Math.max(0.2, cursor.size),
+      // `showMotionBlur` is the switch the editor already has for "make fast
+      // pointer movement look fast". The engine answers it with a smear rather
+      // than the compositor's trail of ghosted copies -- same setting, different
+      // and better-looking mechanism, so nothing in the UI has to change.
+      effects: {
+        clickScale: cursor.showClickAnimations ? Math.max(1, cursor.clickAnimationScale) : 1,
+        clickDurationMs: cursor.showClickAnimations ? Math.max(0, cursor.clickDisplayDuration) : 0,
+        smearStrength: cursor.showMotionBlur ? Math.max(0, cursor.motionBlurStrength) : 0,
+      },
+    };
+  }
 
-    // The compositor's base size is 22px scaled by the user's multiplier; the
-    // engine takes the resolved height in canvas pixels.
-    await player.setCursorStyle(22 * Math.max(0.2, cursor.size), 1);
+  return {
+    layout,
+    background,
+    crop,
+    webcam,
+    cursor: resolvedCursor,
+    zoomRegions: toEngineZoomRegions(config.zoomRegions),
+    cuts: toEngineCuts(cuts),
+  };
+}
 
-    // `showMotionBlur` is the switch the editor already has for "make fast
-    // pointer movement look fast". The engine answers it with a smear rather
-    // than the compositor's trail of ghosted copies -- same setting, different
-    // and better-looking mechanism, so nothing in the UI has to change.
-    await player.setCursorEffects({
-      clickScale: cursor.showClickAnimations ? Math.max(1, cursor.clickAnimationScale) : 1,
-      clickDurationMs: cursor.showClickAnimations ? Math.max(0, cursor.clickDisplayDuration) : 0,
-      smearStrength: cursor.showMotionBlur ? Math.max(0, cursor.motionBlurStrength) : 0,
-    });
+/**
+ * Push a whole composition into the engine.
+ *
+ * Everything here re-renders the frames already queued rather than going back
+ * to the decoder, so this is cheap enough to call from a slider drag.
+ */
+export async function applyComposition(
+  player: EnginePlayer,
+  config: CompositionConfig,
+  canvas: CanvasSize,
+  project: Project | null,
+): Promise<void> {
+  const resolved = await resolveComposition(config, canvas, project);
+
+  await player.setLayout(resolved.layout);
+  await player.setBackground(resolved.background);
+  await player.setSourceCrop(resolved.crop);
+  await player.setWebcamLayout(resolved.webcam);
+
+  if (resolved.cursor) {
+    await player.setCursorImage(resolved.cursor.image);
+    await player.setCursorImages(resolved.cursor.images);
+    await player.setCursorTrack(resolved.cursor.track);
+    await player.setCursorStyle(resolved.cursor.sizePx, 1);
+    await player.setCursorEffects(resolved.cursor.effects);
   } else {
     await player.setCursorImage(null);
     await player.setCursorImages([]);
     await player.setCursorTrack([]);
   }
 
-  // ---- timeline ------------------------------------------------------------
-
-  await player.setZoomRegions(toEngineZoomRegions(config.zoomRegions));
-  await player.setCuts(toEngineCuts(cuts));
+  await player.setZoomRegions(resolved.zoomRegions);
+  await player.setCuts(resolved.cuts);
 }

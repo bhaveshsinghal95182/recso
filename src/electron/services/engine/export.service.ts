@@ -30,7 +30,20 @@ export function startEngineExport(input: string, options: ExportOptions) {
   // the same de-quoting -- Media Foundation rejects the quoted form outright.
   const webcamPath = options.webcamPath ? normalizeMediaPath(options.webcamPath) : undefined;
 
-  current = new VideoExporter(normalizeMediaPath(input), { ...options, output, webcamPath });
+  // Same de-quoting for every path that reaches Media Foundation, not just the
+  // two obvious ones -- an audio sidecar arrives from the same place and would
+  // otherwise be rejected outright, leaving a silent export and no error.
+  const audioSources = options.audioSources?.map((source) => ({
+    ...source,
+    path: normalizeMediaPath(source.path),
+  }));
+
+  current = new VideoExporter(normalizeMediaPath(input), {
+    ...options,
+    output,
+    webcamPath,
+    audioSources,
+  });
   outputPath = output;
 
   return { output };

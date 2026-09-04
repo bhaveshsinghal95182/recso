@@ -37,13 +37,19 @@ GPU engine (Rust/D3D11, in `velocity/src/engine/`). This document says
 
 ---
 
-> **Status.** Steps 1-4 of the order at the bottom are done, plus zoom, cuts,
-> audio-on-export and the whole of the cursor: the canvas is no longer tied to
-> the source, backgrounds and the video's own rect/radius/border exist, grading
-> is per-layer, and the pointer changes shape as it moves, pops when clicked and
-> smears when flicked. The tables below are marked accordingly. What is left is
-> audio in playback, the remaining webcam and layout work, and the test suite
-> before the cutover.
+> **Status.** The engine is now the default path for recording, preview and
+> export, with the compositor kept as a fallback. Steps 1-4 of the order at the
+> bottom are done, plus zoom, cuts, audio-on-export and the whole of the cursor.
+> What is left is audio in playback, the remaining webcam and layout work, and
+> the test suite before mediabunny can actually be deleted.
+>
+> **Why it flipped when it did.** Not because parity arrived -- it has not. The
+> Canvas2D export reads the whole recording into a `Blob` and returns an
+> `ArrayBuffer`, and V8 caps both near 2GB, so a long 4K take was not slow
+> through that path, it was impossible. The engine streams through Media
+> Foundation and writes the output itself, so the recording's size stops
+> mattering. A project using something the engine cannot draw still falls back,
+> and is told which feature did it.
 
 ---
 

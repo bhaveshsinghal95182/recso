@@ -554,6 +554,9 @@ electron.contextBridge.exposeInMainWorld('electron', {
       electron.ipcRenderer.invoke('exporter:resolve-output-path', config),
 
     /** Persist renderer-produced output bytes to disk */
+    fileSize: (filePath: string): Promise<number> =>
+      electron.ipcRenderer.invoke('exporter:file-size', filePath),
+
     writeOutputFile: (
       outputPath: string,
       data: ArrayBuffer,

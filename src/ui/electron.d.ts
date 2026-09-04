@@ -94,14 +94,56 @@ export interface EngineTickResult {
   endOfStream: boolean;
 }
 
+/**
+ * Everything an engine export needs, which is everything the preview is showing.
+ *
+ * The overlay fields are not optional extras. An export that leaves them out is
+ * not the video the user approved, because the preview drew them -- so this
+ * mirrors the player's setters field for field, and `config-to-engine.ts`
+ * resolves both from the same place.
+ */
 export interface EngineExportOptions {
+  /** Where to write. The engine writes the file itself; nothing comes back
+   *  through the renderer, which is what makes a multi-gigabyte source possible. */
   output: string;
+  /** Target bitrate in bits per second. */
   bitrate: number;
+  /** Milliseconds. Defaults to the whole file. */
   start?: number;
   end?: number;
   brightness?: number;
   contrast?: number;
   saturation?: number;
+  webcamBrightness?: number;
+  webcamContrast?: number;
+  webcamSaturation?: number;
+  /** The canvas to compose onto. Defaults to the recording's visible size. */
+  canvasWidth?: number;
+  canvasHeight?: number;
+  /** Where the recording sits on that canvas. Defaults to filling it. */
+  layout?: EngineVideoPlacement;
+  background?: EngineBackground;
+  zoomRegions?: EngineZoomRegion[];
+  cuts?: EngineCutRegion[];
+  crop?: EngineSourceCrop;
+  /** The camera sidecar. Without it the export has no webcam overlay. */
+  webcamPath?: string;
+  webcam?: EngineWebcamOverlay;
+  cursor?: EngineCursorBitmap;
+  cursorImages?: EngineCursorBitmap[];
+  cursorTrack?: EngineCursorPoint[];
+  cursorSize?: number;
+  cursorOpacity?: number;
+  cursorEffects?: EngineCursorEffects;
+  /** Every file contributing sound. Omit it and the export is silent. */
+  audioSources?: EngineAudioSource[];
+}
+
+/** One file contributing sound to an export. */
+export interface EngineAudioSource {
+  path: string;
+  /** Milliseconds to shift this file by so it sits on the recording's clock. */
+  offsetMs?: number;
 }
 
 export interface EngineExportProgress {
@@ -791,6 +833,9 @@ interface ElectronAPI {
 
     /** Resolve output path using exporter naming rules */
     resolveOutputPath: (config: ExportConfig) => Promise<string | null>;
+
+    /** How big a finished export is. 0 when the file is not there. */
+    fileSize: (filePath: string) => Promise<number>;
 
     /** Persist renderer-produced output bytes to disk */
     writeOutputFile: (

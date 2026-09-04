@@ -144,6 +144,24 @@ export interface ExportOptions {
   cursorOpacity?: number;
   /** The click pop and the smear. Omit and the pointer draws plainly. */
   cursorEffects?: CursorEffectSpec;
+  /**
+   * Every file contributing sound. Omit it and the export is silent.
+   *
+   * Not inferred from the input and the camera sidecar: which tracks belong in
+   * the mix is an editing decision, and muting the camera should be a matter of
+   * leaving it out of this list.
+   */
+  audioSources?: EngineAudioSource[];
+}
+
+/** One file contributing sound to an export. */
+export interface EngineAudioSource {
+  path: string;
+  /**
+   * Milliseconds to shift this file by so it sits on the screen recording's
+   * clock. A camera sidecar that started late has a positive offset.
+   */
+  offsetMs?: number;
 }
 
 export interface ExportProgress {
