@@ -26,6 +26,10 @@ import type {
 import { completeRecording, createRecording, getRecording } from './database.service.js';
 import { phoneCameraState } from './phone-camera.service.js';
 import { initProjectFolder } from './project-storage.service.js';
+import {
+  phoneCameraProblem,
+  shouldUseNativeSingularClock as planNativeSingularClock,
+} from './recorder-capture-plan.js';
 
 interface VelocityStopper {
   /**
@@ -263,14 +267,6 @@ function startVelocityWindowRecording(
     // Backward compatibility for older prebuilt binaries with the two-argument signature.
     return velocity.startWindowRecording(windowTitle, outputPath, bitrate);
   }
-}
-
-function shouldUseNativeSingularClock(config: RecordingConfig): boolean {
-  if (config.nativeCaptureMode === 'native-singular-clock') {
-    return true;
-  }
-
-  return process.env.RECSO_NATIVE_SINGULAR_CLOCK === '1';
 }
 
 function resolveNativeWebcamCapability(
@@ -935,8 +931,24 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
     const isScreenSource = selectedSourceMeta
       ? selectedSourceMeta.isScreen
       : selectedSourceId.startsWith('screen:') || selectedSourceId === 'screen';
-    const useNativeSingularClock = shouldUseNativeSingularClock(config);
     const usePhoneCamera = config.cameraSource === 'phone';
+
+    // Checked before anything else, and outside the native-path branch below.
+    // A phone that is not sending has to fail here rather than fall through to
+    // a take with no camera track in it -- the renderer sidecar cannot open a
+    // phone, so there is nothing downstream to catch it.
+    const phoneProblem = phoneCameraProblem(config, phoneCameraState()?.live ?? false);
+    if (phoneProblem) {
+      return { success: false, error: phoneProblem };
+    }
+
+    // A phone forces the native path on: its frames only reach a recording
+    // through the native webcam sidecar.
+    const useNativeSingularClock = planNativeSingularClock({
+      nativeCaptureMode: config.nativeCaptureMode,
+      cameraSource: config.cameraSource,
+      nativeClockForced: process.env.RECSO_NATIVE_SINGULAR_CLOCK === '1',
+    });
     const nativeClockOptions: NativeClockOptions = {
       useSingularClock: useNativeSingularClock,
       targetFps: config.targetFps === 30 ? 30 : 60,
@@ -949,19 +961,10 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
 
     if (nativeClockOptions.useSingularClock && nativeClockOptions.enableWebcam) {
       if (usePhoneCamera) {
-        // A phone is only reachable through the native path, so there is no
-        // renderer sidecar to fall back to. Refusing here beats starting a take
-        // that silently records this machine's own webcam instead of the phone
-        // the user just paired -- or worse, no camera track at all.
-        const phone = phoneCameraState();
-        if (!phone?.live) {
-          return {
-            success: false,
-            error:
-              'The phone is not sending a picture. Open the phone camera panel, scan the code, and tap Start camera before recording.',
-          };
-        }
-
+        // Liveness was already checked above. Skipping the local capability
+        // probe on purpose: it asks what cameras this machine has, which says
+        // nothing about a phone and would reject one on a laptop with no
+        // built-in webcam.
         useNativeWebcam = true;
         nativeWebcamDeviceId = undefined;
       } else {
@@ -997,6 +1000,9 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
         targetFps: nativeClockOptions.targetFps,
         webcamEnabled: useNativeWebcam,
         webcamRequested: nativeClockOptions.enableWebcam,
+        // Named because a phone that records nothing looks identical to one
+        // that was never selected, and this is the line that tells them apart.
+        webcamSource: nativeClockOptions.webcamSource,
       });
     }
 

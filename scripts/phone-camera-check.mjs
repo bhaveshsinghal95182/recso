@@ -65,6 +65,52 @@ try {
 
   check('the token is long enough to not be guessed', token.length >= 32, `${token.length} chars`);
 
+  // ---- which capture path a phone implies ---------------------------------
+  //
+  // This is the layer the end-to-end recording check flies straight past: it
+  // calls the native recorder directly, so it never exercises the decision
+  // about *whether* to call it. That decision is where a phone silently
+  // recorded nothing -- the native path was off by default, so the camera block
+  // was skipped entirely, and the renderer sidecar is deliberately disabled for
+  // a phone because it can only open a local camera. No track, no error.
+
+  console.log('\nthe capture plan');
+  const plan = await load(path.join(build, 'services/recorder-capture-plan.js'));
+
+  check(
+    'a phone turns the native path on by itself',
+    plan.shouldUseNativeSingularClock({ cameraSource: 'phone' }) === true,
+  );
+  check(
+    'a local camera leaves the default alone',
+    plan.shouldUseNativeSingularClock({ cameraSource: 'local' }) === false,
+  );
+  check(
+    'and an explicit native mode still wins',
+    plan.shouldUseNativeSingularClock({ nativeCaptureMode: 'native-singular-clock' }) === true,
+  );
+  check(
+    'as does the environment override',
+    plan.shouldUseNativeSingularClock({ nativeClockForced: true }) === true,
+  );
+
+  check(
+    'a phone that is not sending stops the recording starting',
+    plan.phoneCameraProblem({ recordCamera: true, cameraSource: 'phone' }, false) !== null,
+  );
+  check(
+    'a phone that is sending does not',
+    plan.phoneCameraProblem({ recordCamera: true, cameraSource: 'phone' }, true) === null,
+  );
+  check(
+    'and a local camera is never blocked by the phone check',
+    plan.phoneCameraProblem({ recordCamera: true, cameraSource: 'local' }, false) === null,
+  );
+  check(
+    'nor is a recording with no camera at all',
+    plan.phoneCameraProblem({ recordCamera: false, cameraSource: 'phone' }, false) === null,
+  );
+
   console.log('\ncertificate');
   const certificate = await presentedCertificate(session.port);
   const sans = String(certificate.subjectaltname || '');
