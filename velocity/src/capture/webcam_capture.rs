@@ -1,4 +1,5 @@
 use super::desktop_capture::Stopper;
+use super::phone_camera;
 use crate::singular_clock::fps_to_period_100ns;
 use napi_derive::napi;
 use nokhwa::pixel_format::RgbFormat;
@@ -113,7 +114,7 @@ fn create_camera(index: CameraIndex, target_fps: u32) -> Result<Camera, String> 
     .map_err(|error| format!("failed to initialize webcam: {error}"))
 }
 
-fn rgb_to_bgra_bottom_up(rgb: &[u8], width: usize, height: usize) -> Vec<u8> {
+pub(crate) fn rgb_to_bgra_bottom_up(rgb: &[u8], width: usize, height: usize) -> Vec<u8> {
     let mut output = vec![0u8; width * height * 4];
     let row_bytes_rgb = width * 3;
     let row_bytes_bgra = width * 4;
@@ -133,6 +134,84 @@ fn rgb_to_bgra_bottom_up(rgb: &[u8], width: usize, height: usize) -> Vec<u8> {
     }
 
     output
+}
+
+/// Where the sidecar loop gets its pictures.
+///
+/// The loop does not care whether a frame came off a USB camera or over wifi:
+/// it asks for the newest one, holds the last if there is none, and writes at
+/// its own cadence regardless. Putting a trait across that seam is what lets a
+/// phone be a camera without a second recording path -- and it is why the phone
+/// inherits the screen recording's clock instead of having to be aligned to it
+/// after the fact.
+trait FrameSource {
+  /// The newest frame, as bottom-up BGRA with its dimensions.
+  ///
+  /// `Err` means "nothing right now", not "broken". The loop holds the last
+  /// frame and carries on, which is what it already did for a USB camera that
+  /// missed a read.
+  fn next_bgra(&mut self) -> Result<(Vec<u8>, usize, usize), String>;
+
+  /// The rate to write the sidecar at, given what the caller asked for.
+  fn effective_fps(&self, requested: u32) -> u32;
+
+  /// Release the device, if there is one. Called on every exit path.
+  fn close(&mut self) {}
+}
+
+struct LocalCamera {
+  camera: Camera,
+}
+
+impl FrameSource for LocalCamera {
+  fn next_bgra(&mut self) -> Result<(Vec<u8>, usize, usize), String> {
+    capture_next_bgra_frame(&mut self.camera)
+  }
+
+  fn effective_fps(&self, requested: u32) -> u32 {
+    let reported = self.camera.camera_format().frame_rate();
+    if reported > 0 {
+      reported
+    } else {
+      requested
+    }
+  }
+
+  fn close(&mut self) {
+    let _ = self.camera.stop_stream();
+  }
+}
+
+/// The phone, reading whatever the network last delivered.
+struct PhoneCamera;
+
+impl FrameSource for PhoneCamera {
+  fn next_bgra(&mut self) -> Result<(Vec<u8>, usize, usize), String> {
+    phone_camera::take_frame().ok_or_else(|| {
+      if phone_camera::is_live() {
+        // Between frames. Expected thirty times a second and not worth saying
+        // anything about.
+        "no new frame yet".to_string()
+      } else {
+        "the phone has stopped sending frames".to_string()
+      }
+    })
+  }
+
+  /// Whatever was asked for. A network camera has no format to interrogate --
+  /// the phone was told a rate to aim for and either keeps up or does not, and
+  /// the loop's hold-last-frame handles the difference either way.
+  fn effective_fps(&self, requested: u32) -> u32 {
+    requested
+  }
+}
+
+/// Which camera a recording is using.
+pub(crate) enum WebcamSource {
+  /// A camera attached to this machine, by device id or the default.
+  Local(Option<String>),
+  /// A phone streaming over the local network, already paired and sending.
+  Phone,
 }
 
 fn capture_next_bgra_frame(
@@ -168,47 +247,50 @@ fn capture_next_bgra_frame(
   ))
 }
 
+/// Open the camera a source names, ready to deliver frames.
+///
+/// Called on the recording thread rather than handed one, because `nokhwa`'s
+/// `Camera` is not `Send` -- the device has to be opened where it will be read.
+fn open_source(source: WebcamSource, requested_fps: u32) -> Result<Box<dyn FrameSource>, String> {
+  match source {
+    WebcamSource::Phone => {
+      // Nothing to open. The phone is already connected and pushing by the time
+      // a recording starts -- the user paired it and watched the preview -- so
+      // the only thing that could be wrong here is that it went away since, and
+      // the startup window below is what catches that.
+      Ok(Box::new(PhoneCamera))
+    }
+    WebcamSource::Local(device_id) => {
+      let index = select_camera_index(device_id.as_deref())?;
+      let mut camera = create_camera(index, requested_fps)?;
+      camera
+        .open_stream()
+        .map_err(|error| format!("failed to open webcam stream: {error}"))?;
+      Ok(Box::new(LocalCamera { camera }))
+    }
+  }
+}
+
 fn run_webcam_recording_loop(
   output_path: String,
-  webcam_device_id: Option<String>,
+  source: WebcamSource,
   target_fps: Option<u32>,
   stop_rx: Receiver<()>,
   ready_tx: Sender<Result<(), String>>,
 ) {
   let sidecar_path = camera_sidecar_path(&output_path);
   let requested_fps = target_webcam_fps(target_fps);
-  let camera_index = match select_camera_index(webcam_device_id.as_deref()) {
-    Ok(index) => index,
+
+  let mut camera = match open_source(source, requested_fps) {
+    Ok(source) => source,
     Err(error) => {
       let _ = ready_tx.send(Err(error));
       return;
     }
   };
 
-  let mut camera = match create_camera(camera_index, requested_fps) {
-    Ok(camera) => camera,
-    Err(error) => {
-      let _ = ready_tx.send(Err(error));
-      return;
-    }
-  };
-
-  if let Err(error) = camera.open_stream() {
-    let _ = ready_tx.send(Err(format!("failed to open webcam stream: {error}")));
-    return;
-  }
-
-  let camera_format = camera.camera_format();
-  let width = camera_format.width();
-  let height = camera_format.height();
-  let effective_fps = if camera_format.frame_rate() > 0 {
-    camera_format.frame_rate()
-  } else {
-    requested_fps
-  };
+  let effective_fps = camera.effective_fps(requested_fps);
   let frame_period_100ns = fps_to_period_100ns(effective_fps);
-
-  let _ = (width, height);
 
   let mut frame_index_100ns: i64 = 0;
   let frame_period_nanos = (1_000_000_000u64 / effective_fps.max(1) as u64).max(1);
@@ -224,13 +306,13 @@ fn run_webcam_recording_loop(
   while Instant::now() < startup_deadline {
     match stop_rx.try_recv() {
       Ok(_) | Err(TryRecvError::Disconnected) => {
-        let _ = camera.stop_stream();
+        camera.close();
         return;
       }
       Err(TryRecvError::Empty) => {}
     }
 
-    match capture_next_bgra_frame(&mut camera) {
+    match camera.next_bgra() {
       Ok((frame, frame_width, frame_height)) => {
         latest_bgra = Some(frame);
         expected_frame_width = frame_width;
@@ -245,7 +327,7 @@ fn run_webcam_recording_loop(
   }
 
   if latest_bgra.is_none() {
-    let _ = camera.stop_stream();
+    camera.close();
     let _ = ready_tx.send(Err(format!(
       "webcam stream produced no valid frame in startup window: {}",
       startup_error
@@ -266,7 +348,7 @@ fn run_webcam_recording_loop(
   ) {
     Ok(encoder) => encoder,
     Err(error) => {
-      let _ = camera.stop_stream();
+      camera.close();
       let _ = ready_tx.send(Err(format!("failed to initialize webcam encoder: {error}")));
       return;
     }
@@ -274,7 +356,7 @@ fn run_webcam_recording_loop(
 
   if let Some(first_frame) = latest_bgra.as_ref() {
     if let Err(error) = encoder.send_frame_buffer(first_frame, frame_index_100ns) {
-      let _ = camera.stop_stream();
+      camera.close();
       let _ = encoder.finish();
       let _ = ready_tx.send(Err(format!(
         "failed to encode first webcam frame: {}",
@@ -288,6 +370,7 @@ fn run_webcam_recording_loop(
 
   frame_index_100ns = frame_index_100ns.saturating_add(frame_period_100ns);
   let mut mismatched_dimension_counter: u64 = 0;
+  let mut starved: u64 = 0;
 
   loop {
     match stop_rx.try_recv() {
@@ -297,13 +380,13 @@ fn run_webcam_recording_loop(
 
     let frame_start = Instant::now();
 
-    match capture_next_bgra_frame(&mut camera) {
+    match camera.next_bgra() {
       Ok((frame, frame_width, frame_height)) => {
         if frame_width == expected_frame_width && frame_height == expected_frame_height {
           latest_bgra = Some(frame);
         } else {
           mismatched_dimension_counter = mismatched_dimension_counter.saturating_add(1);
-          if mismatched_dimension_counter <= 3 || mismatched_dimension_counter % 60 == 0 {
+          if mismatched_dimension_counter <= 3 || mismatched_dimension_counter.is_multiple_of(60) {
             eprintln!(
               "[VelocityCapture] Webcam frame resolution changed unexpectedly (got={}x{}, expected={}x{}); reusing last frame.",
               frame_width,
@@ -315,8 +398,16 @@ fn run_webcam_recording_loop(
         }
       }
       Err(error) => {
-        // Hold-last-frame interpolation: keep timeline smooth when capture drops intermittently.
-        eprintln!("[VelocityCapture] Webcam frame read error; reusing last frame: {error}");
+        // Hold-last-frame interpolation: keep timeline smooth when capture drops
+        // intermittently. Not logged every time -- a network camera is between
+        // frames far more often than it is delivering one, and saying so thirty
+        // times a second would bury everything else in the log.
+        starved = starved.saturating_add(1);
+        if starved == 1 || starved.is_multiple_of(300) {
+          eprintln!(
+            "[VelocityCapture] Webcam frame unavailable ({starved} so far); reusing last frame: {error}"
+          );
+        }
       }
     }
 
@@ -339,13 +430,13 @@ fn run_webcam_recording_loop(
     }
   }
 
-  let _ = camera.stop_stream();
+  camera.close();
   let _ = encoder.finish();
 }
 
 pub(crate) fn start_webcam_sidecar_recording(
   output_path: &str,
-  webcam_device_id: Option<String>,
+  source: WebcamSource,
   target_fps: Option<u32>,
 ) -> napi::Result<Stopper> {
   let (stop_tx, stop_rx) = channel();
@@ -354,7 +445,7 @@ pub(crate) fn start_webcam_sidecar_recording(
   let output_path = output_path.to_string();
 
   thread::spawn(move || {
-    run_webcam_recording_loop(output_path, webcam_device_id, target_fps, stop_rx, ready_tx);
+    run_webcam_recording_loop(output_path, source, target_fps, stop_rx, ready_tx);
     let _ = done_tx.send(());
   });
 

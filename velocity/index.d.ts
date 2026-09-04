@@ -504,6 +504,17 @@ export interface FrameResult {
   texture?: SharedTextureInfo
 }
 
+/**
+ * Generate a certificate covering the given hosts.
+ *
+ * `hosts` should be every address the phone might use to reach this machine --
+ * each LAN IP, and `localhost` for testing on the desktop itself. An address
+ * missing from this list produces a *different* browser error from the ordinary
+ * self-signed warning, and a much more confusing one, so it is better to list
+ * every interface than to guess which one the phone will pick.
+ */
+export declare function generateSelfSignedCertificate(hosts: Array<string>): SelfSignedCertificate
+
 /** Diagnostic: what can the GPU itself decode, independent of Media Foundation? */
 export declare function gpuDecoderProfiles(): Array<string>
 
@@ -533,6 +544,11 @@ export interface NativeRecordingOptions {
   targetFps?: number
   enableWebcam?: boolean
   webcamDeviceId?: string
+  /**
+   * "local" (the default) or "phone". A phone must already be paired and
+   * sending frames before the recording starts.
+   */
+  webcamSource?: string
 }
 
 export interface NativeWindowRecordingOptions {
@@ -543,6 +559,35 @@ export interface NativeWindowRecordingOptions {
   targetFps?: number
   enableWebcam?: boolean
   webcamDeviceId?: string
+  /**
+   * "local" (the default) or "phone". A phone must already be paired and
+   * sending frames before the recording starts.
+   */
+  webcamSource?: string
+}
+
+export declare function phoneCameraStatus(): PhoneCameraStatus
+
+/** What the phone link is doing, for the UI to report. */
+export interface PhoneCameraStatus {
+  /** Frames accepted since the process started. */
+  framesReceived: number
+  /**
+   * Frames replaced before anything read them. A steady climb means the link
+   * is delivering faster than the sidecar is consuming, which is harmless; a
+   * climb alongside a low frame rate means the phone is struggling.
+   */
+  framesDropped: number
+  /** Whether a frame has arrived recently enough to still be showing the room. */
+  live: boolean
+  /** Size of the last frame, or 0 before the first one. */
+  width: number
+  height: number
+}
+
+export interface PhoneFrameAccepted {
+  width: number
+  height: number
 }
 
 export interface PipelineStep {
@@ -625,6 +670,16 @@ export interface ProbeResult {
 export declare function probeVideo(path: string): ProbeResult
 
 /**
+ * Hand one JPEG frame from the phone to the recorder.
+ *
+ * Returns a promise because the decode runs on the worker pool. Awaiting it is
+ * optional and mostly useful for backpressure: a caller that stops awaiting
+ * will simply queue decodes faster than they finish, and the slot will discard
+ * all but the newest anyway.
+ */
+export declare function pushPhoneFrame(jpeg: Buffer): Promise<unknown>
+
+/**
  * Everything the editor needs about a finished recording.
  *
  * Deliberately a plain snapshot rather than a handle: it crosses into JS once,
@@ -669,6 +724,26 @@ export interface RecordingMediaInfo {
    * that still wrote a container header.
    */
   usable: boolean
+}
+
+/**
+ * Forget any frame still sitting in the slot.
+ *
+ * Called when a session starts, so a recording cannot open on a frame from a
+ * pairing session the user abandoned ten minutes ago.
+ */
+export declare function resetPhoneCamera(): void
+
+/** A certificate and its private key, both PEM encoded. */
+export interface SelfSignedCertificate {
+  certPem: string
+  keyPem: string
+  /**
+   * When it stops being valid, as a Unix timestamp in milliseconds. The caller
+   * stores this so it can regenerate ahead of time rather than discovering the
+   * expiry when a phone refuses to connect.
+   */
+  expiresAtMs: number
 }
 
 /**
