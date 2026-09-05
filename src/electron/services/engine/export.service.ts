@@ -3,8 +3,8 @@ import type {
   ExportProgress,
   VideoExporterInstance,
 } from '../../types/engine.types.js';
+import { normaliseExportOptions } from './export-options.js';
 import { requireEngineBindings } from './native.js';
-import { normalizeMediaPath } from './paths.js';
 
 /**
  * One engine export at a time.
@@ -25,28 +25,15 @@ export function startEngineExport(input: string, options: ExportOptions) {
   }
 
   const { VideoExporter } = requireEngineBindings();
-  const output = normalizeMediaPath(options.output);
-  // The sidecar is a path from the same place the input came from, so it needs
-  // the same de-quoting -- Media Foundation rejects the quoted form outright.
-  const webcamPath = options.webcamPath ? normalizeMediaPath(options.webcamPath) : undefined;
 
-  // Same de-quoting for every path that reaches Media Foundation, not just the
-  // two obvious ones -- an audio sidecar arrives from the same place and would
-  // otherwise be rejected outright, leaving a silent export and no error.
-  const audioSources = options.audioSources?.map((source) => ({
-    ...source,
-    path: normalizeMediaPath(source.path),
-  }));
+  // Paths de-quoted and pixel buffers turned back into Buffers. See
+  // `export-options.ts` for why neither survives the trip from the renderer.
+  const normalised = normaliseExportOptions(input, options);
 
-  current = new VideoExporter(normalizeMediaPath(input), {
-    ...options,
-    output,
-    webcamPath,
-    audioSources,
-  });
-  outputPath = output;
+  current = new VideoExporter(normalised.input, normalised.options);
+  outputPath = normalised.options.output;
 
-  return { output };
+  return { output: outputPath };
 }
 
 export function engineExportProgress(): (ExportProgress & { output: string | null }) | null {
