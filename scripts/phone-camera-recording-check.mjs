@@ -166,13 +166,16 @@ try {
         `${info.codedWidth}x${info.codedHeight}`,
       );
 
-      // Roughly the length of the take. The sidecar loop advances its timestamps
-      // on the clock whether or not a frame arrived, which is what keeps the two
-      // tracks the same length -- so a short camera track means that broke.
+      // Not merely "most of it" -- within a tolerance tight enough to catch
+      // drift. The sidecar used to stamp frames by counting periods, which is
+      // only right while the loop hits its rate; when it could not, the track
+      // came out short and the camera ran progressively early against the
+      // picture. A loose threshold passes that bug happily.
+      const drift = Math.abs(info.duration - seconds * 1000);
       check(
-        'it runs for about as long as the recording',
-        info.duration > seconds * 1000 * 0.5,
-        `${info.duration.toFixed(0)}ms of ${seconds * 1000}ms`,
+        'it runs for as long as the recording, within 15%',
+        drift < seconds * 1000 * 0.15,
+        `${info.duration.toFixed(0)}ms of ${seconds * 1000}ms, off by ${drift.toFixed(0)}ms`,
       );
 
       player.seek(Math.min(500, info.duration / 2), true);

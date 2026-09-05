@@ -17,6 +17,9 @@ use windows_capture::encoder::{
 const WEBCAM_DEFAULT_BITRATE: u32 = 3_000_000;
 const WEBCAM_READY_FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// What the phone capture page targets. Anything above it is duplicated frames.
+const PHONE_CAPTURE_FPS: u32 = 30;
+
 #[napi(object)]
 pub struct WebcamDeviceInfo {
   pub id: String,
@@ -198,11 +201,17 @@ impl FrameSource for PhoneCamera {
     })
   }
 
-  /// Whatever was asked for. A network camera has no format to interrogate --
-  /// the phone was told a rate to aim for and either keeps up or does not, and
-  /// the loop's hold-last-frame handles the difference either way.
+  /// Capped at what the page actually sends.
+  ///
+  /// A network camera has no format to interrogate, so this used to take the
+  /// requested rate at face value -- which for the editor's default of 60 meant
+  /// encoding sixty 720p frames a second when the phone sends thirty. Half of
+  /// them were re-encodes of a frame already written, and on a machine also
+  /// capturing a screen that is enough extra work to push the loop off its
+  /// cadence, which is exactly the condition `advance_stamp` exists to survive.
+  /// Better not to create it.
   fn effective_fps(&self, requested: u32) -> u32 {
-    requested
+    requested.min(PHONE_CAPTURE_FPS)
   }
 }
 
@@ -245,6 +254,27 @@ fn capture_next_bgra_frame(
     frame_width,
     frame_height,
   ))
+}
+
+/// The timestamp for the next sidecar frame.
+///
+/// One frame period on from the last, but never behind the wall clock.
+///
+/// The period alone is what the loop used to do, and it is right only while the
+/// loop actually hits its rate. When it cannot -- a busy machine, a software
+/// encoder asked for 60fps of 720p -- the stamps keep advancing as though it
+/// did, so N frames written over a longer T seconds get labelled N/fps seconds.
+/// The camera track then comes out shorter than the recording and drifts
+/// steadily ahead of the picture, which looks like the webcam running early
+/// rather than like dropped frames.
+///
+/// Taking the clock as a floor keeps the original intent -- stamps advance even
+/// when a frame fails, so the two tracks end the same length -- and adds the
+/// part that was missing: they cannot advance faster than time did.
+fn advance_stamp(current_100ns: i64, period_100ns: i64, elapsed_100ns: i64) -> i64 {
+  current_100ns
+    .saturating_add(period_100ns)
+    .max(elapsed_100ns)
 }
 
 /// Open the camera a source names, ready to deliver frames.
@@ -368,6 +398,9 @@ fn run_webcam_recording_loop(
 
   let _ = ready_tx.send(Ok(()));
 
+  // Time zero is the first frame handed to the encoder, so every stamp below is
+  // measured from the same instant the track starts at.
+  let started = Instant::now();
   frame_index_100ns = frame_index_100ns.saturating_add(frame_period_100ns);
   let mut mismatched_dimension_counter: u64 = 0;
   let mut starved: u64 = 0;
@@ -415,9 +448,13 @@ fn run_webcam_recording_loop(
       if let Err(error) = encoder.send_frame_buffer(frame, frame_index_100ns) {
         eprintln!("[VelocityCapture] Failed to encode webcam frame: {error}");
       }
-      // Always advance timestamp to stay in sync with singular_clock, regardless of encode success.
-      // This ensures webcam and desktop durations match, preventing export stutter from seek clamping.
-      frame_index_100ns = frame_index_100ns.saturating_add(frame_period_100ns);
+      // Advance even when the encode failed, so the two tracks end the same
+      // length -- but never past the clock, so they also end at the same time.
+      frame_index_100ns = advance_stamp(
+        frame_index_100ns,
+        frame_period_100ns,
+        (started.elapsed().as_nanos() / 100) as i64,
+      );
     } else {
       eprintln!("[VelocityCapture] Webcam frame unavailable and no fallback frame cached.");
       thread::sleep(Duration::from_millis(6));
@@ -467,6 +504,49 @@ pub(crate) fn start_webcam_sidecar_recording(
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  /// One frame period, in 100ns units, at 60fps.
+  const PERIOD_60: i64 = 166_667;
+
+  #[test]
+  fn stamps_advance_by_one_period_when_the_loop_keeps_up() {
+    // Elapsed time matches where the counter already is, so nothing is forced.
+    assert_eq!(advance_stamp(0, PERIOD_60, 0), PERIOD_60);
+    assert_eq!(
+      advance_stamp(PERIOD_60, PERIOD_60, PERIOD_60),
+      PERIOD_60 * 2
+    );
+  }
+
+  #[test]
+  fn stamps_catch_up_to_the_clock_when_the_encoder_falls_behind() {
+    // Half a second of wall time has passed but the counter only got three
+    // frames in. Advancing by a period would label those three as 50ms of
+    // video, and the camera track would run half a second early by this point.
+    let caught_up = advance_stamp(PERIOD_60 * 3, PERIOD_60, 5_000_000);
+    assert_eq!(caught_up, 5_000_000);
+  }
+
+  #[test]
+  fn stamps_never_go_backwards() {
+    // A clock reading behind the counter -- a frame written early, or a lagging
+    // Instant -- must not rewind the track.
+    let stamp = advance_stamp(PERIOD_60 * 10, PERIOD_60, 0);
+    assert_eq!(stamp, PERIOD_60 * 11);
+    assert!(stamp > PERIOD_60 * 10);
+  }
+
+  #[test]
+  fn a_phone_is_not_asked_for_more_than_it_sends() {
+    // The editor defaults to 60; the capture page sends 30. The difference was
+    // sixty per cent of the encoder's work spent re-encoding frames it had
+    // already written.
+    assert_eq!(PhoneCamera.effective_fps(60), PHONE_CAPTURE_FPS);
+    assert_eq!(PhoneCamera.effective_fps(30), 30);
+    // And a caller asking for less than the page sends still gets what it asked
+    // for, rather than being raised to the cap.
+    assert_eq!(PhoneCamera.effective_fps(15), 15);
+  }
 
   #[test]
   fn camera_sidecar_path_inserts_camera_suffix_before_extension() {
