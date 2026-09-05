@@ -225,25 +225,26 @@ and it should be revisited if the engine is ever abandoned.
 
 ## Missing: parity with the Pixi compositor
 
-What the editor's `CompositionEngine` does that the engine does not. The engine
-has the three layers; it does not have most of what the editor draws on them.
+What the editor's `CompositionEngine` does, against what the engine has. This
+started as a list of everything missing; one row is left, and it is cosmetic.
 
-| Feature                            | Engine | Notes                                                                   |
-| ---------------------------------- | ------ | ----------------------------------------------------------------------- |
-| Screen video                       | yes    |                                                                         |
-| Webcam overlay                     | yes    | shape, corner radius, and aspect fit                                    |
-| Cursor sprite                      | yes    | one global bitmap; see below                                            |
-| Brightness / contrast / saturation | yes    | one hardcoded pass                                                      |
-| Backgrounds                        | **no** | colour, pattern, image                                                  |
-| ~~Zoom regions~~                   | yes    | the animated zoom/pan timeline                                          |
-| ~~Cuts / trim~~                    | yes    | source↔composition mapping, and cut-aware audio                         |
-| ~~Per-event cursor bitmaps~~       | yes    | a deduped bitmap table; each sample indexes into it                     |
-| ~~Click animations~~               | yes    | a scale about the hotspot, punched out and settled back                 |
-| ~~Cursor smear~~                   | yes    | the pointer stretched along its travel; not the compositor's blur trail |
-| ~~Per-region cursor overrides~~    | yes    | a table entry, plus a sample injected at each boundary                  |
-| ~~I-beam detection~~               | yes    | the same known-handle check, choosing a table entry                     |
-| Webcam borders and shadows         | **no** | shape and radius exist; borders and shadows do not                      |
-| Canvas padding / layout            | **no** | the video's placement within a larger canvas                            |
+| Feature                            | Engine | Notes                                                                       |
+| ---------------------------------- | ------ | --------------------------------------------------------------------------- |
+| Screen video                       | yes    |                                                                             |
+| Webcam overlay                     | yes    | shape, corner radius, and aspect fit                                        |
+| Cursor sprite                      | yes    | one global bitmap; see below                                                |
+| Brightness / contrast / saturation | yes    | one hardcoded pass                                                          |
+| ~~Backgrounds~~                    | yes    | flat colour direct; gradients, patterns and images rasterised by the caller |
+| ~~Zoom regions~~                   | yes    | the animated zoom/pan timeline                                              |
+| ~~Cuts / trim~~                    | yes    | source↔composition mapping, and cut-aware audio                             |
+| ~~Per-event cursor bitmaps~~       | yes    | a deduped bitmap table; each sample indexes into it                         |
+| ~~Click animations~~               | yes    | a scale about the hotspot, punched out and settled back                     |
+| ~~Cursor smear~~                   | yes    | the pointer stretched along its travel; not the compositor's blur trail     |
+| ~~Per-region cursor overrides~~    | yes    | a table entry, plus a sample injected at each boundary                      |
+| ~~I-beam detection~~               | yes    | the same known-handle check, choosing a table entry                         |
+| ~~Webcam borders~~                 | yes    | drawn under the camera, the same shape grown by the width                   |
+| Webcam shadows                     | **no** | needs a blur pass; cosmetic, and reported rather than refused over          |
+| ~~Canvas padding / layout~~        | yes    | the video's placement within a larger canvas                                |
 
 The structural one here was per-event bitmaps, and it is done. The engine's
 cursor used to be a single `SpriteTexture` plus a track of positions, against a
@@ -339,20 +340,20 @@ the way the playhead is now.
 
 ## Missing: integration
 
-Nothing in the app drives any of this. Everything below is wired end to end and
-called by nothing.
+This section used to open with "nothing in the app drives any of this". That is
+no longer true: recording, preview and export all run through the engine by
+default, `useGpuPreview` drives the webcam and cursor setters, and `planExport`
+decides which export path a composition gets. What is left is the leftovers.
 
-- `GpuFrameSource` implements `FrameVideoSource` — the seam the compositor would
-  pull from — and no editor code constructs it.
+- `GpuFrameSource` implements `FrameVideoSource` — the seam the _compositor_
+  would pull from — and nothing constructs it. The preview went the other way in
+  the end, driving the engine directly rather than feeding frames back into
+  Canvas2D, so this is a road not taken rather than a gap.
 - `engine:player:open-recording` takes a recording id, reads the stored metadata
-  and opens with no probe. Nothing calls it.
-- The webcam and cursor setters are exposed through IPC and preload. No UI drives
-  them.
+  and opens with no probe. Wired through IPC and preload; no renderer calls it,
+  so the preview still opens by path and pays for a probe it does not need.
 - **Only one frame sink can be bound at a time.** The dev harness binds its own
-  canvas, so the harness and an editor preview cannot both be live. This will
-  matter the moment the editor starts using the engine.
-- **Two export paths coexist** — the engine's and mediabunny's — with nothing
-  choosing between them.
+  canvas, so the harness and an editor preview cannot both be live.
 - Prototype leftovers still in the napi surface: `Pipeline`, `TestPatternSource`,
   `PatternEncoder`.
 
@@ -360,16 +361,15 @@ called by nothing.
 
 ## Suggested order
 
-Bugs 1, 3, 4 and 6 are done. What is left, in order:
+Bugs 1, 3, 4 and 6 are done, and so are the first three items this list used to
+carry: the feature map, per-layer grading, and integration. What is left:
 
-1. **The feature map.** [ENGINE-FEATURE-MAP.md](ENGINE-FEATURE-MAP.md) — what the
-   editor's compositor and its mediabunny export actually do, against what the
-   engine has. Everything below depends on knowing the shape of the target.
-2. **Per-layer grading** (bug 2, above). Shaped together with the other
-   per-layer properties the map turns up, so the napi surface changes once
-   rather than once per feature.
-3. **Integration.** Everything in this engine is wired end to end and called by
-   nothing. The map ends with a proposed order.
-4. **GOP length.** The only remaining large number in the system.
-5. **Audio in playback**, and the clock inversion it forces. Export already has
+1. **GOP length.** The only remaining large number in the system — seek is
+   170–280ms and this is the whole of it.
+2. **Audio in playback**, and the clock inversion it forces. Export already has
    sound.
+3. **Multiple clips.** The model is one source plus one overlay, so cuts and
+   ordering exist but a second clip has nowhere to live.
+
+None of these is parity work. The engine draws what the editor describes; these
+are things neither renderer has ever done.
