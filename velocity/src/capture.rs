@@ -40,6 +40,12 @@ pub struct NativeRecordingOptions {
   pub output_path: String,
   pub bitrate: u32,
   pub include_system_audio: Option<bool>,
+  /// Record the default microphone into the same track as the video.
+  ///
+  /// Native rather than a renderer sidecar, so the voice is laid down against
+  /// the picture's own timestamps instead of a second clock that has to be
+  /// guessed back into alignment afterwards.
+  pub include_microphone: Option<bool>,
   pub target_fps: Option<u32>,
   pub enable_webcam: Option<bool>,
   pub webcam_device_id: Option<String>,
@@ -54,6 +60,12 @@ pub struct NativeWindowRecordingOptions {
   pub output_path: String,
   pub bitrate: u32,
   pub include_system_audio: Option<bool>,
+  /// Record the default microphone into the same track as the video.
+  ///
+  /// Native rather than a renderer sidecar, so the voice is laid down against
+  /// the picture's own timestamps instead of a second clock that has to be
+  /// guessed back into alignment afterwards.
+  pub include_microphone: Option<bool>,
   pub target_fps: Option<u32>,
   pub enable_webcam: Option<bool>,
   pub webcam_device_id: Option<String>,
@@ -107,6 +119,7 @@ pub fn start_monitor_recording_v2(options: NativeRecordingOptions) -> napi::Resu
     options.output_path,
     options.bitrate,
     options.include_system_audio,
+    options.include_microphone,
     options.target_fps,
   )?;
 
@@ -131,6 +144,7 @@ pub fn start_window_recording_v2(options: NativeWindowRecordingOptions) -> napi:
     options.output_path,
     options.bitrate,
     options.include_system_audio,
+    options.include_microphone,
     options.target_fps,
   )?;
 

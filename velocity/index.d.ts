@@ -541,6 +541,14 @@ export interface NativeRecordingOptions {
   outputPath: string
   bitrate: number
   includeSystemAudio?: boolean
+  /**
+   * Record the default microphone into the same track as the video.
+   *
+   * Native rather than a renderer sidecar, so the voice is laid down against
+   * the picture's own timestamps instead of a second clock that has to be
+   * guessed back into alignment afterwards.
+   */
+  includeMicrophone?: boolean
   targetFps?: number
   enableWebcam?: boolean
   webcamDeviceId?: string
@@ -556,6 +564,14 @@ export interface NativeWindowRecordingOptions {
   outputPath: string
   bitrate: number
   includeSystemAudio?: boolean
+  /**
+   * Record the default microphone into the same track as the video.
+   *
+   * Native rather than a renderer sidecar, so the voice is laid down against
+   * the picture's own timestamps instead of a second clock that has to be
+   * guessed back into alignment afterwards.
+   */
+  includeMicrophone?: boolean
   targetFps?: number
   enableWebcam?: boolean
   webcamDeviceId?: string

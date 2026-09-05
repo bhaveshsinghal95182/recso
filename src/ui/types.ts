@@ -121,6 +121,9 @@ export interface StartRecordingResult {
   tempPath?: string;
   /** True when webcam capture is handled fully in native velocity path. */
   nativeWebcamHandled?: boolean;
+  /** True when that audio went into the recording's own track. */
+  nativeSystemAudioHandled?: boolean;
+  nativeMicrophoneHandled?: boolean;
   error?: string;
 }
 

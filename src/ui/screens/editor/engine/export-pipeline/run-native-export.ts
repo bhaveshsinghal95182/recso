@@ -44,11 +44,16 @@ function resolveBitrate(width: number, height: number, quality: string | undefin
 /**
  * Every file contributing sound, with the shift each one needs.
  *
- * The same three the canvas exporter mixes, chosen the same way, because the
- * export has to sound like the preview it was approved in. The recording's own
- * container is not among them: the recorder writes audio to sidecars unless
- * native system audio is explicitly enabled, and the canvas path has always
- * read them rather than the container.
+ * The recording itself comes first now. When the native recorder captures the
+ * system audio and the microphone, it writes them into the video's own track --
+ * so the sound is already in the file, already on the picture's clock, and there
+ * is nothing to shift. Older recordings have no audio there and the engine skips
+ * a source it cannot decode, so listing it always is safe either way.
+ *
+ * The sidecars are still read for recordings made before that, or on a platform
+ * where native audio is not available. They only exist when the renderer
+ * recorded them, so anything missing is dropped rather than handed to the engine
+ * as a path that is not there.
  *
  * Durations are probed with mediabunny, which is safe here in a way it is not
  * for the video: these are a few megabytes of audio, not the recording.
@@ -61,6 +66,9 @@ async function resolveAudioSources(
   const { desktopAudioPath, micPath } = resolveProjectAudioSidecarPaths(project);
 
   const candidates: Array<{ path: string | undefined; compensateStartDelay: boolean }> = [
+    // Whatever the native recorder laid down against the picture. No shift:
+    // it was written frame by frame alongside the video it belongs to.
+    { path: project.rawVideoPath, compensateStartDelay: false },
     { path: desktopAudioPath, compensateStartDelay: true },
     { path: micPath, compensateStartDelay: true },
     // The camera sidecar carries the camera's microphone, and it stays locked
@@ -68,10 +76,18 @@ async function resolveAudioSources(
     { path: webcamSourcePath, compensateStartDelay: false },
   ];
 
-  const present = candidates.filter(
+  const named = candidates.filter(
     (candidate): candidate is { path: string; compensateStartDelay: boolean } =>
       Boolean(candidate.path),
   );
+
+  const present: typeof named = [];
+  for (const candidate of named) {
+    if ((await window.electron.exporter.fileSize(candidate.path)) > 0) {
+      present.push(candidate);
+    }
+  }
+
   if (present.length === 0) {
     return [];
   }

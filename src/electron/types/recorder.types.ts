@@ -113,6 +113,14 @@ export interface StartRecordingResult {
   tempPath?: string;
   /** True when webcam capture is handled fully in native velocity path. */
   nativeWebcamHandled?: boolean;
+  /**
+   * True when the named audio went into the recording's own track.
+   *
+   * The renderer must not also record a sidecar for it -- both would reach the
+   * export and the sound would be doubled.
+   */
+  nativeSystemAudioHandled?: boolean;
+  nativeMicrophoneHandled?: boolean;
   error?: string;
 }
 

@@ -108,19 +108,114 @@ impl Stopper {
   }
 }
 
+/// How far a source's queue may run ahead before the oldest audio is dropped.
+///
+/// Two sound devices have two clocks and they drift. The frame loop pulls the
+/// same number of bytes from each per frame, so a device running slightly fast
+/// builds a backlog, and every byte of backlog is audio arriving later than it
+/// happened -- a lag that grows for as long as the recording does. Dropping the
+/// oldest keeps each source near the present, which is the same trade the phone
+/// camera's single frame slot makes.
+const MAX_AUDIO_BACKLOG_BYTES: usize = AUDIO_BYTES_PER_SECOND / 2;
+
+/// One WASAPI endpoint feeding the recording's single audio track.
+struct AudioSource {
+  label: &'static str,
+  rx: Receiver<Vec<u8>>,
+  thread: Option<JoinHandle<()>>,
+  stop: Arc<AtomicBool>,
+  /// Captured but not yet written into a frame's buffer.
+  pending: VecDeque<u8>,
+  /// False once the capture thread has gone. A dead source stops being mixed
+  /// rather than contributing silence for the rest of the take.
+  live: bool,
+}
+
+impl AudioSource {
+  /// Move everything the capture thread has produced into `pending`.
+  fn drain(&mut self) {
+    loop {
+      match self.rx.try_recv() {
+        Ok(chunk) => self.pending.extend(chunk),
+        Err(TryRecvError::Empty) => break,
+        Err(TryRecvError::Disconnected) => {
+          self.live = false;
+          break;
+        }
+      }
+    }
+
+    if self.pending.len() > MAX_AUDIO_BACKLOG_BYTES {
+      let excess = self.pending.len() - MAX_AUDIO_BACKLOG_BYTES;
+      // Whole frames only: half a sample would swap the channels for the rest
+      // of the recording.
+      let aligned = excess - (excess % AUDIO_BLOCK_ALIGN);
+      self.pending.drain(..aligned);
+      eprintln!(
+        "[VelocityCapture] {} audio ran {aligned} bytes ahead; dropped the oldest to stay in step.",
+        self.label
+      );
+    }
+  }
+
+  /// Take up to `wanted` bytes, zero-padded. Returns how many were real.
+  fn take(&mut self, wanted: usize) -> (Vec<u8>, u64) {
+    let mut buffer = vec![0u8; wanted];
+    let mut captured = 0u64;
+
+    for slot in &mut buffer {
+      match self.pending.pop_front() {
+        Some(byte) => {
+          *slot = byte;
+          captured += 1;
+        }
+        None => break,
+      }
+    }
+
+    (buffer, captured)
+  }
+}
+
 struct Capture {
   encoder: Option<VideoEncoder>,
   output_path: String,
   bitrate: u32,
   enable_system_audio: bool,
-  native_audio_active: bool,
-  audio_rx: Option<Receiver<Vec<u8>>>,
-  audio_thread: Option<JoinHandle<()>>,
-  audio_stop_flag: Option<Arc<AtomicBool>>,
-  pending_audio_bytes: VecDeque<u8>,
+  enable_microphone: bool,
+  /// Every endpoint being recorded. Empty means a video-only file.
+  audio_sources: Vec<AudioSource>,
   audio_fractional_bytes: f64,
   last_frame_timestamp_100ns: Option<i64>,
   stats: Arc<RecordingStats>,
+}
+
+/// Add 16-bit little-endian PCM into a running sum.
+///
+/// A sum rather than an average: two people talking should not each get quieter
+/// because the other exists, and the loopback track is usually near silent while
+/// someone is speaking over it. Clipping is handled once at the end.
+fn mix_pcm_into(accumulator: &mut [i32], source: &[u8]) {
+  // `as_chunks` rather than `chunks_exact`: a trailing odd byte is dropped
+  // either way, which is what keeps a short read from shifting every sample
+  // after it by half a frame and swapping the channels.
+  let (samples, _) = source.as_chunks::<2>();
+  for (slot, sample) in accumulator.iter_mut().zip(samples) {
+    *slot += i16::from_le_bytes(*sample) as i32;
+  }
+}
+
+/// Back to bytes, clamped rather than wrapped.
+///
+/// Wrapping is what makes a loud moment come out as a burst of noise instead of
+/// a loud moment: an i32 sum past 32767 truncated to i16 flips sign.
+fn pcm_from_accumulator(accumulator: &[i32]) -> Vec<u8> {
+  let mut bytes = Vec::with_capacity(accumulator.len() * 2);
+  for sample in accumulator {
+    let clamped = (*sample).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+    bytes.extend_from_slice(&clamped.to_le_bytes());
+  }
+  bytes
 }
 
 impl Capture {
@@ -133,23 +228,47 @@ impl Capture {
       return Ok(());
     }
 
-    self.native_audio_active = false;
+    self.audio_sources.clear();
 
-    if self.enable_system_audio {
-      let stop_flag = Arc::new(AtomicBool::new(false));
+    // Each endpoint is opened independently, and one failing costs only itself.
+    // A machine with no microphone should still record what it was playing, and
+    // a machine with sound disabled should still record a voice.
+    let wanted: [(bool, Direction, &'static str, &'static str); 2] = [
+      (
+        self.enable_system_audio,
+        Direction::Render,
+        "system audio",
+        "velocity-loopback-audio",
+      ),
+      (
+        self.enable_microphone,
+        Direction::Capture,
+        "microphone",
+        "velocity-microphone-audio",
+      ),
+    ];
 
-      match spawn_loopback_audio_capture(stop_flag.clone()) {
-        Ok((audio_rx, audio_thread)) => {
-          self.native_audio_active = true;
-          self.audio_rx = Some(audio_rx);
-          self.audio_thread = Some(audio_thread);
-          self.audio_stop_flag = Some(stop_flag);
+    for (enabled, endpoint, label, thread_name) in wanted {
+      if !enabled {
+        continue;
+      }
+
+      let stop = Arc::new(AtomicBool::new(false));
+      match spawn_audio_capture(endpoint, thread_name, stop.clone()) {
+        Ok((rx, thread)) => {
+          self.audio_sources.push(AudioSource {
+            label,
+            rx,
+            thread: Some(thread),
+            stop,
+            pending: VecDeque::new(),
+            live: true,
+          });
         }
         Err(error) => {
           eprintln!(
-            "[VelocityCapture] Falling back to video-only native recording (audio init failed): {error}"
+            "[VelocityCapture] {label} capture unavailable, continuing without it: {error}"
           );
-          self.stop_native_audio_capture();
         }
       }
     }
@@ -161,7 +280,7 @@ impl Capture {
     // with an AAC track carrying zero samples. Consumers must treat the mere presence of an audio
     // track as meaningless and check that it actually has samples — see `hasPrimaryAudioTrack()` in
     // src/electron/services/recorder.service.ts.
-    let audio_settings = if self.native_audio_active {
+    let audio_settings = if !self.audio_sources.is_empty() {
       AudioSettingsBuilder::default()
         .sample_rate(AUDIO_SAMPLE_RATE as u32)
         .channel_count(AUDIO_CHANNEL_COUNT as u32)
@@ -186,42 +305,21 @@ impl Capture {
   }
 
   fn stop_native_audio_capture(&mut self) {
-    if let Some(stop_flag) = &self.audio_stop_flag {
-      stop_flag.store(true, Ordering::Relaxed);
+    for source in &self.audio_sources {
+      source.stop.store(true, Ordering::Relaxed);
     }
 
-    if let Some(thread_handle) = self.audio_thread.take() {
-      let _ = thread_handle.join();
-    }
-
-    self.audio_rx = None;
-    self.audio_stop_flag = None;
-    self.native_audio_active = false;
-    self.pending_audio_bytes.clear();
-    self.audio_fractional_bytes = 0.0;
-    self.last_frame_timestamp_100ns = None;
-  }
-
-  fn drain_audio_channel(&mut self) {
-    loop {
-      let next_chunk = match &self.audio_rx {
-        Some(receiver) => receiver.try_recv(),
-        None => return,
-      };
-
-      match next_chunk {
-        Ok(chunk) => {
-          for byte in chunk {
-            self.pending_audio_bytes.push_back(byte);
-          }
-        }
-        Err(TryRecvError::Empty) => break,
-        Err(TryRecvError::Disconnected) => {
-          self.native_audio_active = false;
-          break;
-        }
+    // Signalled first, then joined, so two devices shut down concurrently
+    // rather than one waiting out the other's event timeout.
+    for source in &mut self.audio_sources {
+      if let Some(thread_handle) = source.thread.take() {
+        let _ = thread_handle.join();
       }
     }
+
+    self.audio_sources.clear();
+    self.audio_fractional_bytes = 0.0;
+    self.last_frame_timestamp_100ns = None;
   }
 
   fn build_audio_buffer_for_frame(&mut self, frame_timestamp_100ns: i64) -> Vec<u8> {
@@ -241,33 +339,54 @@ impl Capture {
     );
     self.audio_fractional_bytes = next_fraction;
 
-    // The buffer is sized to the frame cadence and zero-padded when capture has
-    // not produced enough yet. Only the bytes that actually came off the device
-    // count as audio -- the padding is silence we invented, and a file made
-    // entirely of it must not report itself as having sound.
-    let mut audio = vec![0u8; expected_bytes];
+    // Buffers are sized to the frame cadence, so audio is laid down against the
+    // video's own timestamps rather than against a second clock that has to be
+    // reconciled afterwards. That is the whole reason this is worth doing in
+    // here instead of muxing sidecars later.
+    let mut accumulator = vec![0i32; expected_bytes / 2];
     let mut captured = 0u64;
-    for sample in &mut audio {
-      if let Some(value) = self.pending_audio_bytes.pop_front() {
-        *sample = value;
-        captured += 1;
-      } else {
-        break;
+
+    for source in &mut self.audio_sources {
+      if !source.live {
+        continue;
       }
+
+      source.drain();
+      let (buffer, taken) = source.take(expected_bytes);
+      // The most any single device produced. A frame padded out to length is
+      // still silence we invented, and a file made entirely of it must not
+      // report itself as having sound.
+      captured = captured.max(taken);
+      mix_pcm_into(&mut accumulator, &buffer);
     }
+
+    self.audio_sources.retain(|source| source.live);
     self.stats.note_captured_audio_bytes(captured);
 
-    audio
+    pcm_from_accumulator(&accumulator)
   }
 }
 
-fn run_loopback_audio_capture(
+/// Open one WASAPI endpoint and stream 48kHz stereo PCM out of it.
+///
+/// `endpoint` is which side of the sound card to take the default device from,
+/// and it is the only difference between the two things this records:
+///
+/// - `Direction::Render` is the speakers. Opening a *render* endpoint for
+///   capture is what loopback means -- what the machine is playing.
+/// - `Direction::Capture` is the microphone, opened the ordinary way.
+///
+/// Both are then initialised as `Direction::Capture`, because in both cases we
+/// are reading. That asymmetry is the whole trick and it is easy to misread, so
+/// the endpoint is a parameter and the initialise call is not.
+fn run_audio_capture(
+  endpoint: Direction,
   stop_flag: Arc<AtomicBool>,
   tx: SyncSender<Vec<u8>>,
 ) -> Result<(), String> {
   let enumerator = DeviceEnumerator::new().map_err(|error| format!("{error}"))?;
   let device = enumerator
-    .get_default_device(&Direction::Render)
+    .get_default_device(&endpoint)
     .map_err(|error| format!("{error}"))?;
 
   let mut audio_client = device
@@ -292,7 +411,7 @@ fn run_loopback_audio_capture(
     buffer_duration_hns: min_period,
   };
 
-  // Loopback capture is enabled by using Direction::Capture on a render endpoint.
+  // Always Capture: we are reading either way. See the note on `endpoint`.
   audio_client
     .initialize_client(&desired_format, &Direction::Capture, &mode)
     .map_err(|error| format!("{error}"))?;
@@ -339,19 +458,21 @@ fn run_loopback_audio_capture(
   Ok(())
 }
 
-fn spawn_loopback_audio_capture(
+fn spawn_audio_capture(
+  endpoint: Direction,
+  thread_name: &str,
   stop_flag: Arc<AtomicBool>,
 ) -> Result<(Receiver<Vec<u8>>, JoinHandle<()>), String> {
   let (tx, rx) = sync_channel::<Vec<u8>>(16);
 
   let thread_handle = thread::Builder::new()
-    .name("velocity-loopback-audio".to_string())
+    .name(thread_name.to_string())
     .spawn(move || {
       if initialize_mta().is_err() {
         return;
       }
 
-      let _ = run_loopback_audio_capture(stop_flag, tx);
+      let _ = run_audio_capture(endpoint, stop_flag, tx);
       deinitialize();
     })
     .map_err(|error| error.to_string())?;
@@ -360,21 +481,18 @@ fn spawn_loopback_audio_capture(
 }
 
 impl GraphicsCaptureApiHandler for Capture {
-  type Flags = (String, u32, bool, Arc<RecordingStats>);
+  type Flags = (String, u32, bool, bool, Arc<RecordingStats>);
   type Error = Box<dyn std::error::Error + Send + Sync>;
 
   fn new(ctx: Context<Self::Flags>) -> Result<Self, Self::Error> {
-    let (output_path, bitrate, enable_system_audio, stats) = ctx.flags;
+    let (output_path, bitrate, enable_system_audio, enable_microphone, stats) = ctx.flags;
     Ok(Self {
       encoder: None,
       output_path,
       bitrate,
       enable_system_audio,
-      native_audio_active: false,
-      audio_rx: None,
-      audio_thread: None,
-      audio_stop_flag: None,
-      pending_audio_bytes: VecDeque::new(),
+      enable_microphone,
+      audio_sources: Vec::new(),
       audio_fractional_bytes: 0.0,
       last_frame_timestamp_100ns: None,
       stats,
@@ -394,8 +512,7 @@ impl GraphicsCaptureApiHandler for Capture {
 
     let timestamp_100ns = frame.timestamp()?.Duration;
 
-    if self.native_audio_active {
-      self.drain_audio_channel();
+    if !self.audio_sources.is_empty() {
       let audio_buffer = self.build_audio_buffer_for_frame(timestamp_100ns);
       if let Some(encoder) = self.encoder.as_mut() {
         let _ = encoder.send_frame_with_audio(frame, &audio_buffer);
@@ -429,6 +546,9 @@ pub fn start_monitor_recording(
     output_path,
     bitrate,
     include_system_audio,
+    // The v1 entry point predates microphone capture and its callers have no
+    // way to ask for it.
+    None,
     MinimumUpdateIntervalSettings::Default,
     DEFAULT_CAPTURE_FPS,
   )
@@ -438,12 +558,14 @@ fn start_monitor_recording_internal(
   output_path: String,
   bitrate: u32,
   include_system_audio: Option<bool>,
+  include_microphone: Option<bool>,
   minimum_update_interval_settings: MinimumUpdateIntervalSettings,
   target_fps: u32,
 ) -> napi::Result<Stopper> {
   let (stop_tx, stop_rx) = channel();
   let (done_tx, done_rx) = channel();
   let enable_system_audio = include_system_audio.unwrap_or(false);
+  let enable_microphone = include_microphone.unwrap_or(false);
 
   let primary_monitor = Monitor::primary()
     .map_err(|e| napi::Error::from_reason(format!("Failed to get primary monitor: {:?}", e)))?;
@@ -467,7 +589,13 @@ fn start_monitor_recording_internal(
     minimum_update_interval_settings,
     DirtyRegionSettings::Default,
     ColorFormat::Bgra8,
-    (output_path, bitrate, enable_system_audio, stats.clone()),
+    (
+      output_path,
+      bitrate,
+      enable_system_audio,
+      enable_microphone,
+      stats.clone(),
+    ),
   );
 
   thread::spawn(move || {
@@ -499,6 +627,7 @@ pub fn start_window_recording(
     output_path,
     bitrate,
     include_system_audio,
+    None,
     MinimumUpdateIntervalSettings::Default,
     DEFAULT_CAPTURE_FPS,
   )
@@ -509,12 +638,14 @@ fn start_window_recording_internal(
   output_path: String,
   bitrate: u32,
   include_system_audio: Option<bool>,
+  include_microphone: Option<bool>,
   minimum_update_interval_settings: MinimumUpdateIntervalSettings,
   target_fps: u32,
 ) -> napi::Result<Stopper> {
   let (stop_tx, stop_rx) = channel();
   let (done_tx, done_rx) = channel();
   let enable_system_audio = include_system_audio.unwrap_or(false);
+  let enable_microphone = include_microphone.unwrap_or(false);
 
   let window = Window::from_contains_name(&window_title).map_err(|e| {
     napi::Error::from_reason(format!("Failed to find window '{}': {:?}", window_title, e))
@@ -550,7 +681,13 @@ fn start_window_recording_internal(
     minimum_update_interval_settings,
     DirtyRegionSettings::Default,
     ColorFormat::Bgra8,
-    (output_path, bitrate, enable_system_audio, stats.clone()),
+    (
+      output_path,
+      bitrate,
+      enable_system_audio,
+      enable_microphone,
+      stats.clone(),
+    ),
   );
 
   thread::spawn(move || {
@@ -597,6 +734,7 @@ pub(crate) fn start_monitor_recording_with_target_fps(
   output_path: String,
   bitrate: u32,
   include_system_audio: Option<bool>,
+  include_microphone: Option<bool>,
   target_fps: Option<u32>,
 ) -> napi::Result<Stopper> {
   let fps = resolved_capture_fps(target_fps, "start_monitor_recording_v2");
@@ -604,6 +742,7 @@ pub(crate) fn start_monitor_recording_with_target_fps(
     output_path,
     bitrate,
     include_system_audio,
+    include_microphone,
     minimum_update_interval_for_fps(fps),
     fps,
   )
@@ -614,6 +753,7 @@ pub(crate) fn start_window_recording_with_target_fps(
   output_path: String,
   bitrate: u32,
   include_system_audio: Option<bool>,
+  include_microphone: Option<bool>,
   target_fps: Option<u32>,
 ) -> napi::Result<Stopper> {
   let fps = resolved_capture_fps(target_fps, "start_window_recording_v2");
@@ -622,6 +762,7 @@ pub(crate) fn start_window_recording_with_target_fps(
     output_path,
     bitrate,
     include_system_audio,
+    include_microphone,
     minimum_update_interval_for_fps(fps),
     fps,
   )
@@ -630,6 +771,63 @@ pub(crate) fn start_window_recording_with_target_fps(
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  fn pcm(samples: &[i16]) -> Vec<u8> {
+    samples.iter().flat_map(|s| s.to_le_bytes()).collect()
+  }
+
+  #[test]
+  fn one_source_passes_through_unchanged() {
+    let mut accumulator = vec![0i32; 4];
+    mix_pcm_into(&mut accumulator, &pcm(&[100, -200, 300, -400]));
+    assert_eq!(
+      pcm_from_accumulator(&accumulator),
+      pcm(&[100, -200, 300, -400])
+    );
+  }
+
+  #[test]
+  fn two_sources_are_summed_not_averaged() {
+    // Someone talking over a quiet game should not get quieter because the game
+    // is also being recorded.
+    let mut accumulator = vec![0i32; 2];
+    mix_pcm_into(&mut accumulator, &pcm(&[1000, -1000]));
+    mix_pcm_into(&mut accumulator, &pcm(&[500, -500]));
+    assert_eq!(pcm_from_accumulator(&accumulator), pcm(&[1500, -1500]));
+  }
+
+  #[test]
+  fn a_loud_moment_clips_rather_than_wrapping() {
+    // Wrapping is the difference between "loud" and "a burst of noise": an i32
+    // sum past 32767 truncated to i16 flips sign.
+    let mut accumulator = vec![0i32; 2];
+    mix_pcm_into(&mut accumulator, &pcm(&[30_000, -30_000]));
+    mix_pcm_into(&mut accumulator, &pcm(&[30_000, -30_000]));
+    assert_eq!(
+      pcm_from_accumulator(&accumulator),
+      pcm(&[i16::MAX, i16::MIN])
+    );
+  }
+
+  #[test]
+  fn a_source_that_ran_short_leaves_the_rest_alone() {
+    // The frame buffer is sized to the cadence; a device that has not delivered
+    // that much yet contributes what it has and no more.
+    let mut accumulator = vec![0i32; 4];
+    mix_pcm_into(&mut accumulator, &pcm(&[700, 700]));
+    assert_eq!(pcm_from_accumulator(&accumulator), pcm(&[700, 700, 0, 0]));
+  }
+
+  #[test]
+  fn a_trailing_odd_byte_is_ignored_rather_than_shifting_the_stream() {
+    // chunks_exact drops a partial sample. Consuming it would put every
+    // subsequent sample half a frame out and swap the channels.
+    let mut accumulator = vec![0i32; 2];
+    let mut odd = pcm(&[1234]);
+    odd.push(0x7f);
+    mix_pcm_into(&mut accumulator, &odd);
+    assert_eq!(pcm_from_accumulator(&accumulator), pcm(&[1234, 0]));
+  }
 
   fn custom_interval_for_fps(fps: u64) -> MinimumUpdateIntervalSettings {
     let interval_nanos = (1_000_000_000u64 / fps).max(1);

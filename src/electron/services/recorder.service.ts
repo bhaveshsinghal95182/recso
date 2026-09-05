@@ -28,6 +28,7 @@ import { phoneCameraState } from './phone-camera.service.js';
 import { initProjectFolder } from './project-storage.service.js';
 import {
   phoneCameraProblem,
+  planNativeAudio,
   shouldUseNativeSingularClock as planNativeSingularClock,
 } from './recorder-capture-plan.js';
 
@@ -76,6 +77,7 @@ interface VelocityBindings {
     enableWebcam?: boolean;
     webcamDeviceId?: string;
     webcamSource?: 'local' | 'phone';
+    includeMicrophone?: boolean;
   }) => VelocityStopper;
   startWindowRecordingV2?: (options: {
     windowTitle: string;
@@ -86,6 +88,7 @@ interface VelocityBindings {
     enableWebcam?: boolean;
     webcamDeviceId?: string;
     webcamSource?: 'local' | 'phone';
+    includeMicrophone?: boolean;
   }) => VelocityStopper;
 }
 
@@ -96,6 +99,8 @@ interface NativeClockOptions {
   webcamDeviceId?: string;
   /** Which camera the native side should open. Omitted means a local one. */
   webcamSource?: 'local' | 'phone';
+  /** Capture the microphone natively, into the video's own audio track. */
+  includeMicrophone?: boolean;
 }
 
 interface NativeWebcamCapability {
@@ -226,6 +231,7 @@ function startVelocityMonitorRecording(
       enableWebcam: nativeClockOptions.enableWebcam,
       webcamDeviceId: nativeClockOptions.webcamDeviceId,
       webcamSource: nativeClockOptions.webcamSource,
+      includeMicrophone: nativeClockOptions.includeMicrophone,
     });
   }
 
@@ -258,6 +264,7 @@ function startVelocityWindowRecording(
       enableWebcam: nativeClockOptions.enableWebcam,
       webcamDeviceId: nativeClockOptions.webcamDeviceId,
       webcamSource: nativeClockOptions.webcamSource,
+      includeMicrophone: nativeClockOptions.includeMicrophone,
     });
   }
 
@@ -914,15 +921,6 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
     }
     const fileExt: 'mp4' = 'mp4';
     const bitrate = config.options?.videoBitrate || 8_000_000;
-    const nativeSystemAudioEnabled =
-      process.platform === 'win32' && process.env.RECSO_ENABLE_NATIVE_SYSTEM_AUDIO === '1';
-    const useNativeSystemAudio = Boolean(config.recordSystemAudio) && nativeSystemAudioEnabled;
-
-    if (config.recordSystemAudio && !useNativeSystemAudio) {
-      console.log(
-        '[RecorderService] Native system audio disabled; using desktop audio sidecar + mux fallback.',
-      );
-    }
     const tempDir = ensureTempDir();
     const tempPath = path.join(tempDir, `rec_vel_${recordingId}.${fileExt}`);
 
@@ -949,8 +947,25 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
       cameraSource: config.cameraSource,
       legacyForced: process.env.RECSO_LEGACY_CAPTURE === '1',
     });
+    // Audio goes into the video's own track when the native path is running, so
+    // there is no second clock to reconcile afterwards. See `planNativeAudio`.
+    const nativeAudio = planNativeAudio({
+      recordSystemAudio: config.recordSystemAudio,
+      recordMic: config.recordMic,
+      useSingularClock: useNativeSingularClock,
+      platform: process.platform,
+    });
+    const useNativeSystemAudio = nativeAudio.systemAudio;
+
+    if (config.recordSystemAudio && !useNativeSystemAudio) {
+      console.log(
+        '[RecorderService] Native system audio unavailable; using desktop audio sidecar + mux fallback.',
+      );
+    }
+
     const nativeClockOptions: NativeClockOptions = {
       useSingularClock: useNativeSingularClock,
+      includeMicrophone: nativeAudio.microphone,
       targetFps: config.targetFps === 30 ? 30 : 60,
       enableWebcam: Boolean(config.recordCamera),
       webcamDeviceId: config.nativeWebcamDeviceId || config.cameraDeviceId,
@@ -1157,6 +1172,8 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
       recordingId,
       tempPath,
       nativeWebcamHandled: useNativeWebcam,
+      nativeSystemAudioHandled: nativeAudio.systemAudio,
+      nativeMicrophoneHandled: nativeAudio.microphone,
     };
   } catch (error) {
     if (stopper) {

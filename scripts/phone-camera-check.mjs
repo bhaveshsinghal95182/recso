@@ -99,6 +99,39 @@ try {
       }) === true,
   );
 
+  // Audio captured natively goes into the video's own track, which is what
+  // removes the offset nobody could measure: sidecars start whenever a device
+  // finishes opening, and the mux could only guess how late that was.
+  const audio = (input) => plan.planNativeAudio({ platform: 'win32', ...input });
+
+  check(
+    'system audio is captured natively on the native path',
+    audio({ useSingularClock: true, recordSystemAudio: true }).systemAudio === true,
+  );
+  check(
+    'so is the microphone',
+    audio({ useSingularClock: true, recordMic: true }).microphone === true,
+  );
+  check(
+    'neither is captured when it was not asked for',
+    audio({ useSingularClock: true }).systemAudio === false &&
+      audio({ useSingularClock: true }).microphone === false,
+  );
+  check(
+    'the legacy path keeps its renderer sidecars',
+    audio({ useSingularClock: false, recordSystemAudio: true, recordMic: true }).systemAudio ===
+      false,
+  );
+  check(
+    'and so does everything that is not Windows, since this is WASAPI',
+    plan.planNativeAudio({
+      platform: 'darwin',
+      useSingularClock: true,
+      recordSystemAudio: true,
+      recordMic: true,
+    }).microphone === false,
+  );
+
   check(
     'a phone that is not sending stops the recording starting',
     plan.phoneCameraProblem({ recordCamera: true, cameraSource: 'phone' }, false) !== null,

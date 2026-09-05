@@ -242,15 +242,26 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
         recordingId = startResult.recordingId;
         recordingIdRef.current = recordingId;
         const nativeWebcamHandled = Boolean(startResult.nativeWebcamHandled);
+        // Audio the native recorder put straight into the video's own track.
+        // Recording a sidecar for it as well would reach the export twice and
+        // come out doubled -- and the whole point of capturing it natively is
+        // that there is no sidecar left to align.
+        const nativeSystemAudioHandled = Boolean(startResult.nativeSystemAudioHandled);
+        const nativeMicrophoneHandled = Boolean(startResult.nativeMicrophoneHandled);
         // A phone only ever reaches the recording through the native path, so
         // there is no renderer sidecar for it -- opening one would record this
         // machine's own webcam alongside, which is not what was asked for.
         const shouldRecordCameraSidecar =
           recordCamera && !nativeWebcamHandled && cameraSource !== 'phone';
-        const shouldRecordStandaloneMic = recordMic && (!recordCamera || nativeWebcamHandled);
+        const shouldRecordStandaloneMic =
+          recordMic && !nativeMicrophoneHandled && (!recordCamera || nativeWebcamHandled);
 
         // If no auxiliary tracks are enabled, native recording is enough.
-        if (!shouldRecordCameraSidecar && !shouldRecordStandaloneMic && !recordSystemAudio) {
+        const shouldRecordDesktopAudio = recordSystemAudio && !nativeSystemAudioHandled;
+
+        // Nothing left for the renderer to do: native capture wrote the picture
+        // and every sound that was asked for.
+        if (!shouldRecordCameraSidecar && !shouldRecordStandaloneMic && !shouldRecordDesktopAudio) {
           setState({
             status: 'recording',
             recordingId,
@@ -379,7 +390,7 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
         };
 
         let micStream: MediaStream | null = null;
-        if (recordMic) {
+        if (recordMic && !nativeMicrophoneHandled) {
           try {
             micStream = await navigator.mediaDevices.getUserMedia({
               audio: micDeviceId ? { deviceId: { exact: micDeviceId } } : true,
@@ -447,7 +458,7 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
           }
         }
 
-        if (recordSystemAudio) {
+        if (shouldRecordDesktopAudio) {
           try {
             const desktopAudioSourceId = resolveDesktopAudioSourceId();
 

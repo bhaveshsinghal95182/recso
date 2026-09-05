@@ -69,3 +69,47 @@ export function phoneCameraProblem(config: PhoneReadiness, phoneLive: boolean): 
 
   return null;
 }
+
+export interface NativeAudioInput {
+  recordSystemAudio?: boolean;
+  recordMic?: boolean;
+  /** Whether the recording is going through the native path at all. */
+  useSingularClock: boolean;
+  /** WASAPI is Windows-only, so everywhere else keeps the renderer sidecars. */
+  platform: string;
+}
+
+export interface NativeAudioPlan {
+  /** Capture what the machine is playing, into the video's own track. */
+  systemAudio: boolean;
+  /** Capture the default microphone, into the same track. */
+  microphone: boolean;
+}
+
+/**
+ * Which audio the native recorder should capture itself.
+ *
+ * The alternative -- and what this replaces -- is recording each source in the
+ * renderer as its own file and muxing them afterwards. That cannot work
+ * properly: the sidecars start whenever `getUserMedia` finishes opening a
+ * device, which is after the IPC round trip and after native capture has
+ * already begun, and nothing records *when*. The offset then has to be inferred
+ * from the difference in durations, which assumes the whole gap was warm-up at
+ * the start. It is a guess, and when it is wrong the audio is a second out with
+ * nothing on screen to say so.
+ *
+ * Captured natively there is no offset to guess. The audio is written into the
+ * same encoder as the picture, in buffers sized against the picture's own frame
+ * timestamps, and zero-padded while a device is still starting -- so the silence
+ * during warm-up lands exactly where the silence actually was.
+ *
+ * Only on the native path, and only on Windows, since this is WASAPI.
+ */
+export function planNativeAudio(config: NativeAudioInput): NativeAudioPlan {
+  const available = config.useSingularClock && config.platform === 'win32';
+
+  return {
+    systemAudio: available && Boolean(config.recordSystemAudio),
+    microphone: available && Boolean(config.recordMic),
+  };
+}
