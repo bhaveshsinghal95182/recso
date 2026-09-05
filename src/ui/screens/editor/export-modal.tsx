@@ -212,6 +212,13 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
       const plan = await planExport(shared);
 
       if (plan.native) {
+        if (plan.omissions.length > 0) {
+          console.info(
+            '[Export] Drawing through the engine without:',
+            plan.omissions.map((omission) => omission.label).join(', '),
+          );
+        }
+
         // The engine writes the file itself. Nothing comes back through the
         // renderer, which is the whole reason a recording larger than renderer
         // memory can be exported at all.

@@ -16,6 +16,22 @@ export interface UnsupportedFeature {
   label: string;
   /** Why it is missing, in one clause. */
   detail: string;
+  /**
+   * Whether this is worth refusing the engine over.
+   *
+   * `blocking` means the output would be *wrong* -- a camera visible where it
+   * should be hidden, a zoom that never happens, layers in the wrong order.
+   * Those send an export back to the Canvas2D path, slow and memory-bound as it
+   * is, because a fast export of the wrong video is not an export.
+   *
+   * `cosmetic` means the picture is right and slightly plainer. Those are drawn
+   * without the flourish and reported instead, because refusing over one would
+   * mean the engine never ran at all: the default webcam style carries three
+   * blurred shadow layers, so treating that as blocking sent *every* export with
+   * a camera down the old path -- including the large ones the engine exists
+   * for.
+   */
+  severity: 'blocking' | 'cosmetic';
 }
 
 export function unsupportedFeatures(config: CompositionConfig): UnsupportedFeature[] {
@@ -25,6 +41,7 @@ export function unsupportedFeatures(config: CompositionConfig): UnsupportedFeatu
     missing.push({
       label: 'Webcam shadow',
       detail: 'needs a blur pass; the box, its radius and its border do render',
+      severity: 'cosmetic',
     });
   }
 
@@ -32,6 +49,7 @@ export function unsupportedFeatures(config: CompositionConfig): UnsupportedFeatu
     missing.push({
       label: 'Webcam cuts',
       detail: 'the camera stays visible through spans that should hide it',
+      severity: 'blocking',
     });
   }
 
@@ -39,6 +57,7 @@ export function unsupportedFeatures(config: CompositionConfig): UnsupportedFeatu
     missing.push({
       label: 'Webcam zoom regions',
       detail: 'per-region camera size and the full-canvas transition',
+      severity: 'blocking',
     });
   }
 
@@ -48,6 +67,7 @@ export function unsupportedFeatures(config: CompositionConfig): UnsupportedFeatu
       missing.push({
         label: 'Layer reordering',
         detail: 'the engine draws background, video, webcam, cursor in that order',
+        severity: 'blocking',
       });
     }
   }
@@ -56,6 +76,7 @@ export function unsupportedFeatures(config: CompositionConfig): UnsupportedFeatu
     missing.push({
       label: 'Legacy zoom keyframes',
       detail: 'only zoom regions are read; re-save the project to convert them',
+      severity: 'blocking',
     });
   }
 

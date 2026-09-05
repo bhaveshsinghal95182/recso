@@ -523,6 +523,13 @@ export function EnginePreview() {
                 {gpuGaps.map((gap) => (
                   <li key={gap.label}>
                     <span className="font-medium">{gap.label}</span> — {gap.detail}
+                    {/* Cosmetic gaps do not send an export back to the canvas
+                        path, and saying so matters: the default webcam shadow
+                        is one, and it would otherwise read as "your export will
+                        be wrong" on every recording with a camera. */}
+                    {gap.severity === 'cosmetic' && (
+                      <span className="opacity-60"> (export still uses the engine)</span>
+                    )}
                   </li>
                 ))}
               </ul>

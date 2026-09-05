@@ -24,10 +24,19 @@ import { resolveProjectWebcamSourcePath } from './source-paths';
 import type { EngineCanvasExportOptions } from './types';
 
 export interface ExportPlan {
-  /** Whether the engine can draw this composition without losing anything. */
+  /** Whether the engine can draw this composition correctly. */
   native: boolean;
   /** What sent it back to the canvas path. Empty when `native` is true. */
   blockers: UnsupportedFeature[];
+  /**
+   * Cosmetic details the engine will skip, when it runs.
+   *
+   * Reported rather than refused over. The webcam shadow is the whole reason
+   * this distinction exists: the default style has three blurred layers, so
+   * treating it as blocking meant every export with a camera took the Canvas2D
+   * path -- the slow, memory-bound one the engine was made to replace.
+   */
+  omissions: UnsupportedFeature[];
   composition: CompositionConfig;
   output: { width: number; height: number };
   webcamSourcePath: string | undefined;
@@ -87,11 +96,14 @@ export async function planExport({
     mouseEvents,
   });
 
-  const blockers = unsupportedFeatures(composition);
+  const gaps = unsupportedFeatures(composition);
+  const blockers = gaps.filter((gap) => gap.severity === 'blocking');
+  const omissions = gaps.filter((gap) => gap.severity === 'cosmetic');
 
   return {
     native: blockers.length === 0,
     blockers,
+    omissions,
     composition,
     output,
     webcamSourcePath,
