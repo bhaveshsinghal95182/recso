@@ -319,6 +319,8 @@ export const engineBridge = {
     setWebcamCuts: (spans: { startMs: number; endMs: number }[]) =>
       invoke('engine:player:webcam-cuts', spans),
     setLayerOrder: (order: string[]) => invoke('engine:player:layer-order', order),
+    setWebcamZoomRegions: (regions: unknown[]) =>
+      invoke('engine:player:webcam-zoom-regions', regions),
     cursorSampleCount: () => invoke('engine:player:cursor-sample-count'),
     cursorImageCount: () => invoke('engine:player:cursor-image-count'),
 

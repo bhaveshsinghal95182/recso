@@ -30,7 +30,7 @@ use crate::engine::render::{
   Background, BackgroundRequest, CursorEffects, EffectParams, Layer, RenderChain, SourceCrop,
   VideoLayout,
 };
-use crate::engine::zoom::{ZoomRegion, ZoomTrack};
+use crate::engine::zoom::{WebcamZoomRegion, WebcamZoomTrack, ZoomRegion, ZoomTrack};
 
 pub struct Options {
   pub input: String,
@@ -77,6 +77,8 @@ pub struct Options {
   pub webcam_cuts: Vec<(f64, f64)>,
   /// Which of the three drawable layers sits on top of which, bottom first.
   pub layer_order: [Layer; 3],
+  /// Spans where the camera changes size or takes the whole frame.
+  pub webcam_zoom_regions: Vec<WebcamZoomRegion>,
   /// The zoom/pan timeline. Empty exports unzoomed.
   pub zoom_regions: Vec<ZoomRegion>,
   /// Every file contributing sound, with the offset that puts it on the screen
@@ -363,6 +365,7 @@ fn run(shared: &Arc<Shared>, options: Options) -> Result<()> {
   chain.set_cursor_effects(options.cursor_effects);
   chain.set_webcam_cuts(options.webcam_cuts);
   chain.set_layer_order(options.layer_order);
+  chain.set_webcam_zoom_regions(WebcamZoomTrack::new(options.webcam_zoom_regions));
   chain.set_zoom_track(ZoomTrack::new(options.zoom_regions));
   chain.set_source_crop(options.crop);
 

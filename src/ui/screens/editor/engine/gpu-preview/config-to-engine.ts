@@ -17,7 +17,7 @@
  *   until the first cut and wrong after it.
  */
 
-import type { EngineCutRegion, EngineZoomRegion } from '@/electron';
+import type { EngineCutRegion, EngineWebcamZoomRegion, EngineZoomRegion } from '@/electron';
 import type { Project } from '@/types';
 
 import {
@@ -187,6 +187,59 @@ function legacyZoomRegions(
 }
 
 /**
+ * Webcam zoom regions, each carrying the box the camera sits in while it holds.
+ *
+ * The layout is resolved here rather than in the engine on purpose. The anchor
+ * grid, the margin and the aspect fit are one formula and it lives on this
+ * side; a second copy in Rust is precisely how a camera ends up one size in the
+ * preview and another in the export. So the engine is given two rectangles and
+ * asked to ease between them, which is arithmetic it cannot get wrong.
+ *
+ * The target height matches `computeActiveWebcamHeightRatio`: the region's own
+ * override when it has one, otherwise the base scaled by the region's zoom
+ * level, clamped to the same bounds the size control uses.
+ */
+function toEngineWebcamZoomRegions(
+  config: CompositionConfig,
+  canvas: CanvasSize,
+): EngineWebcamZoomRegion[] {
+  const webcam = config.webcam;
+  const regions = config.webcamZoomRegions;
+  if (!webcam?.enabled || !regions?.length) {
+    return [];
+  }
+
+  const baseHeightRatio = webcam.heightRatio;
+
+  return regions.map((region) => {
+    const explicit = Number.isFinite(region.webcamHeightRatio)
+      ? (region.webcamHeightRatio as number)
+      : undefined;
+    const zoomLevel = Number.isFinite(region.zoomLevel) ? region.zoomLevel : 1;
+    const target = Math.min(
+      0.75,
+      Math.max(0.08, explicit ?? baseHeightRatio * Math.max(0.1, zoomLevel)),
+    );
+
+    // `layout` cleared so the box is recomputed at the region's height rather
+    // than handing back the one already resolved for the base.
+    const box = computeWebcamLayout(canvas.width, canvas.height, {
+      ...webcam,
+      heightRatio: target,
+      layout: undefined,
+    });
+
+    return {
+      startMs: region.startMs,
+      endMs: region.endMs,
+      easeDurationMs: Math.max(0, region.easeDurationMs),
+      rect: { x: box.x, y: box.y, width: box.width, height: box.height },
+      fullScreen: region.webcamFullScreen === true,
+    };
+  });
+}
+
+/**
  * The layer stack, bottom first, in the names the engine understands.
  *
  * `background` goes through untouched: the engine accepts and skips it, being
@@ -231,6 +284,8 @@ export interface ResolvedComposition {
   cuts: EngineCutRegion[];
   /** Bottom first. Empty means the engine's default order. */
   layerOrder: string[];
+  /** Spans where the camera changes size, or takes the whole frame. */
+  webcamZoomRegions: EngineWebcamZoomRegion[];
   /**
    * Spans where the camera is not drawn, in composition time.
    *
@@ -359,6 +414,7 @@ export async function resolveComposition(
     cuts: toEngineCuts(cuts),
     webcamCuts: toEngineCuts(config.webcamCuts),
     layerOrder: toEngineLayerOrder(config),
+    webcamZoomRegions: toEngineWebcamZoomRegions(config, canvas),
   };
 }
 
@@ -397,4 +453,5 @@ export async function applyComposition(
   await player.setCuts(resolved.cuts);
   await player.setWebcamCuts(resolved.webcamCuts);
   await player.setLayerOrder(resolved.layerOrder);
+  await player.setWebcamZoomRegions(resolved.webcamZoomRegions);
 }

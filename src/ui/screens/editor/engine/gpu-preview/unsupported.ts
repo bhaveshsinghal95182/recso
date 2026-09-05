@@ -45,13 +45,5 @@ export function unsupportedFeatures(config: CompositionConfig): UnsupportedFeatu
     });
   }
 
-  if (config.webcamZoomRegions?.length) {
-    missing.push({
-      label: 'Webcam zoom regions',
-      detail: 'per-region camera size and the full-canvas transition',
-      severity: 'blocking',
-    });
-  }
-
   return missing;
 }

@@ -391,3 +391,227 @@ mod tests {
     assert_eq!(track.state_at(2000.0, video()).scale, 2.0);
   }
 }
+
+// ---------------------------------------------------------------------------
+// The camera's own zoom: a size change, or the whole canvas.
+// ---------------------------------------------------------------------------
+
+/// One span where the camera grows, or takes over the frame.
+///
+/// `rect` is the box at this region's height, **already laid out by the
+/// caller**. The engine interpolates between rectangles rather than
+/// recomputing one from a height ratio, because the placement formula -- the
+/// anchor grid, the margin, the aspect fit -- lives on the JavaScript side on
+/// purpose, and a second copy here is exactly how a webcam ends up a different
+/// size in the preview than in the export.
+///
+/// The compositor eases the *ratio* and then lays out; this eases the laid-out
+/// rectangle. Those agree wherever the layout is linear in the ratio, which it
+/// is until a clamp engages -- and the ratio is already clamped before it gets
+/// this far.
+#[derive(Clone, Copy, Debug)]
+pub struct WebcamZoomRegion {
+  pub start_ms: f64,
+  pub end_ms: f64,
+  pub ease_duration_ms: f64,
+  /// The camera's box while this region is fully in effect.
+  pub rect: Rect,
+  /// Whether the camera expands to fill the canvas over this span.
+  pub full_screen: bool,
+}
+
+/// What the camera should be doing at one instant.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WebcamZoomState {
+  /// The box to draw, already eased between the layout's own and the region's.
+  pub rect: Rect,
+  /// 0 leaves the box alone; 1 is the whole canvas, with the radius, border and
+  /// shape dissolved on the way.
+  pub full_screen: f32,
+}
+
+#[derive(Default)]
+pub struct WebcamZoomTrack {
+  regions: Vec<WebcamZoomRegion>,
+}
+
+impl WebcamZoomTrack {
+  pub fn new(regions: Vec<WebcamZoomRegion>) -> Self {
+    Self { regions }
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self.regions.is_empty()
+  }
+
+  /// The camera's box and full-canvas progress at this instant.
+  ///
+  /// The first region covering the timestamp wins, matching the compositor --
+  /// overlapping regions are the caller's problem either way, and "the first
+  /// one" is at least a rule.
+  ///
+  /// Both ends are inclusive, again matching, so a region ending exactly on a
+  /// frame still owns that frame.
+  pub fn state_at(&self, timestamp_ms: f64, base: Rect) -> WebcamZoomState {
+    for region in &self.regions {
+      if timestamp_ms < region.start_ms || timestamp_ms > region.end_ms {
+        continue;
+      }
+
+      let eased = webcam_ease_at(region, timestamp_ms);
+
+      return WebcamZoomState {
+        rect: lerp_rect(base, region.rect, eased),
+        // The size eases whether or not this is a full-canvas region; the
+        // expansion only does when it is one.
+        full_screen: if region.full_screen { eased } else { 0.0 },
+      };
+    }
+
+    WebcamZoomState {
+      rect: base,
+      full_screen: 0.0,
+    }
+  }
+}
+
+/// Ease for a webcam region: 0 at the edges, 1 while held.
+///
+/// The same shape as `ease_at` but against a `WebcamZoomRegion`, and worth
+/// keeping separate rather than making both generic -- they are two timelines
+/// that happen to share a curve, not one timeline used twice.
+fn webcam_ease_at(region: &WebcamZoomRegion, timestamp_ms: f64) -> f32 {
+  let ease = region.ease_duration_ms.max(0.0);
+  if ease <= 0.0 {
+    return 1.0;
+  }
+
+  if timestamp_ms < region.start_ms + ease {
+    return smoothstep(((timestamp_ms - region.start_ms) / ease) as f32);
+  }
+
+  if timestamp_ms > region.end_ms - ease {
+    return smoothstep(((region.end_ms - timestamp_ms) / ease) as f32);
+  }
+
+  1.0
+}
+
+/// Straight-line blend between two rectangles.
+pub fn lerp_rect(from: Rect, to: Rect, amount: f32) -> Rect {
+  let mix = |a: f32, b: f32| a + (b - a) * amount;
+  Rect {
+    x: mix(from.x, to.x),
+    y: mix(from.y, to.y),
+    width: mix(from.width, to.width),
+    height: mix(from.height, to.height),
+  }
+}
+
+#[cfg(test)]
+mod webcam_zoom_tests {
+  use super::*;
+
+  const BASE: Rect = Rect {
+    x: 100.0,
+    y: 100.0,
+    width: 200.0,
+    height: 100.0,
+  };
+  const GROWN: Rect = Rect {
+    x: 50.0,
+    y: 50.0,
+    width: 400.0,
+    height: 200.0,
+  };
+
+  fn region(full_screen: bool, ease_ms: f64) -> WebcamZoomRegion {
+    WebcamZoomRegion {
+      start_ms: 1000.0,
+      end_ms: 3000.0,
+      ease_duration_ms: ease_ms,
+      rect: GROWN,
+      full_screen,
+    }
+  }
+
+  #[test]
+  fn outside_every_region_the_camera_is_where_it_was_laid_out() {
+    let track = WebcamZoomTrack::new(vec![region(false, 200.0)]);
+
+    assert_eq!(track.state_at(0.0, BASE).rect, BASE);
+    assert_eq!(track.state_at(5000.0, BASE).rect, BASE);
+    assert_eq!(track.state_at(0.0, BASE).full_screen, 0.0);
+  }
+
+  #[test]
+  fn held_in_the_middle_it_is_the_region_s_own_box() {
+    let track = WebcamZoomTrack::new(vec![region(false, 200.0)]);
+    assert_eq!(track.state_at(2000.0, BASE).rect, GROWN);
+  }
+
+  #[test]
+  fn the_edges_ease_between_the_two() {
+    let track = WebcamZoomTrack::new(vec![region(false, 200.0)]);
+
+    // Halfway through the ease is smoothstep(0.5) = 0.5 exactly.
+    let midway = track.state_at(1100.0, BASE).rect;
+    assert!((midway.width - 300.0).abs() < 0.01, "width {}", midway.width);
+    assert!((midway.x - 75.0).abs() < 0.01, "x {}", midway.x);
+
+    // And it comes back down the other end.
+    let leaving = track.state_at(2900.0, BASE).rect;
+    assert!((leaving.width - 300.0).abs() < 0.01, "width {}", leaving.width);
+  }
+
+  #[test]
+  fn both_ends_are_inclusive() {
+    // A region ending exactly on a frame still owns that frame, matching the
+    // compositor -- otherwise the last frame of a zoom snaps back.
+    let track = WebcamZoomTrack::new(vec![region(false, 0.0)]);
+    assert_eq!(track.state_at(1000.0, BASE).rect, GROWN);
+    assert_eq!(track.state_at(3000.0, BASE).rect, GROWN);
+    assert_eq!(track.state_at(3000.1, BASE).rect, BASE);
+  }
+
+  #[test]
+  fn full_screen_progress_follows_the_same_ease() {
+    let track = WebcamZoomTrack::new(vec![region(true, 200.0)]);
+
+    assert_eq!(track.state_at(1000.0, BASE).full_screen, 0.0);
+    assert!((track.state_at(1100.0, BASE).full_screen - 0.5).abs() < 0.01);
+    assert_eq!(track.state_at(2000.0, BASE).full_screen, 1.0);
+  }
+
+  #[test]
+  fn a_size_region_does_not_expand_the_camera() {
+    // Growing the box and taking over the frame are separate things: a region
+    // that only changes the size must not dissolve the corners as well.
+    let track = WebcamZoomTrack::new(vec![region(false, 0.0)]);
+    assert_eq!(track.state_at(2000.0, BASE).full_screen, 0.0);
+  }
+
+  #[test]
+  fn no_ease_snaps_straight_to_the_region() {
+    let track = WebcamZoomTrack::new(vec![region(true, 0.0)]);
+    let state = track.state_at(1000.0, BASE);
+    assert_eq!(state.rect, GROWN);
+    assert_eq!(state.full_screen, 1.0);
+  }
+
+  #[test]
+  fn the_first_covering_region_wins() {
+    let second = WebcamZoomRegion {
+      rect: Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 10.0,
+        height: 10.0,
+      },
+      ..region(false, 0.0)
+    };
+    let track = WebcamZoomTrack::new(vec![region(false, 0.0), second]);
+
+    assert_eq!(track.state_at(2000.0, BASE).rect, GROWN);
+  }
+}

@@ -298,6 +298,66 @@ try {
     skip('layer order decides what covers what', 'no camera in this run')
   }
 
+  // Webcam zoom regions: the camera grows for a span, or takes the whole frame.
+  // The engine eases between the box it was given and the one the region
+  // carries, so both are laid out here and only the interpolation is its job.
+  if (hasWebcam) {
+    const smallBox = { x: 1400, y: 700, width: 320, height: 180 }
+    player.setWebcamLayout({ ...smallBox, shape: 'rect', cornerRadius: 0, opacity: 1 })
+    player.setWebcamZoomRegions([])
+    await sleep(400)
+    player.seek(Math.min(10, info.duration * 0.5), true)
+    await waitFrame()
+    await sleep(300)
+    const small = player.snapshotBgra()
+
+    // A region held over the sampled frame, with no ease so it is fully in
+    // effect rather than partway through one.
+    player.setWebcamZoomRegions([
+      {
+        startMs: -10_000,
+        endMs: 10_000,
+        easeDurationMs: 0,
+        rect: { x: 200, y: 200, width: 900, height: 500 },
+        fullScreen: false,
+      },
+    ])
+    await sleep(400)
+    const grown = player.snapshotBgra()
+
+    // Somewhere inside the grown box but well outside the small one.
+    const onlyWhenGrown = (buf) => averageBgra(buf, stride, 400, 400, 60, 60)
+    check(
+      'a webcam zoom region grows the camera',
+      difference(onlyWhenGrown(small), onlyWhenGrown(grown)) > 12,
+      `delta ${difference(onlyWhenGrown(small), onlyWhenGrown(grown)).toFixed(1)}`,
+    )
+
+    // Full canvas: the camera should reach a corner it could never reach as a box.
+    player.setWebcamZoomRegions([
+      {
+        startMs: -10_000,
+        endMs: 10_000,
+        easeDurationMs: 0,
+        rect: smallBox,
+        fullScreen: true,
+      },
+    ])
+    await sleep(400)
+    const expanded = player.snapshotBgra()
+
+    const farCorner = (buf) => averageBgra(buf, stride, 30, info.codedHeight - 90, 60, 60)
+    check(
+      'and full-canvas mode fills the frame with it',
+      difference(farCorner(small), farCorner(expanded)) > 12,
+      `delta ${difference(farCorner(small), farCorner(expanded)).toFixed(1)}`,
+    )
+
+    player.setWebcamZoomRegions([])
+  } else {
+    skip('a webcam zoom region grows the camera', 'no camera in this run')
+  }
+
   // An empty box is the off switch, and must cost nothing.
   player.setWebcamLayout({ x: 0, y: 0, width: 0, height: 0 })
   await sleep(400)

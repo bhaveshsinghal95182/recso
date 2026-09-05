@@ -37,19 +37,19 @@ GPU engine (Rust/D3D11, in `velocity/src/engine/`). This document says
 
 ---
 
-> **Status.** The engine is now the default path for recording, preview and
-> export, with the compositor kept as a fallback. Steps 1-4 of the order at the
-> bottom are done, plus zoom, cuts, audio-on-export and the whole of the cursor.
-> What is left is audio in playback, the remaining webcam and layout work, and
-> the test suite before mediabunny can actually be deleted.
+> **Status.** The engine draws every composition the editor can describe, bar
+> one cosmetic detail. Recording, preview and export all run through it by
+> default, and nothing routes an export back to the Canvas2D path any more --
+> webcam cuts, webcam zoom regions, layer ordering and legacy zoom keyframes
+> were the four that did, and they are done.
 >
-> **Why it flipped when it did.** Not because parity arrived -- it has not. The
-> Canvas2D export reads the whole recording into a `Blob` and returns an
-> `ArrayBuffer`, and V8 caps both near 2GB, so a long 4K take was not slow
-> through that path, it was impossible. The engine streams through Media
-> Foundation and writes the output itself, so the recording's size stops
-> mattering. A project using something the engine cannot draw still falls back,
-> and is told which feature did it.
+> Webcam shadows are what is left, and they are cosmetic: the engine draws the
+> box, its radius and its border, and skips the blur behind it. That is reported
+> rather than refused over, because refusing meant the engine never ran at all
+> for anyone with a camera -- the default style carries three blurred layers.
+>
+> What remains is not parity but the things neither path has: audio as the
+> master clock, and multiple clips. Then the test suite, then mediabunny goes.
 
 ---
 
@@ -139,21 +139,21 @@ colour is the exception, because a clear is free.
 
 ### Webcam overlay
 
-| Feature                               | Compositor | Engine     | Notes                                                               |
-| ------------------------------------- | ---------- | ---------- | ------------------------------------------------------------------- |
-| Anchor (3×3 grid)                     | yes        | via caller | `webcam-anchor.ts` resolves to pixels; the engine takes pixels.     |
-| Height ratio + margin                 | yes        | via caller | Same — resolved on the JS side by design.                           |
-| Aspect-ratio-driven box               | yes        | via caller | The box comes from config `aspectRatio`, not the camera's.          |
-| Fit without distortion                | yes        | yes        | Both centre-crop. See "already agreed" below.                       |
-| Shape: circle                         | yes        | yes        | `OverlayShape::Ellipse`.                                            |
-| Shape: rect landscape/portrait/square | yes        | yes        | All three are a rect with an aspect ratio the caller picks.         |
-| Corner radius                         | yes        | yes        |                                                                     |
-| Opacity                               | yes        | yes        |                                                                     |
-| Border (width, colour)                | yes        | **yes**    | The same `ps_solid` quad the video layer's border uses.             |
-| Shadows (multi-layer)                 | yes        | **no**     | `shadows[]` — offset, blur, colour, each its own `ctx.shadow*`.     |
-| ~~Webcam cuts (hide by region)~~      | yes        | yes        | `HiddenSpans`, staged per slot like the cursor's rect.              |
-| Zoom-driven height override           | yes        | **no**     | `webcamZoomRegions` override `heightRatio` for a span.              |
-| Zoom-driven full-canvas mode          | yes        | **no**     | Blends box → full canvas, dropping radius/border/shadow as it goes. |
+| Feature                               | Compositor | Engine     | Notes                                                              |
+| ------------------------------------- | ---------- | ---------- | ------------------------------------------------------------------ |
+| Anchor (3×3 grid)                     | yes        | via caller | `webcam-anchor.ts` resolves to pixels; the engine takes pixels.    |
+| Height ratio + margin                 | yes        | via caller | Same — resolved on the JS side by design.                          |
+| Aspect-ratio-driven box               | yes        | via caller | The box comes from config `aspectRatio`, not the camera's.         |
+| Fit without distortion                | yes        | yes        | Both centre-crop. See "already agreed" below.                      |
+| Shape: circle                         | yes        | yes        | `OverlayShape::Ellipse`.                                           |
+| Shape: rect landscape/portrait/square | yes        | yes        | All three are a rect with an aspect ratio the caller picks.        |
+| Corner radius                         | yes        | yes        |                                                                    |
+| Opacity                               | yes        | yes        |                                                                    |
+| Border (width, colour)                | yes        | **yes**    | The same `ps_solid` quad the video layer's border uses.            |
+| Shadows (multi-layer)                 | yes        | **no**     | `shadows[]` — offset, blur, colour, each its own `ctx.shadow*`.    |
+| ~~Webcam cuts (hide by region)~~      | yes        | yes        | `HiddenSpans`, staged per slot like the cursor's rect.             |
+| ~~Zoom-driven height override~~       | yes        | yes        | The caller lays out each region's box; the engine eases between.   |
+| ~~Zoom-driven full-canvas mode~~      | yes        | yes        | Blends box → full canvas, dissolving radius and border on the way. |
 
 ### Cursor
 

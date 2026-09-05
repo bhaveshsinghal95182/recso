@@ -48,6 +48,7 @@ import type {
   SourceCropSpec,
   VideoPlacement,
   WebcamOverlay,
+  WebcamZoomRegionSpec,
   ZoomRegion,
 } from '../types/engine.types.js';
 
@@ -255,6 +256,10 @@ export function registerEngineHandlers(): void {
 
   ipcMain.handle('engine:player:layer-order', (_event, order: string[]) => {
     requirePlayer().setLayerOrder(order);
+  });
+
+  ipcMain.handle('engine:player:webcam-zoom-regions', (_event, regions: WebcamZoomRegionSpec[]) => {
+    requirePlayer().setWebcamZoomRegions(regions);
   });
 
   ipcMain.handle('engine:player:cursor-sample-count', () => requirePlayer().cursorSampleCount());

@@ -139,6 +139,8 @@ export interface EngineExportOptions {
   webcamCuts?: EngineCutRegion[];
   /** Which layer sits on top of which, bottom first. */
   layerOrder?: string[];
+  /** Spans where the camera changes size, or expands to the whole frame. */
+  webcamZoomRegions?: EngineWebcamZoomRegion[];
   /** Every file contributing sound. Omit it and the export is silent. */
   audioSources?: EngineAudioSource[];
 }
@@ -384,6 +386,23 @@ export interface PhoneCameraState extends PhoneCameraSession {
   lastError?: string;
 }
 
+/**
+ * One span where the camera changes size, or takes the whole frame.
+ *
+ * `rect` is the box the camera sits in while the region is held, already laid
+ * out by the caller -- the engine eases between rectangles rather than
+ * recomputing one, so the placement formula stays in the editor.
+ */
+export interface EngineWebcamZoomRegion {
+  startMs: number;
+  endMs: number;
+  /** Milliseconds of smoothstep at each end. 0 snaps. */
+  easeDurationMs: number;
+  rect: EngineVideoPlacement;
+  /** Expand to the whole canvas, dissolving radius and border on the way. */
+  fullScreen?: boolean;
+}
+
 export interface EngineCursorPoint {
   timestampMs: number;
   /** 0..1 across the source frame, so it survives the video being scaled. */
@@ -490,6 +509,8 @@ export interface EngineAPI {
     setWebcamCuts: (spans: EngineCutRegion[]) => Promise<void>;
     /** Which layer sits on top of which, bottom first. Empty means the default. */
     setLayerOrder: (order: string[]) => Promise<void>;
+    /** Spans where the camera changes size, or expands to the whole frame. */
+    setWebcamZoomRegions: (regions: EngineWebcamZoomRegion[]) => Promise<void>;
     /** Applied asynchronously, so this reads 0 for a moment after setCursorTrack. */
     cursorSampleCount: () => Promise<number>;
     /** Pointer bitmaps resident. Asynchronous like the sample count. */

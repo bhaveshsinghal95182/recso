@@ -34,7 +34,7 @@ use crate::engine::render::{
   SourceCrop,
   VideoLayout as RenderVideoLayout,
 };
-use crate::engine::zoom::{ZoomRegion, ZoomTrack};
+use crate::engine::zoom::{WebcamZoomRegion, WebcamZoomTrack, ZoomRegion, ZoomTrack};
 
 /// How far ahead of the playhead we decode.
 ///
@@ -222,6 +222,7 @@ enum Command {
   SetCursorEffects(CursorEffects),
   SetWebcamCuts(Vec<(f64, f64)>),
   SetLayerOrder([Layer; 3]),
+  SetWebcamZoomRegions(Vec<WebcamZoomRegion>),
   /// Read the composited frame currently on screen back to system memory.
   ///
   /// Serviced on the decode thread because it owns the pool. Replying through a
@@ -578,6 +579,11 @@ impl Player {
     self.shared.space.notify_all();
   }
 
+  pub fn set_webcam_zoom_regions(&self, regions: Vec<WebcamZoomRegion>) {
+    let _ = self.tx.send(Command::SetWebcamZoomRegions(regions));
+    self.shared.space.notify_all();
+  }
+
   pub fn seek(&self, ms: f64, mode: SeekMode) {
     // Against the edit's length, not the file's: with cuts the two differ, and
     // clamping to the file would let the playhead sit past the end of what
@@ -842,6 +848,7 @@ fn decode_loop(
     let mut pending_cursor_effects: Option<CursorEffects> = None;
     let mut pending_webcam_cuts: Option<Vec<(f64, f64)>> = None;
     let mut pending_layer_order: Option<[Layer; 3]> = None;
+    let mut pending_webcam_zoom: Option<Vec<WebcamZoomRegion>> = None;
     let mut stopping = false;
     loop {
       match rx.try_recv() {
@@ -865,6 +872,7 @@ fn decode_loop(
         Ok(Command::SetCursorEffects(effects)) => pending_cursor_effects = Some(effects),
         Ok(Command::SetWebcamCuts(spans)) => pending_webcam_cuts = Some(spans),
         Ok(Command::SetLayerOrder(order)) => pending_layer_order = Some(order),
+        Ok(Command::SetWebcamZoomRegions(regions)) => pending_webcam_zoom = Some(regions),
         // Answered inline rather than coalesced: a snapshot is a question, and
         // dropping all but the last would leave earlier callers waiting forever.
         Ok(Command::Snapshot(reply)) => {
@@ -1018,6 +1026,11 @@ fn decode_loop(
 
     if let Some(order) = pending_layer_order {
       chain.set_layer_order(order);
+      needs_repaint = true;
+    }
+
+    if let Some(regions) = pending_webcam_zoom {
+      chain.set_webcam_zoom_regions(WebcamZoomTrack::new(regions));
       needs_repaint = true;
     }
 

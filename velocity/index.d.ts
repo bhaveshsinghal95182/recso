@@ -183,6 +183,13 @@ export declare class VideoPlayer {
    */
   setCursorTrack(samples: Array<CursorPoint>): void
   /**
+   * Spans where the camera changes size, or expands to the whole frame.
+   *
+   * Each carries the box the camera sits in while that region is held; the
+   * engine eases between that and the one `setWebcamLayout` gave it.
+   */
+  setWebcamZoomRegions(regions: Array<WebcamZoomRegionSpec>): void
+  /**
    * Which layer sits on top of which, bottom first.
    *
    * Names as the editor uses them. `background` is accepted and ignored, being
@@ -513,6 +520,8 @@ export interface ExportOptions {
    * than a layer. Anything omitted keeps its default position.
    */
   layerOrder?: Array<string>
+  /** Spans where the camera changes size, or expands to the whole frame. */
+  webcamZoomRegions?: Array<WebcamZoomRegionSpec>
 }
 
 export interface ExportProgress {
@@ -941,6 +950,30 @@ export interface WebcamOverlay {
   /** Border thickness in canvas pixels, drawn outside the box. Defaults to 0. */
   borderWidth?: number
   borderColour?: Colour
+}
+
+/**
+ * One span where the camera changes size, or takes the whole frame.
+ *
+ * `rect` is the camera's box while this region is fully in effect, already
+ * laid out by the caller. The engine eases between rectangles rather than
+ * recomputing one from a height ratio, because the placement formula -- the
+ * anchor grid, the margin, the aspect fit -- lives in the editor on purpose,
+ * and a second copy of it is how a camera ends up one size in the preview and
+ * another in the export.
+ */
+export interface WebcamZoomRegionSpec {
+  startMs: number
+  endMs: number
+  /** Milliseconds of smoothstep at each end. 0 snaps. */
+  easeDurationMs: number
+  /** Where the camera sits while this region is held. */
+  rect: VideoPlacement
+  /**
+   * Whether the camera expands to the whole canvas over this span, dissolving
+   * its corner radius and border as it goes.
+   */
+  fullScreen?: boolean
 }
 
 export interface WindowInfo {

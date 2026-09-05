@@ -148,6 +148,8 @@ export interface ExportOptions {
   webcamCuts?: CutRegion[];
   /** Which layer sits on top of which, bottom first. */
   layerOrder?: string[];
+  /** Spans where the camera changes size, or expands to the whole frame. */
+  webcamZoomRegions?: WebcamZoomRegionSpec[];
   /**
    * Every file contributing sound. Omit it and the export is silent.
    *
@@ -156,6 +158,23 @@ export interface ExportOptions {
    * leaving it out of this list.
    */
   audioSources?: EngineAudioSource[];
+}
+
+/**
+ * One span where the camera changes size, or takes the whole frame.
+ *
+ * `rect` is the box the camera sits in while the region is held, already laid
+ * out by the caller -- the engine eases between rectangles rather than
+ * recomputing one, so the placement formula stays in one place.
+ */
+export interface WebcamZoomRegionSpec {
+  startMs: number;
+  endMs: number;
+  /** Milliseconds of smoothstep at each end. 0 snaps. */
+  easeDurationMs: number;
+  rect: VideoPlacement;
+  /** Expand to the whole canvas, dissolving radius and border on the way. */
+  fullScreen?: boolean;
 }
 
 /** One file contributing sound to an export. */
@@ -276,6 +295,8 @@ export interface VideoPlayerInstance {
   setWebcamCuts(spans: CutRegion[]): void;
   /** Which layer sits on top of which, bottom first. Empty means the default. */
   setLayerOrder(order: string[]): void;
+  /** Spans where the camera changes size, or expands to the whole frame. */
+  setWebcamZoomRegions(regions: WebcamZoomRegionSpec[]): void;
   /** Pointer samples the decode thread has loaded. Applied asynchronously. */
   cursorSampleCount(): number;
   /** Pointer bitmaps resident. Applied asynchronously, like the sample count. */

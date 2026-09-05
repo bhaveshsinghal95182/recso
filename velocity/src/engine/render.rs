@@ -32,7 +32,7 @@ use crate::engine::composite::{
   Overlays, Quad, Rect, SpriteTexture, UvRect, WebcamLayout,
 };
 use crate::engine::d3d::{gpu, Gpu};
-use crate::engine::zoom::{ZoomState, ZoomTrack};
+use crate::engine::zoom::{lerp_rect, WebcamZoomState, WebcamZoomTrack, ZoomState, ZoomTrack};
 
 const HLSL: &str = include_str!("shaders.hlsl");
 
@@ -378,6 +378,32 @@ struct WebcamLayer {
   bgra: ID3D11Texture2D,
 }
 
+/// The camera as one slot's frame had it.
+#[derive(Clone, Copy, Debug)]
+struct StagedWebcam {
+  /// False while a webcam cut is covering this instant.
+  visible: bool,
+  /// The box, already eased through any region that was in effect.
+  rect: Rect,
+  /// 0 is the box as laid out; 1 is the whole canvas.
+  full_screen: f32,
+}
+
+impl Default for StagedWebcam {
+  fn default() -> Self {
+    Self {
+      visible: true,
+      rect: Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 0.0,
+        height: 0.0,
+      },
+      full_screen: 0.0,
+    }
+  }
+}
+
 /// What was resolved for a slot at stage time: where the pointer goes, and
 /// which bitmap that rectangle was measured against.
 ///
@@ -459,12 +485,15 @@ pub struct RenderChain {
   webcam_hidden: HiddenSpans,
   /// Which of the three sits on top of which. Bottom first.
   layer_order: [Layer; 3],
-  /// Whether the camera was showing when each slot was staged.
+  /// Spans where the camera changes size, or takes the whole frame.
+  webcam_zoom: WebcamZoomTrack,
+  /// What the camera was doing when each slot was staged.
   ///
   /// Per slot rather than read at draw time for the same reason the cursor's
   /// rect is: a re-render after a grading change has to put the frame back the
-  /// way it was, and "the way it was" includes whether the camera was there.
-  slot_webcam_visible: Vec<bool>,
+  /// way it was, and "the way it was" includes where the camera sat, how far it
+  /// had expanded, and whether it was there at all.
+  slot_webcam: Vec<StagedWebcam>,
 
   /// The cursor image, and where it sits in each staged slot.
   ///
@@ -724,7 +753,8 @@ impl RenderChain {
       webcam_layout: WebcamLayout::default(),
       webcam_hidden: HiddenSpans::default(),
       layer_order: DEFAULT_LAYER_ORDER,
-      slot_webcam_visible: vec![true; slots.max(1)],
+      webcam_zoom: WebcamZoomTrack::default(),
+      slot_webcam: vec![StagedWebcam::default(); slots.max(1)],
       cursor: None,
       cursor_images: CursorImages::default(),
       cursor_track: CursorTrack::default(),
@@ -857,6 +887,11 @@ impl RenderChain {
   /// Which of the three drawable layers sits on top of which, bottom first.
   pub fn set_layer_order(&mut self, order: [Layer; 3]) {
     self.layer_order = order;
+  }
+
+  /// Spans where the camera changes size, or expands to the whole frame.
+  pub fn set_webcam_zoom_regions(&mut self, track: WebcamZoomTrack) {
+    self.webcam_zoom = track;
   }
 
   /// Spans of the composition to leave the camera out of.
@@ -1007,8 +1042,13 @@ impl RenderChain {
     // the zoom transform rather than pre-multiplying its position.
     self.slot_cursor[index] = self.resolve_cursor_rect(timestamp_ms);
     self.slot_zoom[index] = self.zoom_track.state_at(timestamp_ms, self.layout.rect);
-    let webcam_index = slot % self.slot_webcam_visible.len();
-    self.slot_webcam_visible[webcam_index] = !self.webcam_hidden.contains(timestamp_ms);
+    let webcam_index = slot % self.slot_webcam.len();
+    let webcam_zoom = self.webcam_zoom.state_at(timestamp_ms, self.webcam_layout.rect);
+    self.slot_webcam[webcam_index] = StagedWebcam {
+      visible: !self.webcam_hidden.contains(timestamp_ms),
+      rect: webcam_zoom.rect,
+      full_screen: webcam_zoom.full_screen,
+    };
   }
 
   /// The bitmap a sample should be drawn with: its own, or the default.
@@ -1403,9 +1443,9 @@ impl RenderChain {
     if !self.webcam_layout.is_visible() {
       return Ok(());
     }
-    // Hidden for this stretch of the composition. Staged with the frame, not
-    // read from the clock now.
-    if !self.slot_webcam_visible[slot % self.slot_webcam_visible.len()] {
+    // The camera as this frame had it, not as the playhead has it now.
+    let staged = self.slot_webcam[slot % self.slot_webcam.len()];
+    if !staged.visible {
       return Ok(());
     }
 
@@ -1416,15 +1456,30 @@ impl RenderChain {
 
     let source = &webcam.sources[index];
 
+    // Expanding to the whole canvas dissolves everything that made it a box:
+    // the corner radius, the border, and the shape itself all go, and the
+    // opacity rises to solid. Blended rather than switched, so a camera easing
+    // out to full screen does not pop its rounded corners off partway.
+    let expansion = staged.full_screen.clamp(0.0, 1.0);
+    let softened = 1.0 - expansion;
+    let box_rect = if expansion > 0.0 {
+      lerp_rect(staged.rect, Rect::covering(self.canvas_width, self.canvas_height), expansion)
+    } else {
+      staged.rect
+    };
+    let shape = if expansion > 0.0 {
+      OverlayShape::Rect
+    } else {
+      self.webcam_layout.shape
+    };
+    let corner_radius = self.webcam_layout.corner_radius * softened;
+    let border_width = self.webcam_layout.border_width * softened;
+    let opacity = self.webcam_layout.opacity + (1.0 - self.webcam_layout.opacity) * expansion;
+
     // The camera almost never matches the box the caller asked for, and a
     // stretched face is more obviously wrong than a cropped one. Resolved here
     // because this is the only place that knows the camera's real resolution.
-    let (rect, uv) = fit_source(
-      self.webcam_layout.rect,
-      webcam.width,
-      webcam.height,
-      self.webcam_layout.fit,
-    );
+    let (rect, uv) = fit_source(box_rect, webcam.width, webcam.height, self.webcam_layout.fit);
 
     unsafe {
       // Pass 1: NV12 -> BGRA, at the camera's resolution.
@@ -1447,16 +1502,16 @@ impl RenderChain {
       set_viewport(ctx, self.canvas_width, self.canvas_height);
 
       // Border first, under the camera, same as the video layer.
-      if self.webcam_layout.border_width > 0.0 {
+      if border_width > 0.0 {
         self.draw_quad_locked(
           ctx,
           dst_rtv,
           &webcam.bgra_srv,
           Quad {
-            rect: rect.expanded(self.webcam_layout.border_width),
-            shape: self.webcam_layout.shape,
-            corner_radius: self.webcam_layout.corner_radius + self.webcam_layout.border_width,
-            opacity: self.webcam_layout.opacity,
+            rect: rect.expanded(border_width),
+            shape,
+            corner_radius: corner_radius + border_width,
+            opacity,
             uv: UvRect::default(),
             grade: Grade::default(),
             fill: Fill::Solid(self.webcam_layout.border_colour),
@@ -1470,9 +1525,9 @@ impl RenderChain {
         &webcam.bgra_srv,
         Quad {
           rect,
-          shape: self.webcam_layout.shape,
-          corner_radius: self.webcam_layout.corner_radius,
-          opacity: self.webcam_layout.opacity,
+          shape,
+          corner_radius,
+          opacity,
           uv,
           grade: self.webcam_params.into(),
           fill: Fill::Texture,
