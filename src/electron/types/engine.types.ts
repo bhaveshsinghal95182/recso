@@ -144,6 +144,8 @@ export interface ExportOptions {
   cursorOpacity?: number;
   /** The click pop and the smear. Omit and the pointer draws plainly. */
   cursorEffects?: CursorEffectSpec;
+  /** Spans of the composition to leave the camera out of. */
+  webcamCuts?: CutRegion[];
   /**
    * Every file contributing sound. Omit it and the export is silent.
    *
@@ -268,6 +270,8 @@ export interface VideoPlayerInstance {
   setCursorStyle(size: number, opacity: number): void;
   /** The click pop and the smear, both resolved per frame against the track. */
   setCursorEffects(effects: CursorEffectSpec): void;
+  /** Spans of the composition to leave the camera out of. Composition time. */
+  setWebcamCuts(spans: CutRegion[]): void;
   /** Pointer samples the decode thread has loaded. Applied asynchronously. */
   cursorSampleCount(): number;
   /** Pointer bitmaps resident. Applied asynchronously, like the sample count. */

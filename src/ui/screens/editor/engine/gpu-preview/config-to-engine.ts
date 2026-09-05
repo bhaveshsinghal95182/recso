@@ -184,6 +184,14 @@ export interface ResolvedComposition {
   } | null;
   zoomRegions: EngineZoomRegion[];
   cuts: EngineCutRegion[];
+  /**
+   * Spans where the camera is not drawn, in composition time.
+   *
+   * Already mapped by the caller. A cut that takes the screen as well is gone
+   * from the timeline entirely and collapses to nothing, so what survives here
+   * is only the stretches that keep playing without the camera in them.
+   */
+  webcamCuts: EngineCutRegion[];
 }
 
 /**
@@ -300,6 +308,7 @@ export async function resolveComposition(
     cursor: resolvedCursor,
     zoomRegions: toEngineZoomRegions(config.zoomRegions),
     cuts: toEngineCuts(cuts),
+    webcamCuts: toEngineCuts(config.webcamCuts),
   };
 }
 
@@ -336,4 +345,5 @@ export async function applyComposition(
 
   await player.setZoomRegions(resolved.zoomRegions);
   await player.setCuts(resolved.cuts);
+  await player.setWebcamCuts(resolved.webcamCuts);
 }

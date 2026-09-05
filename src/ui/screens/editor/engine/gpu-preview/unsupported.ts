@@ -45,14 +45,6 @@ export function unsupportedFeatures(config: CompositionConfig): UnsupportedFeatu
     });
   }
 
-  if (config.webcamCuts?.length) {
-    missing.push({
-      label: 'Webcam cuts',
-      detail: 'the camera stays visible through spans that should hide it',
-      severity: 'blocking',
-    });
-  }
-
   if (config.webcamZoomRegions?.length) {
     missing.push({
       label: 'Webcam zoom regions',

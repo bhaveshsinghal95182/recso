@@ -135,6 +135,8 @@ export interface EngineExportOptions {
   cursorSize?: number;
   cursorOpacity?: number;
   cursorEffects?: EngineCursorEffects;
+  /** Spans of the composition to leave the camera out of. */
+  webcamCuts?: EngineCutRegion[];
   /** Every file contributing sound. Omit it and the export is silent. */
   audioSources?: EngineAudioSource[];
 }
@@ -482,6 +484,8 @@ export interface EngineAPI {
     setCursorStyle: (size: number, opacity: number) => Promise<void>;
     /** The click pop and the smear, both resolved per frame against the track. */
     setCursorEffects: (effects: EngineCursorEffects) => Promise<void>;
+    /** Spans of the composition to leave the camera out of. Composition time. */
+    setWebcamCuts: (spans: EngineCutRegion[]) => Promise<void>;
     /** Applied asynchronously, so this reads 0 for a moment after setCursorTrack. */
     cursorSampleCount: () => Promise<number>;
     /** Pointer bitmaps resident. Asynchronous like the sample count. */

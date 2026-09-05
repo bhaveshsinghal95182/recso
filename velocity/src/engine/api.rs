@@ -1160,6 +1160,20 @@ impl VideoPlayer {
       .set_cursor_track(samples.into_iter().map(CursorSample::from).collect());
   }
 
+  /// Spans of the composition to leave the camera out of, in composition time.
+  ///
+  /// Separate from `setCuts`, which removes time from the timeline entirely.
+  /// These stretches still play; the camera is simply not in them.
+  #[napi]
+  pub fn set_webcam_cuts(&self, spans: Vec<CutRegion>) {
+    self.inner.set_webcam_cuts(
+      spans
+        .into_iter()
+        .map(|region| (region.start_ms, region.end_ms))
+        .collect(),
+    );
+  }
+
   /// Cursor height in destination pixels, and its opacity. Size 0 hides it.
   #[napi]
   pub fn set_cursor_style(&self, size: f64, opacity: f64) {
@@ -1364,6 +1378,12 @@ pub struct ExportOptions {
   pub cursor_opacity: Option<f64>,
   /// The click pop and the smear. Omit and the pointer draws plainly.
   pub cursor_effects: Option<CursorEffectSpec>,
+  /// Spans of the composition to leave the camera out of, in composition time.
+  ///
+  /// Already mapped: a span cut from the screen as well is gone from the
+  /// timeline entirely, so what belongs here is only the stretches where the
+  /// recording keeps playing without the camera in it.
+  pub webcam_cuts: Option<Vec<CutRegion>>,
 }
 
 #[napi(object)]
@@ -1501,6 +1521,12 @@ impl VideoExporter {
           .cursor_effects
           .map(render::CursorEffects::from)
           .unwrap_or_default(),
+        webcam_cuts: options
+          .webcam_cuts
+          .unwrap_or_default()
+          .into_iter()
+          .map(|region| (region.start_ms, region.end_ms))
+          .collect(),
       }),
     })
   }

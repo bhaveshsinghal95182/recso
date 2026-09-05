@@ -631,6 +631,48 @@ impl CursorImages {
   }
 }
 
+/// Spans of the composition where a layer is not drawn.
+///
+/// Composition time, not source time, and the difference matters. `CutTrack`
+/// describes spans removed from the timeline entirely -- everything after one
+/// shifts earlier. These are spans that are still *there*, still playing, with
+/// one layer missing from them, so nothing moves and the times do not need
+/// remapping. A span cut from every layer collapses to nothing on the way in
+/// and never reaches here.
+#[derive(Default)]
+pub struct HiddenSpans {
+  spans: Vec<(f64, f64)>,
+}
+
+impl HiddenSpans {
+  /// Sorted on the way in so the lookup can stop early.
+  pub fn new(mut spans: Vec<(f64, f64)>) -> Self {
+    spans.retain(|(start, end)| end > start);
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+    Self { spans }
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self.spans.is_empty()
+  }
+
+  /// Whether this instant is inside one of them.
+  ///
+  /// Half open: a span ending at 1000ms does not hide the frame at 1000ms, so
+  /// two back to back spans neither overlap nor leave a frame between them.
+  pub fn contains(&self, composition_ms: f64) -> bool {
+    for (start, end) in &self.spans {
+      if composition_ms < *start {
+        return false;
+      }
+      if composition_ms < *end {
+        return true;
+      }
+    }
+    false
+  }
+}
+
 /// One recorded cursor position.
 ///
 /// Positions are normalised 0..1 against the *source* video, so they survive
@@ -844,6 +886,45 @@ mod tests {
       image_id: None,
       click: false,
     }
+  }
+
+  #[test]
+  fn a_hidden_span_covers_its_own_range_only() {
+    let hidden = HiddenSpans::new(vec![(1000.0, 2000.0)]);
+
+    assert!(!hidden.contains(999.0));
+    assert!(hidden.contains(1000.0));
+    assert!(hidden.contains(1999.0));
+    // Half open, so a span ending here and one starting here do not both claim
+    // this frame -- and neither leaves it uncovered.
+    assert!(!hidden.contains(2000.0));
+  }
+
+  #[test]
+  fn back_to_back_spans_leave_no_gap() {
+    let hidden = HiddenSpans::new(vec![(0.0, 500.0), (500.0, 900.0)]);
+
+    assert!(hidden.contains(499.0));
+    assert!(hidden.contains(500.0));
+    assert!(hidden.contains(899.0));
+    assert!(!hidden.contains(900.0));
+  }
+
+  #[test]
+  fn spans_are_sorted_and_empty_ones_dropped() {
+    // Out of order from the caller, and a zero length span that would otherwise
+    // stop the early exit from ever being reached.
+    let hidden = HiddenSpans::new(vec![(2000.0, 3000.0), (400.0, 400.0), (0.0, 100.0)]);
+
+    assert!(hidden.contains(50.0));
+    assert!(!hidden.contains(400.0));
+    assert!(hidden.contains(2500.0));
+  }
+
+  #[test]
+  fn nothing_hidden_hides_nothing() {
+    assert!(HiddenSpans::default().is_empty());
+    assert!(!HiddenSpans::default().contains(1234.0));
   }
 
   #[test]

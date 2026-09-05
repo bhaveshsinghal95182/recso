@@ -28,8 +28,8 @@ use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::engine::composite::{
-  fit_source, smear_geometry, CursorImages, CursorTrack, Fill, Grade, OverlayShape, Overlays, Quad,
-  Rect, SpriteTexture, UvRect, WebcamLayout,
+  fit_source, smear_geometry, CursorImages, CursorTrack, Fill, Grade, HiddenSpans, OverlayShape,
+  Overlays, Quad, Rect, SpriteTexture, UvRect, WebcamLayout,
 };
 use crate::engine::d3d::{gpu, Gpu};
 use crate::engine::zoom::{ZoomState, ZoomTrack};
@@ -404,6 +404,14 @@ pub struct RenderChain {
   /// back to the decoder for them.
   webcam: Option<WebcamLayer>,
   webcam_layout: WebcamLayout,
+  /// Spans of the composition with no camera in them.
+  webcam_hidden: HiddenSpans,
+  /// Whether the camera was showing when each slot was staged.
+  ///
+  /// Per slot rather than read at draw time for the same reason the cursor's
+  /// rect is: a re-render after a grading change has to put the frame back the
+  /// way it was, and "the way it was" includes whether the camera was there.
+  slot_webcam_visible: Vec<bool>,
 
   /// The cursor image, and where it sits in each staged slot.
   ///
@@ -661,6 +669,8 @@ impl RenderChain {
       webcam_params: EffectParams::default(),
       webcam: None,
       webcam_layout: WebcamLayout::default(),
+      webcam_hidden: HiddenSpans::default(),
+      slot_webcam_visible: vec![true; slots.max(1)],
       cursor: None,
       cursor_images: CursorImages::default(),
       cursor_track: CursorTrack::default(),
@@ -788,6 +798,16 @@ impl RenderChain {
     });
 
     Ok(())
+  }
+
+  /// Spans of the composition to leave the camera out of.
+  ///
+  /// Already in composition time: a span cut from the screen as well is gone
+  /// from the timeline entirely and collapses to nothing before it gets here,
+  /// so what arrives is only the spans where the recording keeps playing
+  /// without the camera in it.
+  pub fn set_webcam_cuts(&mut self, spans: Vec<(f64, f64)>) {
+    self.webcam_hidden = HiddenSpans::new(spans);
   }
 
   pub fn set_webcam_layout(&mut self, layout: WebcamLayout) {
@@ -928,6 +948,8 @@ impl RenderChain {
     // the zoom transform rather than pre-multiplying its position.
     self.slot_cursor[index] = self.resolve_cursor_rect(timestamp_ms);
     self.slot_zoom[index] = self.zoom_track.state_at(timestamp_ms, self.layout.rect);
+    let webcam_index = slot % self.slot_webcam_visible.len();
+    self.slot_webcam_visible[webcam_index] = !self.webcam_hidden.contains(timestamp_ms);
   }
 
   /// The bitmap a sample should be drawn with: its own, or the default.
@@ -1316,6 +1338,11 @@ impl RenderChain {
       return Ok(());
     };
     if !self.webcam_layout.is_visible() {
+      return Ok(());
+    }
+    // Hidden for this stretch of the composition. Staged with the frame, not
+    // read from the clock now.
+    if !self.slot_webcam_visible[slot % self.slot_webcam_visible.len()] {
       return Ok(());
     }
 

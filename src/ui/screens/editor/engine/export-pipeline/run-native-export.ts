@@ -185,6 +185,7 @@ export async function runNativeExport({
     webcam: resolved.webcam.width > 0 ? resolved.webcam : undefined,
     zoomRegions: resolved.zoomRegions,
     cuts: resolved.cuts,
+    webcamCuts: resolved.webcamCuts,
     cursor: resolved.cursor?.image ?? undefined,
     cursorImages: resolved.cursor?.images,
     cursorTrack: resolved.cursor?.track,

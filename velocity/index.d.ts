@@ -182,6 +182,13 @@ export declare class VideoPlayer {
    * would invent motion that never happened.
    */
   setCursorTrack(samples: Array<CursorPoint>): void
+  /**
+   * Spans of the composition to leave the camera out of, in composition time.
+   *
+   * Separate from `setCuts`, which removes time from the timeline entirely.
+   * These stretches still play; the camera is simply not in them.
+   */
+  setWebcamCuts(spans: Array<CutRegion>): void
   /** Cursor height in destination pixels, and its opacity. Size 0 hides it. */
   setCursorStyle(size: number, opacity: number): void
   /**
@@ -483,6 +490,14 @@ export interface ExportOptions {
   cursorOpacity?: number
   /** The click pop and the smear. Omit and the pointer draws plainly. */
   cursorEffects?: CursorEffectSpec
+  /**
+   * Spans of the composition to leave the camera out of, in composition time.
+   *
+   * Already mapped: a span cut from the screen as well is gone from the
+   * timeline entirely, so what belongs here is only the stretches where the
+   * recording keeps playing without the camera in it.
+   */
+  webcamCuts?: Array<CutRegion>
 }
 
 export interface ExportProgress {

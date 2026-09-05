@@ -219,6 +219,7 @@ enum Command {
   SetCursorTrack(Vec<CursorSample>),
   SetCursorStyle(f32, f32),
   SetCursorEffects(CursorEffects),
+  SetWebcamCuts(Vec<(f64, f64)>),
   /// Read the composited frame currently on screen back to system memory.
   ///
   /// Serviced on the decode thread because it owns the pool. Replying through a
@@ -565,6 +566,11 @@ impl Player {
     self.shared.space.notify_all();
   }
 
+  pub fn set_webcam_cuts(&self, spans: Vec<(f64, f64)>) {
+    let _ = self.tx.send(Command::SetWebcamCuts(spans));
+    self.shared.space.notify_all();
+  }
+
   pub fn seek(&self, ms: f64, mode: SeekMode) {
     // Against the edit's length, not the file's: with cuts the two differ, and
     // clamping to the file would let the playhead sit past the end of what
@@ -827,6 +833,7 @@ fn decode_loop(
     let mut pending_cursor_track: Option<Vec<CursorSample>> = None;
     let mut pending_cursor_style: Option<(f32, f32)> = None;
     let mut pending_cursor_effects: Option<CursorEffects> = None;
+    let mut pending_webcam_cuts: Option<Vec<(f64, f64)>> = None;
     let mut stopping = false;
     loop {
       match rx.try_recv() {
@@ -848,6 +855,7 @@ fn decode_loop(
         Ok(Command::SetCursorTrack(samples)) => pending_cursor_track = Some(samples),
         Ok(Command::SetCursorStyle(size, opacity)) => pending_cursor_style = Some((size, opacity)),
         Ok(Command::SetCursorEffects(effects)) => pending_cursor_effects = Some(effects),
+        Ok(Command::SetWebcamCuts(spans)) => pending_webcam_cuts = Some(spans),
         // Answered inline rather than coalesced: a snapshot is a question, and
         // dropping all but the last would leave earlier callers waiting forever.
         Ok(Command::Snapshot(reply)) => {
@@ -991,6 +999,11 @@ fn decode_loop(
 
     if let Some(effects) = pending_cursor_effects {
       chain.set_cursor_effects(effects);
+      needs_repaint = true;
+    }
+
+    if let Some(spans) = pending_webcam_cuts {
+      chain.set_webcam_cuts(spans);
       needs_repaint = true;
     }
 

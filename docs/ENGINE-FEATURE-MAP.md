@@ -151,7 +151,7 @@ colour is the exception, because a clear is free.
 | Opacity                               | yes        | yes        |                                                                     |
 | Border (width, colour)                | yes        | **yes**    | The same `ps_solid` quad the video layer's border uses.             |
 | Shadows (multi-layer)                 | yes        | **no**     | `shadows[]` — offset, blur, colour, each its own `ctx.shadow*`.     |
-| Webcam cuts (hide by region)          | yes        | **no**     | Needs a timeline model.                                             |
+| ~~Webcam cuts (hide by region)~~      | yes        | yes        | `HiddenSpans`, staged per slot like the cursor's rect.              |
 | Zoom-driven height override           | yes        | **no**     | `webcamZoomRegions` override `heightRatio` for a span.              |
 | Zoom-driven full-canvas mode          | yes        | **no**     | Blends box → full canvas, dropping radius/border/shadow as it goes. |
 
@@ -186,15 +186,15 @@ colour is the exception, because a clear is free.
 
 ### Audio
 
-| Feature                  | Export pipeline | Engine  | Notes                                                         |
-| ------------------------ | --------------- | ------- | ------------------------------------------------------------- |
-| Screen / system audio    | yes             | **yes** | Any number of sources, each with its own offset.              |
-| Webcam audio             | yes             | **yes** | Same mechanism; it is just another source.                    |
-| Cut-aware audio timeline | yes             | **yes** | Chunks are placed in composition time; cut ones are dropped.  |
-| Trimmed exports          | yes             | **yes** | `skip_to` seeks every source to the export's start.           |
-| Audio in preview         | n/a             | **no**  | Export only. Playback still has no sound.                     |
-| Audio as master clock    | **no**          | **no**  | Neither does this. `Clock` is video-only.                     |
-| Loudness normalisation   | yes             | **no**  | The mix is clamped on the way to 16-bit, not peak-normalised. |
+| Feature                  | Export pipeline | Engine  | Notes                                                                |
+| ------------------------ | --------------- | ------- | -------------------------------------------------------------------- |
+| Screen / system audio    | yes             | **yes** | Any number of sources, each with its own offset.                     |
+| Webcam audio             | yes             | **yes** | Same mechanism; it is just another source.                           |
+| Cut-aware audio timeline | yes             | **yes** | Chunks are placed in composition time; cut ones are dropped.         |
+| Trimmed exports          | yes             | **yes** | `skip_to` seeks every source to the export's start.                  |
+| ~~Audio in preview~~     | n/a             | yes     | An `<audio>` element on the recording, seeked to the engine's clock. |
+| Audio as master clock    | **no**          | **no**  | Neither does this. `Clock` is video-only.                            |
+| Loudness normalisation   | yes             | **no**  | The mix is clamped on the way to 16-bit, not peak-normalised.        |
 
 Audio landed export-first on purpose: it is what mediabunny was still needed
 for, and an export either has the sound or it does not, which is a far easier

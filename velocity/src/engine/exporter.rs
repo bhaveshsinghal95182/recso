@@ -72,6 +72,8 @@ pub struct Options {
   pub cursor_size: f32,
   pub cursor_opacity: f32,
   pub cursor_effects: CursorEffects,
+  /// Spans of the composition to leave the camera out of.
+  pub webcam_cuts: Vec<(f64, f64)>,
   /// The zoom/pan timeline. Empty exports unzoomed.
   pub zoom_regions: Vec<ZoomRegion>,
   /// Every file contributing sound, with the offset that puts it on the screen
@@ -356,6 +358,7 @@ fn run(shared: &Arc<Shared>, options: Options) -> Result<()> {
   chain.set_cursor_track(CursorTrack::new(options.cursor_track));
   chain.set_cursor_style(options.cursor_size, options.cursor_opacity);
   chain.set_cursor_effects(options.cursor_effects);
+  chain.set_webcam_cuts(options.webcam_cuts);
   chain.set_zoom_track(ZoomTrack::new(options.zoom_regions));
   chain.set_source_crop(options.crop);
 

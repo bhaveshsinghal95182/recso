@@ -249,6 +249,10 @@ export function registerEngineHandlers(): void {
     requirePlayer().setCursorEffects(effects);
   });
 
+  ipcMain.handle('engine:player:webcam-cuts', (_event, spans: CutRegion[]) => {
+    requirePlayer().setWebcamCuts(spans);
+  });
+
   ipcMain.handle('engine:player:cursor-sample-count', () => requirePlayer().cursorSampleCount());
 
   /**

@@ -220,6 +220,33 @@ try {
     `delta ${difference(outside(plain), outside(withWebcam)).toFixed(1)}`,
   )
 
+  // A webcam cut takes the camera out of a stretch that keeps playing. Distinct
+  // from `setCuts`, which removes the time itself -- here the frame is still
+  // there, with nothing of the camera in it.
+  if (hasWebcam) {
+    player.setWebcamCuts([{ startMs: 0, endMs: Math.max(400, info.duration) }])
+    await sleep(400)
+    player.seek(Math.min(10, info.duration * 0.5), true)
+    await waitFrame()
+    await sleep(300)
+    const duringCut = player.snapshotBgra()
+
+    check(
+      'a webcam cut takes the camera out of the frame',
+      difference(inside(plain), inside(duringCut)) < 6,
+      `delta ${difference(inside(plain), inside(duringCut)).toFixed(1)} against no camera at all`,
+    )
+
+    player.setWebcamCuts([])
+    await sleep(400)
+    player.seek(Math.min(10, info.duration * 0.5), true)
+    await waitFrame()
+    await sleep(300)
+    check('and clearing the cut brings it back', difference(inside(plain), inside(player.snapshotBgra())) > 6)
+  } else {
+    skip('a webcam cut takes the camera out of the frame', 'no camera in this run')
+  }
+
   // An empty box is the off switch, and must cost nothing.
   player.setWebcamLayout({ x: 0, y: 0, width: 0, height: 0 })
   await sleep(400)
