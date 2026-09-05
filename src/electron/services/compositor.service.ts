@@ -29,8 +29,20 @@ const DEFAULT_WEBCAM_HEIGHT_RATIO = 0.34;
 const DEFAULT_WEBCAM_MARGIN_PX = 24;
 const MIN_WEBCAM_HEIGHT_RATIO = 0.08;
 const MAX_WEBCAM_HEIGHT_RATIO = 0.75;
-const MAX_WEBCAM_CANVAS_WIDTH_RATIO = 0.5;
-const MAX_WEBCAM_CANVAS_HEIGHT_RATIO = 0.9;
+/**
+ * The box may fill the canvas right up to its margins.
+ *
+ * There used to be a second pair of caps here -- half the canvas width, nine
+ * tenths its height -- which the renderer's own `computeWebcamLayout` did not
+ * have. Two rules for one box, and which one you saw depended on which side of
+ * the IPC resolved it: a 16:9 overlay asked to be 75% tall came out 50% here
+ * and 75% there. The size control promised something the compositor refused,
+ * and nothing said so.
+ *
+ * The margins are the real limit, and `MAX_WEBCAM_HEIGHT_RATIO` already stops
+ * the box swallowing the frame. An arbitrary half-width cap on top of those only
+ * made a slider lie.
+ */
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -177,20 +189,8 @@ export function calculateWebcamLayout(
   let height = Math.max(1, Math.round(canvas.height * heightRatio));
   let width = Math.max(1, Math.round(height * aspectRatio));
 
-  const maxWidth = Math.max(
-    1,
-    Math.min(
-      Math.round(canvas.width * MAX_WEBCAM_CANVAS_WIDTH_RATIO),
-      Math.round(canvas.width - marginPx * 2),
-    ),
-  );
-  const maxHeight = Math.max(
-    1,
-    Math.min(
-      Math.round(canvas.height * MAX_WEBCAM_CANVAS_HEIGHT_RATIO),
-      Math.round(canvas.height - marginPx * 2),
-    ),
-  );
+  const maxWidth = Math.max(1, Math.round(canvas.width - marginPx * 2));
+  const maxHeight = Math.max(1, Math.round(canvas.height - marginPx * 2));
 
   if (width > maxWidth) {
     width = maxWidth;
