@@ -1257,11 +1257,18 @@ async function finalizeRecording(recordingId: string): Promise<StopRecordingResu
     const screenMedia = findScreenMedia(reported, currentRecording.tempPath);
 
     if (screenMedia) {
+      // `frames` counts what Windows Graphics Capture handed over, and it only
+      // hands over a frame when the screen changed -- so a low rate on a mostly
+      // still desktop is the API working, not the capture struggling. The file
+      // is written at `configuredFps` regardless, holding the last frame across
+      // the gaps. Saying "measured (asked for 60)" read like a shortfall and
+      // sent more than one person looking for a bug that was not there.
       console.log(
         `[RecorderService] Recorder reported ${screenMedia.frames} frames, ` +
           `${screenMedia.width}x${screenMedia.height}, ` +
           `${(screenMedia.durationMs / 1000).toFixed(2)}s, ` +
-          `${screenMedia.fps.toFixed(2)} fps measured (asked for ${screenMedia.configuredFps}), ` +
+          `${screenMedia.fps.toFixed(2)} fps delivered on change ` +
+          `(file is ${screenMedia.configuredFps}fps), ` +
           `audio=${screenMedia.hasAudio}`,
       );
     }

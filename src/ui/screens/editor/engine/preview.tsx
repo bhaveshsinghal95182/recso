@@ -58,6 +58,7 @@ export function EnginePreview() {
   const lastRenderMsRef = useRef(0);
   const previewErrorLoggedRef = useRef(false);
   const availableSize = usePreviewViewportSize(previewViewportRef);
+  const audioRef = useRef<HTMLAudioElement>(null);
   const engineRef = useRef<CompositionEngine>(new CompositionEngine(defaultConfig));
   const compositionConfigRef = useRef<CompositionConfig>(defaultConfig);
   const [isExportPreviewFullscreen, setIsExportPreviewFullscreen] = useState(false);
@@ -176,6 +177,48 @@ export function EnginePreview() {
     }
     usePlaybackStore.setState({ currentTime: gpu.currentTimeMs });
   }, [useGpuEngine, isPlaying, gpu.currentTimeMs]);
+
+  /**
+   * Sound, while the engine draws the picture.
+   *
+   * The engine has no audio output -- it decodes and mixes for an export, but
+   * playback is silent -- so making it the default preview took the editor's
+   * sound away with it. This plays the recording's own audio track alongside.
+   *
+   * An `<audio>` element rather than the hidden `<video>` that is already here:
+   * pointed at the same file it decodes only the audio, which matters when the
+   * whole reason the engine drives the picture is that asking Chromium to
+   * decode a long 4K recording is what stopped working.
+   *
+   * The engine's clock is in composition time and the file is in source time,
+   * so every seek maps between them -- and a cut is just a large drift, caught
+   * by the same correction that handles ordinary slippage.
+   */
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !useGpuEngine) {
+      return;
+    }
+
+    if (!isPlaying) {
+      audio.pause();
+      return;
+    }
+
+    const sourceSeconds = mapCompositionToSourceTimeMs(gpu.currentTimeMs, screenCuts) / 1000;
+    // A quarter of a second is past hearing it as anything but wrong, and well
+    // clear of the jitter of two clocks reading each other.
+    if (Math.abs(audio.currentTime - sourceSeconds) > 0.25) {
+      audio.currentTime = sourceSeconds;
+    }
+
+    if (audio.paused) {
+      void audio.play().catch(() => {
+        // Autoplay refused, or the file has no audio track. Neither is worth
+        // interrupting a silent preview over.
+      });
+    }
+  }, [useGpuEngine, isPlaying, gpu.currentTimeMs, screenCuts]);
 
   const overlayVideoLayout = useMemo(
     () => resolveOverlayVideoLayout(layout, previewDisplaySize.scale),
@@ -409,6 +452,8 @@ export function EnginePreview() {
           />
 
           <video ref={videoRef} src={videoSrc} className="hidden" playsInline preload="auto" />
+          {/* Audio only, for when the engine is drawing the picture. */}
+          <audio ref={audioRef} src={videoSrc} preload="auto" />
           <video
             ref={webcamVideoRef}
             src={webcamSrc || undefined}
