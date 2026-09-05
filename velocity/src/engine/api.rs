@@ -1160,6 +1160,17 @@ impl VideoPlayer {
       .set_cursor_track(samples.into_iter().map(CursorSample::from).collect());
   }
 
+  /// Which layer sits on top of which, bottom first.
+  ///
+  /// Names as the editor uses them. `background` is accepted and ignored, being
+  /// the canvas rather than a layer, and anything omitted keeps its default
+  /// position -- a list from a newer project should reorder what this build
+  /// knows about rather than refusing to draw.
+  #[napi]
+  pub fn set_layer_order(&self, order: Vec<String>) {
+    self.inner.set_layer_order(render::parse_layer_order(&order));
+  }
+
   /// Spans of the composition to leave the camera out of, in composition time.
   ///
   /// Separate from `setCuts`, which removes time from the timeline entirely.
@@ -1384,6 +1395,10 @@ pub struct ExportOptions {
   /// timeline entirely, so what belongs here is only the stretches where the
   /// recording keeps playing without the camera in it.
   pub webcam_cuts: Option<Vec<CutRegion>>,
+  /// Which layer sits on top of which, bottom first: "video", "webcam",
+  /// "cursor". `background` is accepted and ignored -- it is the canvas rather
+  /// than a layer. Anything omitted keeps its default position.
+  pub layer_order: Option<Vec<String>>,
 }
 
 #[napi(object)]
@@ -1527,6 +1542,11 @@ impl VideoExporter {
           .into_iter()
           .map(|region| (region.start_ms, region.end_ms))
           .collect(),
+        layer_order: options
+          .layer_order
+          .as_deref()
+          .map(render::parse_layer_order)
+          .unwrap_or(render::DEFAULT_LAYER_ORDER),
       }),
     })
   }

@@ -174,15 +174,15 @@ colour is the exception, because a clear is free.
 
 ### Timeline
 
-| Feature                         | Compositor | Engine  | Notes                                                    |
-| ------------------------------- | ---------- | ------- | -------------------------------------------------------- |
-| Cuts                            | yes        | **yes** | `engine/cuts.rs`; source ↔ composition, both directions. |
-| Zoom regions (ease in/out)      | yes        | **yes** | `engine/zoom.rs`; smoothstep, matching the compositor's. |
-| Focal keyframes within a region | yes        | **yes** | Linear pan between them, like the compositor.            |
-| Legacy zoom keyframes           | yes        | **no**  | The `computeZoomState` fallback. Regions supersede it.   |
-| Layer reordering                | yes        | **no**  | `layerStates` — the four layers are a user-ordered list. |
-| Per-layer `base`/`zoomed` space | yes        | **no**  | Decides which layers the zoom transform applies to.      |
-| Multiple clips                  | **no**     | **no**  | Neither has one. Worth knowing before designing for it.  |
+| Feature                         | Compositor | Engine  | Notes                                                                |
+| ------------------------------- | ---------- | ------- | -------------------------------------------------------------------- |
+| Cuts                            | yes        | **yes** | `engine/cuts.rs`; source ↔ composition, both directions.             |
+| Zoom regions (ease in/out)      | yes        | **yes** | `engine/zoom.rs`; smoothstep, matching the compositor's.             |
+| Focal keyframes within a region | yes        | **yes** | Linear pan between them, like the compositor.                        |
+| ~~Legacy zoom keyframes~~       | yes        | yes     | Converted to regions on the way in; one zoom model.                  |
+| ~~Layer reordering~~            | yes        | yes     | `layerStates` — the three drawable layers, background is the canvas. |
+| Per-layer `base`/`zoomed` space | yes        | **no**  | Decides which layers the zoom transform applies to.                  |
+| Multiple clips                  | **no**     | **no**  | Neither has one. Worth knowing before designing for it.              |
 
 ### Audio
 

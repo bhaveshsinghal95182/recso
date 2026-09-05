@@ -30,7 +30,8 @@ use crate::engine::cuts::{Cut, CutTrack};
 use crate::engine::d3d::{gpu, SharedTexture, Sharing};
 use crate::engine::decode::Decoder;
 use crate::engine::render::{
-  create_rtv, Background, BackgroundRequest, CursorEffects, EffectParams, RenderChain, SourceCrop,
+  create_rtv, Background, BackgroundRequest, CursorEffects, EffectParams, Layer, RenderChain,
+  SourceCrop,
   VideoLayout as RenderVideoLayout,
 };
 use crate::engine::zoom::{ZoomRegion, ZoomTrack};
@@ -220,6 +221,7 @@ enum Command {
   SetCursorStyle(f32, f32),
   SetCursorEffects(CursorEffects),
   SetWebcamCuts(Vec<(f64, f64)>),
+  SetLayerOrder([Layer; 3]),
   /// Read the composited frame currently on screen back to system memory.
   ///
   /// Serviced on the decode thread because it owns the pool. Replying through a
@@ -571,6 +573,11 @@ impl Player {
     self.shared.space.notify_all();
   }
 
+  pub fn set_layer_order(&self, order: [Layer; 3]) {
+    let _ = self.tx.send(Command::SetLayerOrder(order));
+    self.shared.space.notify_all();
+  }
+
   pub fn seek(&self, ms: f64, mode: SeekMode) {
     // Against the edit's length, not the file's: with cuts the two differ, and
     // clamping to the file would let the playhead sit past the end of what
@@ -834,6 +841,7 @@ fn decode_loop(
     let mut pending_cursor_style: Option<(f32, f32)> = None;
     let mut pending_cursor_effects: Option<CursorEffects> = None;
     let mut pending_webcam_cuts: Option<Vec<(f64, f64)>> = None;
+    let mut pending_layer_order: Option<[Layer; 3]> = None;
     let mut stopping = false;
     loop {
       match rx.try_recv() {
@@ -856,6 +864,7 @@ fn decode_loop(
         Ok(Command::SetCursorStyle(size, opacity)) => pending_cursor_style = Some((size, opacity)),
         Ok(Command::SetCursorEffects(effects)) => pending_cursor_effects = Some(effects),
         Ok(Command::SetWebcamCuts(spans)) => pending_webcam_cuts = Some(spans),
+        Ok(Command::SetLayerOrder(order)) => pending_layer_order = Some(order),
         // Answered inline rather than coalesced: a snapshot is a question, and
         // dropping all but the last would leave earlier callers waiting forever.
         Ok(Command::Snapshot(reply)) => {
@@ -1004,6 +1013,11 @@ fn decode_loop(
 
     if let Some(spans) = pending_webcam_cuts {
       chain.set_webcam_cuts(spans);
+      needs_repaint = true;
+    }
+
+    if let Some(order) = pending_layer_order {
+      chain.set_layer_order(order);
       needs_repaint = true;
     }
 

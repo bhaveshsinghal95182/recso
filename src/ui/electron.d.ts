@@ -137,6 +137,8 @@ export interface EngineExportOptions {
   cursorEffects?: EngineCursorEffects;
   /** Spans of the composition to leave the camera out of. */
   webcamCuts?: EngineCutRegion[];
+  /** Which layer sits on top of which, bottom first. */
+  layerOrder?: string[];
   /** Every file contributing sound. Omit it and the export is silent. */
   audioSources?: EngineAudioSource[];
 }
@@ -486,6 +488,8 @@ export interface EngineAPI {
     setCursorEffects: (effects: EngineCursorEffects) => Promise<void>;
     /** Spans of the composition to leave the camera out of. Composition time. */
     setWebcamCuts: (spans: EngineCutRegion[]) => Promise<void>;
+    /** Which layer sits on top of which, bottom first. Empty means the default. */
+    setLayerOrder: (order: string[]) => Promise<void>;
     /** Applied asynchronously, so this reads 0 for a moment after setCursorTrack. */
     cursorSampleCount: () => Promise<number>;
     /** Pointer bitmaps resident. Asynchronous like the sample count. */

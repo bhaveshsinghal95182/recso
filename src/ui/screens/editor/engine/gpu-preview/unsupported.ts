@@ -53,24 +53,5 @@ export function unsupportedFeatures(config: CompositionConfig): UnsupportedFeatu
     });
   }
 
-  if (config.layerStates?.length) {
-    const order = config.layerStates.map((state) => state.id).join(',');
-    if (order !== 'background,video,cursor,webcam') {
-      missing.push({
-        label: 'Layer reordering',
-        detail: 'the engine draws background, video, webcam, cursor in that order',
-        severity: 'blocking',
-      });
-    }
-  }
-
-  if (config.zooms?.length && !config.zoomRegions?.length) {
-    missing.push({
-      label: 'Legacy zoom keyframes',
-      detail: 'only zoom regions are read; re-save the project to convert them',
-      severity: 'blocking',
-    });
-  }
-
   return missing;
 }

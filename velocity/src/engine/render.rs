@@ -59,6 +59,57 @@ const MAX_SMEAR_HEIGHTS: f32 = 4.0;
 /// samples the sprite thirty-two times to produce a pointer with a fuzzy edge.
 const MIN_SMEAR_HEIGHTS: f32 = 0.15;
 
+/// The layers that can be reordered, in the order they are drawn.
+///
+/// The background is not among them. It is the canvas the rest is drawn onto
+/// rather than something stacked on it, and putting it above anything would
+/// simply hide that thing -- so it stays the base and these three move.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Layer {
+  Video,
+  Webcam,
+  Cursor,
+}
+
+/// Bottom first, which is the order they are drawn in.
+///
+/// Deliberately webcam *below* cursor, matching the editor's own default. The
+/// engine used to draw the pointer last unconditionally, so a cursor passing
+/// over the camera box came out on top of it here and underneath it there --
+/// a difference nobody would think to look for until they saw the export.
+pub const DEFAULT_LAYER_ORDER: [Layer; 3] = [Layer::Video, Layer::Cursor, Layer::Webcam];
+
+/// Read an order from the names the editor uses.
+///
+/// Anything missing keeps its default position and anything unknown is ignored,
+/// because a layer list from a newer project should reorder what this build
+/// understands rather than refusing to draw. `background` is accepted and
+/// skipped: it is in the editor's list but it is the canvas, not a layer.
+pub fn parse_layer_order(names: &[String]) -> [Layer; 3] {
+  let mut order: Vec<Layer> = Vec::with_capacity(3);
+
+  for name in names {
+    let layer = match name.as_str() {
+      "video" => Layer::Video,
+      "webcam" => Layer::Webcam,
+      "cursor" => Layer::Cursor,
+      _ => continue,
+    };
+    if !order.contains(&layer) {
+      order.push(layer);
+    }
+  }
+
+  // Whatever was not named keeps its default position relative to the rest.
+  for layer in DEFAULT_LAYER_ORDER {
+    if !order.contains(&layer) {
+      order.push(layer);
+    }
+  }
+
+  [order[0], order[1], order[2]]
+}
+
 /// What a click does to the pointer, and how far it stretches when it moves.
 ///
 /// Separate from `set_cursor_style` because size and opacity describe the
@@ -406,6 +457,8 @@ pub struct RenderChain {
   webcam_layout: WebcamLayout,
   /// Spans of the composition with no camera in them.
   webcam_hidden: HiddenSpans,
+  /// Which of the three sits on top of which. Bottom first.
+  layer_order: [Layer; 3],
   /// Whether the camera was showing when each slot was staged.
   ///
   /// Per slot rather than read at draw time for the same reason the cursor's
@@ -670,6 +723,7 @@ impl RenderChain {
       webcam: None,
       webcam_layout: WebcamLayout::default(),
       webcam_hidden: HiddenSpans::default(),
+      layer_order: DEFAULT_LAYER_ORDER,
       slot_webcam_visible: vec![true; slots.max(1)],
       cursor: None,
       cursor_images: CursorImages::default(),
@@ -798,6 +852,11 @@ impl RenderChain {
     });
 
     Ok(())
+  }
+
+  /// Which of the three drawable layers sits on top of which, bottom first.
+  pub fn set_layer_order(&mut self, order: [Layer; 3]) {
+    self.layer_order = order;
   }
 
   /// Spans of the composition to leave the camera out of.
@@ -1227,12 +1286,16 @@ impl RenderChain {
       // The zoom this frame was staged at, not the playhead's.
       let zoom = self.slot_zoom[slot % self.slot_zoom.len()];
 
-      self.composite_video_locked(ctx, dst_rtv, zoom)?;
-      // The webcam is deliberately not zoomed: a zoom is about the recording,
-      // and the camera box is furniture on top of it. Same split the
-      // compositor makes with its `base` and `zoomed` layer spaces.
-      self.composite_webcam_locked(ctx, slot, dst_rtv)?;
-      self.composite_cursor_locked(ctx, slot, dst_rtv, zoom)?;
+      for layer in self.layer_order {
+        match layer {
+          Layer::Video => self.composite_video_locked(ctx, dst_rtv, zoom)?,
+          // The webcam is deliberately not zoomed: a zoom is about the
+          // recording, and the camera box is furniture on top of it. Same split
+          // the compositor makes with its `base` and `zoomed` layer spaces.
+          Layer::Webcam => self.composite_webcam_locked(ctx, slot, dst_rtv)?,
+          Layer::Cursor => self.composite_cursor_locked(ctx, slot, dst_rtv, zoom)?,
+        }
+      }
 
       // Leave nothing bound: a slot's source becomes a copy destination again on
       // a later frame, and D3D11 refuses that while it is still an SRV.
@@ -1657,6 +1720,69 @@ pub fn create_rtv(gpu: &Gpu, texture: &ID3D11Texture2D) -> Result<ID3D11RenderTa
       .CreateRenderTargetView(texture, None, Some(&mut view))?
   };
   Ok(view.expect("rtv"))
+}
+
+#[cfg(test)]
+mod layer_order_tests {
+  use super::*;
+
+  fn names(list: &[&str]) -> Vec<String> {
+    list.iter().map(|s| s.to_string()).collect()
+  }
+
+  #[test]
+  fn the_default_puts_the_camera_over_the_pointer() {
+    // The editor's own default, and the thing the engine used to get wrong: it
+    // drew the pointer last unconditionally, so a cursor crossing the camera
+    // box came out on top here and underneath there.
+    assert_eq!(DEFAULT_LAYER_ORDER, [Layer::Video, Layer::Cursor, Layer::Webcam]);
+    assert_eq!(parse_layer_order(&names(&[])), DEFAULT_LAYER_ORDER);
+  }
+
+  #[test]
+  fn a_named_order_is_followed() {
+    assert_eq!(
+      parse_layer_order(&names(&["webcam", "video", "cursor"])),
+      [Layer::Webcam, Layer::Video, Layer::Cursor]
+    );
+  }
+
+  #[test]
+  fn the_background_is_accepted_and_skipped() {
+    // It is in the editor's list but it is the canvas, not a layer.
+    assert_eq!(
+      parse_layer_order(&names(&["background", "video", "cursor", "webcam"])),
+      [Layer::Video, Layer::Cursor, Layer::Webcam]
+    );
+  }
+
+  #[test]
+  fn a_partial_list_keeps_the_rest_where_they_were() {
+    // Only the camera is named, so it goes to the bottom and the other two hold
+    // their default order above it.
+    assert_eq!(
+      parse_layer_order(&names(&["webcam"])),
+      [Layer::Webcam, Layer::Video, Layer::Cursor]
+    );
+  }
+
+  #[test]
+  fn an_unknown_layer_does_not_stop_the_rest_being_ordered() {
+    // A project from a newer build naming a layer this one has never heard of
+    // should still reorder what it does know.
+    assert_eq!(
+      parse_layer_order(&names(&["captions", "cursor", "video", "webcam"])),
+      [Layer::Cursor, Layer::Video, Layer::Webcam]
+    );
+  }
+
+  #[test]
+  fn a_repeated_layer_counts_once() {
+    assert_eq!(
+      parse_layer_order(&names(&["cursor", "cursor", "webcam"])),
+      [Layer::Cursor, Layer::Webcam, Layer::Video]
+    );
+  }
 }
 
 #[cfg(test)]

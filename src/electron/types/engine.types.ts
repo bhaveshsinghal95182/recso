@@ -146,6 +146,8 @@ export interface ExportOptions {
   cursorEffects?: CursorEffectSpec;
   /** Spans of the composition to leave the camera out of. */
   webcamCuts?: CutRegion[];
+  /** Which layer sits on top of which, bottom first. */
+  layerOrder?: string[];
   /**
    * Every file contributing sound. Omit it and the export is silent.
    *
@@ -272,6 +274,8 @@ export interface VideoPlayerInstance {
   setCursorEffects(effects: CursorEffectSpec): void;
   /** Spans of the composition to leave the camera out of. Composition time. */
   setWebcamCuts(spans: CutRegion[]): void;
+  /** Which layer sits on top of which, bottom first. Empty means the default. */
+  setLayerOrder(order: string[]): void;
   /** Pointer samples the decode thread has loaded. Applied asynchronously. */
   cursorSampleCount(): number;
   /** Pointer bitmaps resident. Applied asynchronously, like the sample count. */

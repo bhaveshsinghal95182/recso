@@ -318,6 +318,7 @@ export const engineBridge = {
     }) => invoke('engine:player:cursor-effects', effects),
     setWebcamCuts: (spans: { startMs: number; endMs: number }[]) =>
       invoke('engine:player:webcam-cuts', spans),
+    setLayerOrder: (order: string[]) => invoke('engine:player:layer-order', order),
     cursorSampleCount: () => invoke('engine:player:cursor-sample-count'),
     cursorImageCount: () => invoke('engine:player:cursor-image-count'),
 

@@ -253,6 +253,10 @@ export function registerEngineHandlers(): void {
     requirePlayer().setWebcamCuts(spans);
   });
 
+  ipcMain.handle('engine:player:layer-order', (_event, order: string[]) => {
+    requirePlayer().setLayerOrder(order);
+  });
+
   ipcMain.handle('engine:player:cursor-sample-count', () => requirePlayer().cursorSampleCount());
 
   /**

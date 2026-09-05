@@ -183,6 +183,15 @@ export declare class VideoPlayer {
    */
   setCursorTrack(samples: Array<CursorPoint>): void
   /**
+   * Which layer sits on top of which, bottom first.
+   *
+   * Names as the editor uses them. `background` is accepted and ignored, being
+   * the canvas rather than a layer, and anything omitted keeps its default
+   * position -- a list from a newer project should reorder what this build
+   * knows about rather than refusing to draw.
+   */
+  setLayerOrder(order: Array<string>): void
+  /**
    * Spans of the composition to leave the camera out of, in composition time.
    *
    * Separate from `setCuts`, which removes time from the timeline entirely.
@@ -498,6 +507,12 @@ export interface ExportOptions {
    * recording keeps playing without the camera in it.
    */
   webcamCuts?: Array<CutRegion>
+  /**
+   * Which layer sits on top of which, bottom first: "video", "webcam",
+   * "cursor". `background` is accepted and ignored -- it is the canvas rather
+   * than a layer. Anything omitted keeps its default position.
+   */
+  layerOrder?: Array<string>
 }
 
 export interface ExportProgress {

@@ -205,6 +205,18 @@ try {
   const inside = (buf) => averageBgra(buf, stride, box.x + box.width / 4, box.y + box.height / 4, 40, 40)
   const outside = (buf) => averageBgra(buf, stride, 20, 20, 40, 40)
 
+  /** Scan the whole frame for a pixel matching `test`, handed (b, g, r). */
+  function findBgraAnywhere(buf, test) {
+    if (!buf) return null
+    for (let row = 0; row < info.codedHeight; row += 4) {
+      for (let col = 0; col < info.codedWidth; col += 4) {
+        const i = row * stride * 4 + col * 4
+        if (test(buf[i], buf[i + 1], buf[i + 2])) return { x: col, y: row }
+      }
+    }
+    return null
+  }
+
   if (hasWebcam) {
     check(
       'webcam changed pixels inside its box',
@@ -245,6 +257,45 @@ try {
     check('and clearing the cut brings it back', difference(inside(plain), inside(player.snapshotBgra())) > 6)
   } else {
     skip('a webcam cut takes the camera out of the frame', 'no camera in this run')
+  }
+
+  // Layer order. Put the camera over the whole frame and the pointer under it,
+  // then flip them: whichever is on top owns the pixels where they overlap.
+  if (hasWebcam) {
+    player.setWebcamLayout({ x: 0, y: 0, width: info.codedWidth, height: info.codedHeight })
+    player.setCursorImage({
+      width: 64,
+      height: 64,
+      pixels: solidRgba(64, 64, [255, 0, 255, 255]),
+      hotspotX: 32,
+      hotspotY: 32,
+    })
+    player.setCursorStyle(64, 1)
+    player.setCursorTrack([{ timestampMs: -100, x: 0.5, y: 0.5 }])
+
+    player.setLayerOrder(['video', 'cursor', 'webcam'])
+    await sleep(400)
+    player.seek(Math.min(10, info.duration * 0.5), true)
+    await waitFrame()
+    await sleep(300)
+    const cursorUnder = player.snapshotBgra()
+
+    player.setLayerOrder(['video', 'webcam', 'cursor'])
+    await sleep(400)
+    const cursorOver = player.snapshotBgra()
+
+    const isMagentaPixel = (b, g, r) => b > 200 && g < 60 && r > 200
+    const magentaUnder = findBgraAnywhere(cursorUnder, isMagentaPixel)
+    const magentaOver = findBgraAnywhere(cursorOver, isMagentaPixel)
+
+    check('with the camera on top the pointer is hidden by it', magentaUnder === null)
+    check('and moving the pointer above brings it back', magentaOver !== null)
+
+    player.setLayerOrder([])
+    player.setCursorTrack([])
+    player.setCursorImage(null)
+  } else {
+    skip('layer order decides what covers what', 'no camera in this run')
   }
 
   // An empty box is the off switch, and must cost nothing.

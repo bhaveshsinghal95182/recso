@@ -151,6 +151,51 @@ function withOverrideBoundaries(
     : [...sorted, ...added].sort((a, b) => a.timestampMs - b.timestampMs);
 }
 
+/**
+ * Legacy zoom keyframes as zoom regions.
+ *
+ * The engine has one zoom model and it is the region. Keyframes were what came
+ * before, and they hold the same four things -- a span, a level, a focal point
+ * and an ease -- so they convert rather than needing a second model kept
+ * alongside the first for projects nobody has re-saved.
+ *
+ * Only when there are no regions. A project with both has been migrated, and
+ * the regions are the migration.
+ *
+ * Times are in seconds and against the *source*, unlike regions, which are
+ * authored in composition time -- so they map through the cuts on the way. The
+ * engine's regions carry one ease duration where a keyframe has two, and the
+ * longer of the pair is the honest choice: it is the one that would still be
+ * easing.
+ */
+function legacyZoomRegions(
+  config: CompositionConfig,
+  cuts: CompositionCutRegion[],
+): EngineZoomRegion[] {
+  if (config.zoomRegions?.length || !config.zooms?.length) {
+    return [];
+  }
+
+  return config.zooms.map((keyframe) => ({
+    startMs: mapSourceTimeToCompositionTimeMs(keyframe.startTime * 1000, cuts),
+    endMs: mapSourceTimeToCompositionTimeMs(keyframe.endTime * 1000, cuts),
+    zoomLevel: keyframe.multiplier,
+    focalX: keyframe.focalPoint.x,
+    focalY: keyframe.focalPoint.y,
+    easeDurationMs: Math.max(keyframe.easeIn ?? 0, keyframe.easeOut ?? 0) * 1000,
+  }));
+}
+
+/**
+ * The layer stack, bottom first, in the names the engine understands.
+ *
+ * `background` goes through untouched: the engine accepts and skips it, being
+ * the canvas rather than a layer. An empty list means the default order.
+ */
+function toEngineLayerOrder(config: CompositionConfig): string[] {
+  return (config.layerStates ?? []).map((layer) => layer.id);
+}
+
 function toEngineCuts(cuts: CompositionCutRegion[] | undefined): EngineCutRegion[] {
   return (cuts ?? []).map((cut) => ({ startMs: cut.startMs, endMs: cut.endMs }));
 }
@@ -184,6 +229,8 @@ export interface ResolvedComposition {
   } | null;
   zoomRegions: EngineZoomRegion[];
   cuts: EngineCutRegion[];
+  /** Bottom first. Empty means the engine's default order. */
+  layerOrder: string[];
   /**
    * Spans where the camera is not drawn, in composition time.
    *
@@ -306,9 +353,12 @@ export async function resolveComposition(
     crop,
     webcam,
     cursor: resolvedCursor,
-    zoomRegions: toEngineZoomRegions(config.zoomRegions),
+    zoomRegions: config.zoomRegions?.length
+      ? toEngineZoomRegions(config.zoomRegions)
+      : legacyZoomRegions(config, cuts),
     cuts: toEngineCuts(cuts),
     webcamCuts: toEngineCuts(config.webcamCuts),
+    layerOrder: toEngineLayerOrder(config),
   };
 }
 
@@ -346,4 +396,5 @@ export async function applyComposition(
   await player.setZoomRegions(resolved.zoomRegions);
   await player.setCuts(resolved.cuts);
   await player.setWebcamCuts(resolved.webcamCuts);
+  await player.setLayerOrder(resolved.layerOrder);
 }
