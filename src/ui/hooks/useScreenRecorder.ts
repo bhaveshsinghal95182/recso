@@ -201,6 +201,7 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
       targetFps: 30 | 60 = 60,
       nativeWebcamDeviceId?: string,
       cameraSource: 'local' | 'phone' = 'local',
+      nativeMicDeviceId?: string,
     ) => {
       let recordingId: string | null = null;
 
@@ -229,6 +230,7 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
           targetFps,
           nativeWebcamDeviceId,
           cameraSource,
+          nativeMicDeviceId,
           options: {
             videoBitrate,
             audioBitrate: audioRef.current ? 128000 : 0,

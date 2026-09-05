@@ -49,6 +49,11 @@ interface VelocityBindings {
     label: string;
     isDefault: boolean;
   }>;
+  listAudioCaptureDevices?(): Array<{
+    id: string;
+    label: string;
+    isDefault: boolean;
+  }>;
   listAvailableWindows(): Array<{
     title: string;
     className: string;
@@ -78,6 +83,7 @@ interface VelocityBindings {
     webcamDeviceId?: string;
     webcamSource?: 'local' | 'phone';
     includeMicrophone?: boolean;
+    microphoneDeviceId?: string;
   }) => VelocityStopper;
   startWindowRecordingV2?: (options: {
     windowTitle: string;
@@ -89,6 +95,7 @@ interface VelocityBindings {
     webcamDeviceId?: string;
     webcamSource?: 'local' | 'phone';
     includeMicrophone?: boolean;
+    microphoneDeviceId?: string;
   }) => VelocityStopper;
 }
 
@@ -101,6 +108,8 @@ interface NativeClockOptions {
   webcamSource?: 'local' | 'phone';
   /** Capture the microphone natively, into the video's own audio track. */
   includeMicrophone?: boolean;
+  /** Which microphone, as an id from `listAudioCaptureDevices`. */
+  microphoneDeviceId?: string;
 }
 
 interface NativeWebcamCapability {
@@ -212,6 +221,19 @@ function getVelocityBindings(): VelocityBindings {
   throw new Error(`Velocity bindings not found. Tried: ${candidatePaths.join(', ')}`);
 }
 
+/** Every microphone the native recorder can open. Empty on a build without it. */
+export function listNativeAudioCaptureDevices(): Array<{
+  id: string;
+  label: string;
+  isDefault: boolean;
+}> {
+  try {
+    return getVelocityBindings().listAudioCaptureDevices?.() ?? [];
+  } catch {
+    return [];
+  }
+}
+
 function startVelocityMonitorRecording(
   velocity: VelocityBindings,
   outputPath: string,
@@ -232,6 +254,7 @@ function startVelocityMonitorRecording(
       webcamDeviceId: nativeClockOptions.webcamDeviceId,
       webcamSource: nativeClockOptions.webcamSource,
       includeMicrophone: nativeClockOptions.includeMicrophone,
+      microphoneDeviceId: nativeClockOptions.microphoneDeviceId,
     });
   }
 
@@ -265,6 +288,7 @@ function startVelocityWindowRecording(
       webcamDeviceId: nativeClockOptions.webcamDeviceId,
       webcamSource: nativeClockOptions.webcamSource,
       includeMicrophone: nativeClockOptions.includeMicrophone,
+      microphoneDeviceId: nativeClockOptions.microphoneDeviceId,
     });
   }
 
@@ -966,6 +990,9 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
     const nativeClockOptions: NativeClockOptions = {
       useSingularClock: useNativeSingularClock,
       includeMicrophone: nativeAudio.microphone,
+      // Only meaningful to the native path: a browser device id would not
+      // resolve to a WASAPI endpoint.
+      microphoneDeviceId: config.nativeMicDeviceId,
       targetFps: config.targetFps === 30 ? 30 : 60,
       enableWebcam: Boolean(config.recordCamera),
       webcamDeviceId: config.nativeWebcamDeviceId || config.cameraDeviceId,

@@ -183,6 +183,8 @@ struct Capture {
   bitrate: u32,
   enable_system_audio: bool,
   enable_microphone: bool,
+  /// Which microphone, by WASAPI endpoint id. None takes the system default.
+  microphone_device_id: Option<String>,
   /// Every endpoint being recorded. Empty means a video-only file.
   audio_sources: Vec<AudioSource>,
   audio_fractional_bytes: f64,
@@ -233,28 +235,32 @@ impl Capture {
     // Each endpoint is opened independently, and one failing costs only itself.
     // A machine with no microphone should still record what it was playing, and
     // a machine with sound disabled should still record a voice.
-    let wanted: [(bool, Direction, &'static str, &'static str); 2] = [
+    let wanted: [(bool, Direction, Option<String>, &'static str, &'static str); 2] = [
       (
         self.enable_system_audio,
         Direction::Render,
+        // Loopback always follows whatever the machine is playing out of, so
+        // there is no device to choose here.
+        None,
         "system audio",
         "velocity-loopback-audio",
       ),
       (
         self.enable_microphone,
         Direction::Capture,
+        self.microphone_device_id.clone(),
         "microphone",
         "velocity-microphone-audio",
       ),
     ];
 
-    for (enabled, endpoint, label, thread_name) in wanted {
+    for (enabled, endpoint, device_id, label, thread_name) in wanted {
       if !enabled {
         continue;
       }
 
       let stop = Arc::new(AtomicBool::new(false));
-      match spawn_audio_capture(endpoint, thread_name, stop.clone()) {
+      match spawn_audio_capture(endpoint, device_id, thread_name, stop.clone()) {
         Ok((rx, thread)) => {
           self.audio_sources.push(AudioSource {
             label,
@@ -367,6 +373,82 @@ impl Capture {
   }
 }
 
+/// One recording device the machine can hear from.
+#[napi(object)]
+pub struct AudioDeviceInfo {
+  /// The WASAPI endpoint id. Stable across renames, unlike the label.
+  pub id: String,
+  pub label: String,
+  pub is_default: bool,
+}
+
+fn enumerate_capture_devices() -> Result<Vec<AudioDeviceInfo>, String> {
+  let enumerator = DeviceEnumerator::new().map_err(|error| format!("{error}"))?;
+
+  let default_id = enumerator
+    .get_default_device(&Direction::Capture)
+    .ok()
+    .and_then(|device| device.get_id().ok());
+
+  let collection = enumerator
+    .get_device_collection(&Direction::Capture)
+    .map_err(|error| format!("{error}"))?;
+  let count = collection
+    .get_nbr_devices()
+    .map_err(|error| format!("{error}"))?;
+
+  let mut devices = Vec::new();
+  for index in 0..count {
+    let Ok(device) = collection.get_device_at_index(index) else {
+      continue;
+    };
+    // Without an id there is no way to ask for this device later, so it would
+    // only be an entry the user could pick and not get.
+    let Ok(id) = device.get_id() else {
+      continue;
+    };
+
+    let label = device
+      .get_friendlyname()
+      .unwrap_or_else(|_| format!("Microphone {}", index + 1));
+    let is_default = default_id.as_deref() == Some(id.as_str());
+
+    devices.push(AudioDeviceInfo {
+      id,
+      label,
+      is_default,
+    });
+  }
+
+  Ok(devices)
+}
+
+/// Every microphone Windows can record from.
+///
+/// Needed because the browser's `enumerateDevices` ids are salted per origin and
+/// mean nothing to WASAPI -- so a microphone picked in the renderer could not be
+/// opened here, and native capture silently used whatever was default. These ids
+/// go back to `startMonitorRecordingV2` and open the device that was chosen.
+#[napi]
+pub fn list_audio_capture_devices() -> Vec<AudioDeviceInfo> {
+  // On its own thread with its own apartment. The JavaScript thread already has
+  // COM initialised in a mode this does not control, and asking for a different
+  // one there fails outright.
+  thread::spawn(|| {
+    if initialize_mta().is_err() {
+      return Vec::new();
+    }
+    let devices = enumerate_capture_devices().unwrap_or_else(|error| {
+      eprintln!("[VelocityCapture] could not list recording devices: {error}");
+      Vec::new()
+    });
+    deinitialize();
+    devices
+  })
+  .join()
+  .unwrap_or_default()
+}
+
 /// Open one WASAPI endpoint and stream 48kHz stereo PCM out of it.
 ///
 /// `endpoint` is which side of the sound card to take the default device from,
@@ -381,13 +463,52 @@ impl Capture {
 /// the endpoint is a parameter and the initialise call is not.
 fn run_audio_capture(
   endpoint: Direction,
+  device_id: Option<String>,
   stop_flag: Arc<AtomicBool>,
   tx: SyncSender<Vec<u8>>,
 ) -> Result<(), String> {
   let enumerator = DeviceEnumerator::new().map_err(|error| format!("{error}"))?;
-  let device = enumerator
-    .get_default_device(&endpoint)
-    .map_err(|error| format!("{error}"))?;
+
+  // Matched on id rather than name: a device the user renames is still the
+  // device they picked, and two identical headsets share a friendly name.
+  let device = match device_id.as_deref() {
+    Some(wanted) => {
+      let collection = enumerator
+        .get_device_collection(&endpoint)
+        .map_err(|error| format!("{error}"))?;
+      let count = collection
+        .get_nbr_devices()
+        .map_err(|error| format!("{error}"))?;
+
+      let mut found = None;
+      for index in 0..count {
+        let Ok(candidate) = collection.get_device_at_index(index) else {
+          continue;
+        };
+        if candidate.get_id().ok().as_deref() == Some(wanted) {
+          found = Some(candidate);
+          break;
+        }
+      }
+
+      match found {
+        Some(device) => device,
+        None => {
+          // Unplugged since it was chosen. The default is a better answer than
+          // no sound at all, and saying so beats a silent recording.
+          eprintln!(
+            "[VelocityCapture] recording device {wanted} is gone; falling back to the default"
+          );
+          enumerator
+            .get_default_device(&endpoint)
+            .map_err(|error| format!("{error}"))?
+        }
+      }
+    }
+    None => enumerator
+      .get_default_device(&endpoint)
+      .map_err(|error| format!("{error}"))?,
+  };
 
   let mut audio_client = device
     .get_iaudioclient()
@@ -460,6 +581,7 @@ fn run_audio_capture(
 
 fn spawn_audio_capture(
   endpoint: Direction,
+  device_id: Option<String>,
   thread_name: &str,
   stop_flag: Arc<AtomicBool>,
 ) -> Result<(Receiver<Vec<u8>>, JoinHandle<()>), String> {
@@ -472,7 +594,7 @@ fn spawn_audio_capture(
         return;
       }
 
-      let _ = run_audio_capture(endpoint, stop_flag, tx);
+      let _ = run_audio_capture(endpoint, device_id, stop_flag, tx);
       deinitialize();
     })
     .map_err(|error| error.to_string())?;
@@ -481,17 +603,19 @@ fn spawn_audio_capture(
 }
 
 impl GraphicsCaptureApiHandler for Capture {
-  type Flags = (String, u32, bool, bool, Arc<RecordingStats>);
+  type Flags = (String, u32, bool, bool, Option<String>, Arc<RecordingStats>);
   type Error = Box<dyn std::error::Error + Send + Sync>;
 
   fn new(ctx: Context<Self::Flags>) -> Result<Self, Self::Error> {
-    let (output_path, bitrate, enable_system_audio, enable_microphone, stats) = ctx.flags;
+    let (output_path, bitrate, enable_system_audio, enable_microphone, microphone_device_id, stats) =
+      ctx.flags;
     Ok(Self {
       encoder: None,
       output_path,
       bitrate,
       enable_system_audio,
       enable_microphone,
+      microphone_device_id,
       audio_sources: Vec::new(),
       audio_fractional_bytes: 0.0,
       last_frame_timestamp_100ns: None,
@@ -549,6 +673,7 @@ pub fn start_monitor_recording(
     // The v1 entry point predates microphone capture and its callers have no
     // way to ask for it.
     None,
+    None,
     MinimumUpdateIntervalSettings::Default,
     DEFAULT_CAPTURE_FPS,
   )
@@ -559,6 +684,7 @@ fn start_monitor_recording_internal(
   bitrate: u32,
   include_system_audio: Option<bool>,
   include_microphone: Option<bool>,
+  microphone_device_id: Option<String>,
   minimum_update_interval_settings: MinimumUpdateIntervalSettings,
   target_fps: u32,
 ) -> napi::Result<Stopper> {
@@ -594,6 +720,7 @@ fn start_monitor_recording_internal(
       bitrate,
       enable_system_audio,
       enable_microphone,
+      microphone_device_id.clone(),
       stats.clone(),
     ),
   );
@@ -628,6 +755,7 @@ pub fn start_window_recording(
     bitrate,
     include_system_audio,
     None,
+    None,
     MinimumUpdateIntervalSettings::Default,
     DEFAULT_CAPTURE_FPS,
   )
@@ -639,6 +767,7 @@ fn start_window_recording_internal(
   bitrate: u32,
   include_system_audio: Option<bool>,
   include_microphone: Option<bool>,
+  microphone_device_id: Option<String>,
   minimum_update_interval_settings: MinimumUpdateIntervalSettings,
   target_fps: u32,
 ) -> napi::Result<Stopper> {
@@ -686,6 +815,7 @@ fn start_window_recording_internal(
       bitrate,
       enable_system_audio,
       enable_microphone,
+      microphone_device_id.clone(),
       stats.clone(),
     ),
   );
@@ -735,6 +865,7 @@ pub(crate) fn start_monitor_recording_with_target_fps(
   bitrate: u32,
   include_system_audio: Option<bool>,
   include_microphone: Option<bool>,
+  microphone_device_id: Option<String>,
   target_fps: Option<u32>,
 ) -> napi::Result<Stopper> {
   let fps = resolved_capture_fps(target_fps, "start_monitor_recording_v2");
@@ -743,6 +874,7 @@ pub(crate) fn start_monitor_recording_with_target_fps(
     bitrate,
     include_system_audio,
     include_microphone,
+    microphone_device_id,
     minimum_update_interval_for_fps(fps),
     fps,
   )
@@ -754,6 +886,7 @@ pub(crate) fn start_window_recording_with_target_fps(
   bitrate: u32,
   include_system_audio: Option<bool>,
   include_microphone: Option<bool>,
+  microphone_device_id: Option<String>,
   target_fps: Option<u32>,
 ) -> napi::Result<Stopper> {
   let fps = resolved_capture_fps(target_fps, "start_window_recording_v2");
@@ -763,6 +896,7 @@ pub(crate) fn start_window_recording_with_target_fps(
     bitrate,
     include_system_audio,
     include_microphone,
+    microphone_device_id,
     minimum_update_interval_for_fps(fps),
     fps,
   )

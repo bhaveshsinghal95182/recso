@@ -70,6 +70,10 @@ interface FloatingRecorderToolbarProps {
   /** Where the camera picture comes from: this machine, or a paired phone. */
   cameraSource: 'local' | 'phone';
   onCameraSourceChange: (source: 'local' | 'phone') => void;
+  /** Microphones as the native recorder sees them; its ids are what it opens. */
+  nativeMicrophones: Array<{ id: string; label: string; isDefault: boolean }>;
+  nativeMicDeviceId: string | null;
+  onNativeMicDeviceChange: (deviceId: string) => void;
   onMicDeviceChange: (deviceId: string) => void;
   onStart: () => void;
   onStop: () => void;
@@ -110,6 +114,9 @@ export function FloatingRecorderToolbar({
   onCameraDeviceChange,
   cameraSource,
   onCameraSourceChange,
+  nativeMicrophones,
+  nativeMicDeviceId,
+  onNativeMicDeviceChange,
   onMicDeviceChange,
   onStart,
   onStop,
@@ -218,6 +225,27 @@ export function FloatingRecorderToolbar({
     }
   };
 
+  /**
+   * The microphone list to show.
+   *
+   * The native one when it has anything, because native capture is what records
+   * the sound now and it can only open devices from that list. The browser's is
+   * the fallback for a machine where native enumeration found nothing, which is
+   * anywhere that is not Windows.
+   */
+  const usingNativeMics = nativeMicrophones.length > 0;
+  const micDevices = usingNativeMics
+    ? nativeMicrophones.map(
+        (device) =>
+          ({
+            deviceId: device.id,
+            label: device.label,
+            kind: 'audioinput',
+            groupId: '',
+          }) as MediaDeviceInfo,
+      )
+    : microphones;
+
   const canStart = Boolean(selectedSourceId && outputDir && fileName && isOutputValid);
 
   return (
@@ -251,15 +279,22 @@ export function FloatingRecorderToolbar({
             <DevicePanel
               title="Microphone"
               enabled={recordMic}
-              devices={microphones}
-              selectedDeviceId={micDeviceId}
+              devices={micDevices}
+              selectedDeviceId={usingNativeMics ? nativeMicDeviceId : micDeviceId}
               emptyLabel="No microphones found"
               fallbackLabel="Default microphone"
               activeIcon={<Mic size={18} />}
               inactiveIcon={<MicOff size={18} />}
               onToggle={toggleMic}
               onDeviceSelect={(deviceId) => {
-                onMicDeviceChange(deviceId);
+                // Which id this is depends on which list produced it, and they
+                // are not interchangeable -- a browser id means nothing to the
+                // native recorder and vice versa.
+                if (usingNativeMics) {
+                  onNativeMicDeviceChange(deviceId);
+                } else {
+                  onMicDeviceChange(deviceId);
+                }
                 onRecordMicChange(true);
               }}
             />

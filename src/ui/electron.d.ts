@@ -533,6 +533,16 @@ interface ElectronAPI {
     /** Get available screens and windows for recording */
     getSources: () => Promise<DesktopSource[]>;
 
+    /**
+     * Microphones as the native recorder sees them.
+     *
+     * Its ids go to `nativeMicDeviceId`. The browser's `enumerateDevices` ids
+     * cannot: they are salted per origin and resolve to nothing in WASAPI.
+     */
+    listAudioCaptureDevices: () => Promise<
+      Array<{ id: string; label: string; isDefault: boolean }>
+    >;
+
     /** Start a new recording session */
     start: (config: RecordingConfig) => Promise<StartRecordingResult>;
 

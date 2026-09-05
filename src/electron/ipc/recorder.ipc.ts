@@ -46,6 +46,12 @@ export function setRecorderMainWindow(window: BrowserWindow): void {
  */
 export function registerRecorderHandlers(): void {
   // Get available sources (screens/windows)
+  // Microphones as WASAPI sees them. The browser's own list cannot be used for
+  // native capture: its ids are salted per origin and resolve to nothing here.
+  ipcMain.handle('recorder:list-audio-capture-devices', () =>
+    RecorderService.listNativeAudioCaptureDevices(),
+  );
+
   ipcMain.handle('recorder:get-sources', async () => {
     return RecorderService.getSources();
   });

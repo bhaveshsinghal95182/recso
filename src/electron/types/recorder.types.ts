@@ -43,6 +43,15 @@ export interface RecordingConfig {
   cameraSource?: 'local' | 'phone';
   /** Specific microphone device ID (defaults to system default) */
   micDeviceId?: string;
+  /**
+   * The microphone as WASAPI knows it, from `listAudioCaptureDevices`.
+   *
+   * Separate from `micDeviceId` because that one comes from the browser's
+   * `enumerateDevices`, whose ids are salted per origin and mean nothing to the
+   * native recorder -- which is why a microphone chosen in the UI used to be
+   * ignored and whatever Windows called default got recorded instead.
+   */
+  nativeMicDeviceId?: string;
   /** Recording engine mode. Defaults to legacy hybrid capture. */
   nativeCaptureMode?: 'legacy' | 'native-singular-clock';
   /** Target fps for native singular-clock capture path. */

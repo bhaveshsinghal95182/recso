@@ -252,6 +252,14 @@ export declare class VideoPlayer {
 /** Diagnostic: which GPUs exist, and which one are we actually running on? */
 export declare function adapterInfo(): Array<string>
 
+/** One recording device the machine can hear from. */
+export interface AudioDeviceInfo {
+  /** The WASAPI endpoint id. Stable across renames, unlike the label. */
+  id: string
+  label: string
+  isDefault: boolean
+}
+
 /**
  * Diagnostic: what does Media Foundation see in this file?
  * What a file's audio track looks like, if it has one.
@@ -530,6 +538,16 @@ export interface GpuMemory {
 
 export declare function isCursorSettingsSupported(): boolean
 
+/**
+ * Every microphone Windows can record from.
+ *
+ * Needed because the browser's `enumerateDevices` ids are salted per origin and
+ * mean nothing to WASAPI -- so a microphone picked in the renderer could not be
+ * opened here, and native capture silently used whatever was default. These ids
+ * go back to `startMonitorRecordingV2` and open the device that was chosen.
+ */
+export declare function listAudioCaptureDevices(): Array<AudioDeviceInfo>
+
 export declare function listAvailableWindows(): Array<WindowInfo>
 
 /** Diagnostic: which decoder MFTs exist for H.264 and HEVC on this machine? */
@@ -549,6 +567,15 @@ export interface NativeRecordingOptions {
    * guessed back into alignment afterwards.
    */
   includeMicrophone?: boolean
+  /**
+   * Which microphone, as an id from `listAudioCaptureDevices`. Omitted takes
+   * the system default.
+   *
+   * Not a browser `enumerateDevices` id -- those are salted per origin and
+   * mean nothing to WASAPI, which is why the microphone chosen in the renderer
+   * used to be ignored here.
+   */
+  microphoneDeviceId?: string
   targetFps?: number
   enableWebcam?: boolean
   webcamDeviceId?: string
@@ -572,6 +599,15 @@ export interface NativeWindowRecordingOptions {
    * guessed back into alignment afterwards.
    */
   includeMicrophone?: boolean
+  /**
+   * Which microphone, as an id from `listAudioCaptureDevices`. Omitted takes
+   * the system default.
+   *
+   * Not a browser `enumerateDevices` id -- those are salted per origin and
+   * mean nothing to WASAPI, which is why the microphone chosen in the renderer
+   * used to be ignored here.
+   */
+  microphoneDeviceId?: string
   targetFps?: number
   enableWebcam?: boolean
   webcamDeviceId?: string

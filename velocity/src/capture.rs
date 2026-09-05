@@ -8,6 +8,7 @@ use napi_derive::napi;
 
 pub use desktop_capture::{start_monitor_recording, start_window_recording, Stopper};
 pub use borderless::borderless_capture_allowed;
+pub use desktop_capture::{list_audio_capture_devices, AudioDeviceInfo};
 pub use phone_camera::{
   phone_camera_status, push_phone_frame, reset_phone_camera, PhoneCameraStatus,
 };
@@ -46,6 +47,13 @@ pub struct NativeRecordingOptions {
   /// the picture's own timestamps instead of a second clock that has to be
   /// guessed back into alignment afterwards.
   pub include_microphone: Option<bool>,
+  /// Which microphone, as an id from `listAudioCaptureDevices`. Omitted takes
+  /// the system default.
+  ///
+  /// Not a browser `enumerateDevices` id -- those are salted per origin and
+  /// mean nothing to WASAPI, which is why the microphone chosen in the renderer
+  /// used to be ignored here.
+  pub microphone_device_id: Option<String>,
   pub target_fps: Option<u32>,
   pub enable_webcam: Option<bool>,
   pub webcam_device_id: Option<String>,
@@ -66,6 +74,13 @@ pub struct NativeWindowRecordingOptions {
   /// the picture's own timestamps instead of a second clock that has to be
   /// guessed back into alignment afterwards.
   pub include_microphone: Option<bool>,
+  /// Which microphone, as an id from `listAudioCaptureDevices`. Omitted takes
+  /// the system default.
+  ///
+  /// Not a browser `enumerateDevices` id -- those are salted per origin and
+  /// mean nothing to WASAPI, which is why the microphone chosen in the renderer
+  /// used to be ignored here.
+  pub microphone_device_id: Option<String>,
   pub target_fps: Option<u32>,
   pub enable_webcam: Option<bool>,
   pub webcam_device_id: Option<String>,
@@ -120,6 +135,7 @@ pub fn start_monitor_recording_v2(options: NativeRecordingOptions) -> napi::Resu
     options.bitrate,
     options.include_system_audio,
     options.include_microphone,
+    options.microphone_device_id,
     options.target_fps,
   )?;
 
@@ -145,6 +161,7 @@ pub fn start_window_recording_v2(options: NativeWindowRecordingOptions) -> napi:
     options.bitrate,
     options.include_system_audio,
     options.include_microphone,
+    options.microphone_device_id,
     options.target_fps,
   )?;
 

@@ -41,6 +41,18 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
   const [micDeviceId, setMicDeviceId] = useState<string | null>(null);
   const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
   const [microphones, setMicrophones] = useState<MediaDeviceInfo[]>([]);
+  /**
+   * Microphones as WASAPI sees them, which is what native capture opens.
+   *
+   * Listed separately from the browser's because the two do not share ids --
+   * `enumerateDevices` salts them per origin, so a choice made from that list
+   * could not be honoured by the recorder and the system default was used
+   * instead, silently.
+   */
+  const [nativeMicrophones, setNativeMicrophones] = useState<
+    Array<{ id: string; label: string; isDefault: boolean }>
+  >([]);
+  const [nativeMicDeviceId, setNativeMicDeviceId] = useState<string | null>(null);
 
   useEffect(() => {
     const loadDefaults = async () => {
@@ -54,6 +66,14 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
         setMicrophones(devices.filter((device) => device.kind === 'audioinput'));
       } catch (err) {
         console.error('Failed to enumerate devices:', err);
+      }
+
+      try {
+        const native = await window.electron.recorder.listAudioCaptureDevices();
+        setNativeMicrophones(native);
+        setNativeMicDeviceId((current) => current ?? native.find((d) => d.isDefault)?.id ?? null);
+      } catch (err) {
+        console.error('Failed to list native recording devices:', err);
       }
     };
 
@@ -106,6 +126,7 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
       undefined,
       undefined,
       cameraSource,
+      nativeMicDeviceId || undefined,
     );
     setIsStarting(false);
 
@@ -165,6 +186,9 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
         recordSystemAudio={recordSystemAudio}
         cameraDeviceId={cameraDeviceId}
         micDeviceId={micDeviceId}
+        nativeMicrophones={nativeMicrophones}
+        nativeMicDeviceId={nativeMicDeviceId}
+        onNativeMicDeviceChange={setNativeMicDeviceId}
         cameras={cameras}
         microphones={microphones}
         onSourceSelect={setSelectedSourceId}

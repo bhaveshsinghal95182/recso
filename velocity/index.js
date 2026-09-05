@@ -716,6 +716,7 @@ module.exports.generateSelfSignedCertificate = nativeBinding.generateSelfSignedC
 module.exports.gpuDecoderProfiles = nativeBinding.gpuDecoderProfiles
 module.exports.gpuMemory = nativeBinding.gpuMemory
 module.exports.isCursorSettingsSupported = nativeBinding.isCursorSettingsSupported
+module.exports.listAudioCaptureDevices = nativeBinding.listAudioCaptureDevices
 module.exports.listAvailableWindows = nativeBinding.listAvailableWindows
 module.exports.listDecoders = nativeBinding.listDecoders
 module.exports.listWebcamDevices = nativeBinding.listWebcamDevices

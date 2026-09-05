@@ -173,6 +173,11 @@ electron.contextBridge.exposeInMainWorld('electron', {
   recorder: {
     getSources: (): Promise<DesktopSource[]> => electron.ipcRenderer.invoke('recorder:get-sources'),
 
+    /** Microphones as the native recorder sees them, for when it is capturing. */
+    listAudioCaptureDevices: (): Promise<
+      Array<{ id: string; label: string; isDefault: boolean }>
+    > => electron.ipcRenderer.invoke('recorder:list-audio-capture-devices'),
+
     start: (config: RecordingConfig): Promise<StartRecordingResult> =>
       electron.ipcRenderer.invoke('recorder:start', config),
 
