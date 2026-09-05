@@ -226,25 +226,25 @@ and it should be revisited if the engine is ever abandoned.
 ## Missing: parity with the Pixi compositor
 
 What the editor's `CompositionEngine` does, against what the engine has. This
-started as a list of everything missing; one row is left, and it is cosmetic.
+started as a list of everything missing. There is nothing left in it.
 
-| Feature                            | Engine | Notes                                                                       |
-| ---------------------------------- | ------ | --------------------------------------------------------------------------- |
-| Screen video                       | yes    |                                                                             |
-| Webcam overlay                     | yes    | shape, corner radius, and aspect fit                                        |
-| Cursor sprite                      | yes    | one global bitmap; see below                                                |
-| Brightness / contrast / saturation | yes    | one hardcoded pass                                                          |
-| ~~Backgrounds~~                    | yes    | flat colour direct; gradients, patterns and images rasterised by the caller |
-| ~~Zoom regions~~                   | yes    | the animated zoom/pan timeline                                              |
-| ~~Cuts / trim~~                    | yes    | source↔composition mapping, and cut-aware audio                             |
-| ~~Per-event cursor bitmaps~~       | yes    | a deduped bitmap table; each sample indexes into it                         |
-| ~~Click animations~~               | yes    | a scale about the hotspot, punched out and settled back                     |
-| ~~Cursor smear~~                   | yes    | the pointer stretched along its travel; not the compositor's blur trail     |
-| ~~Per-region cursor overrides~~    | yes    | a table entry, plus a sample injected at each boundary                      |
-| ~~I-beam detection~~               | yes    | the same known-handle check, choosing a table entry                         |
-| ~~Webcam borders~~                 | yes    | drawn under the camera, the same shape grown by the width                   |
-| Webcam shadows                     | **no** | needs a blur pass; cosmetic, and reported rather than refused over          |
-| ~~Canvas padding / layout~~        | yes    | the video's placement within a larger canvas                                |
+| Feature                            | Engine | Notes                                                                         |
+| ---------------------------------- | ------ | ----------------------------------------------------------------------------- |
+| Screen video                       | yes    |                                                                               |
+| Webcam overlay                     | yes    | shape, corner radius, and aspect fit                                          |
+| Cursor sprite                      | yes    | one global bitmap; see below                                                  |
+| Brightness / contrast / saturation | yes    | one hardcoded pass                                                            |
+| ~~Backgrounds~~                    | yes    | flat colour direct; gradients, patterns and images rasterised by the caller   |
+| ~~Zoom regions~~                   | yes    | the animated zoom/pan timeline                                                |
+| ~~Cuts / trim~~                    | yes    | source↔composition mapping, and cut-aware audio                               |
+| ~~Per-event cursor bitmaps~~       | yes    | a deduped bitmap table; each sample indexes into it                           |
+| ~~Click animations~~               | yes    | a scale about the hotspot, punched out and settled back                       |
+| ~~Cursor smear~~                   | yes    | the pointer stretched along its travel; not the compositor's blur trail       |
+| ~~Per-region cursor overrides~~    | yes    | a table entry, plus a sample injected at each boundary                        |
+| ~~I-beam detection~~               | yes    | the same known-handle check, choosing a table entry                           |
+| ~~Webcam borders~~                 | yes    | drawn under the camera, the same shape grown by the width                     |
+| ~~Webcam shadows~~                 | yes    | analytic, from the same distance field as the shape -- one quad, no blur pass |
+| ~~Canvas padding / layout~~        | yes    | the video's placement within a larger canvas                                  |
 
 The structural one here was per-event bitmaps, and it is done. The engine's
 cursor used to be a single `SpriteTexture` plus a track of positions, against a

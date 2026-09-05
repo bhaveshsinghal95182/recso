@@ -6,7 +6,9 @@
  * quietly missing a layer. Anything the mapper drops is named here so it shows
  * up in the UI instead of being discovered in an export.
  *
- * Entries come off this list as `docs/ENGINE-FEATURE-MAP.md` gets shorter.
+ * Entries come off this list as `docs/ENGINE-FEATURE-MAP.md` gets shorter. It
+ * is currently empty -- webcam shadows were the last one -- and stays because
+ * the next feature the editor grows will need it again.
  */
 
 import type { CompositionConfig } from '../types';
@@ -34,16 +36,11 @@ export interface UnsupportedFeature {
   severity: 'blocking' | 'cosmetic';
 }
 
-export function unsupportedFeatures(config: CompositionConfig): UnsupportedFeature[] {
-  const missing: UnsupportedFeature[] = [];
-
-  if (config.webcam?.enabled && config.webcam.shadows?.some((shadow) => shadow.blur > 0)) {
-    missing.push({
-      label: 'Webcam shadow',
-      detail: 'needs a blur pass; the box, its radius and its border do render',
-      severity: 'cosmetic',
-    });
-  }
-
-  return missing;
+export function unsupportedFeatures(_config: CompositionConfig): UnsupportedFeature[] {
+  // Empty, and deliberately still here. The engine draws every composition the
+  // editor can describe, but this is the seam that catches the next feature
+  // added to the editor and not to the engine -- and the failure it exists to
+  // prevent is a preview that looks plausible while quietly missing a layer,
+  // which nobody notices until the export.
+  return [];
 }

@@ -140,7 +140,15 @@ cbuffer Overlay : register(b1) {
   /// How far the pointer travels forward, in the sprite's own uv units, over
   /// the length of tail being drawn. Only `ps_smear` reads it.
   float2 smear;
-  float2 _pad1;
+  /// Half the *shadow's* shape, in pixels. Only `ps_shadow` reads it, and it is
+  /// smaller than `half_size_px` because a shadow's quad is grown to hold the
+  /// blur that spills outside the shape. Passed rather than derived from the
+  /// growth, so the caller can grow the quad by whatever it likes and the
+  /// silhouette stays where it was put.
+  float2 shadow_half_px;
+  /// Half-width of the shadow's edge falloff, in pixels. See `ps_shadow`.
+  float  shadow_softness_px;
+  float3 _pad1;
 };
 
 struct QuadOut {
@@ -163,21 +171,29 @@ QuadOut vs_quad(uint id : SV_VertexID) {
 
 Texture2D<float4> OverlaySource : register(t0);
 
-/// Signed distance to the quad's shape, in pixels. Negative inside.
-float overlay_distance(float2 local) {
+/// Signed distance to a shape of half-size `half_px`, in pixels. Negative inside.
+///
+/// Takes the half-size rather than reading `half_size_px` because the shadow
+/// draws a shape that is smaller than its own quad.
+float shape_distance(float2 local, float2 half_px, float radius) {
   if (shape > 0.5) {
     // Ellipse. Normalising by the half axes turns it into a unit circle, and
     // scaling the result back by the smaller axis keeps the gradient in
     // roughly-pixel units so the same smoothstep width works for both shapes.
-    float2 n = local / max(half_size_px, 1e-4);
-    return (length(n) - 1.0) * min(half_size_px.x, half_size_px.y);
+    float2 n = local / max(half_px, 1e-4);
+    return (length(n) - 1.0) * min(half_px.x, half_px.y);
   }
 
   // Rounded rectangle: shrink the box by the radius, take the distance to that
   // inner box, then subtract the radius back off.
-  float r = clamp(corner_radius_px, 0.0, min(half_size_px.x, half_size_px.y));
-  float2 q = abs(local) - (half_size_px - r);
+  float r = clamp(radius, 0.0, min(half_px.x, half_px.y));
+  float2 q = abs(local) - (half_px - r);
   return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+}
+
+/// Signed distance to the quad's own shape.
+float overlay_distance(float2 local) {
+  return shape_distance(local, half_size_px, corner_radius_px);
 }
 
 /// Webcam overlay: opaque source, shape comes from the mask.
@@ -208,6 +224,37 @@ float4 ps_overlay(QuadOut i) : SV_Target {
 float4 ps_solid(QuadOut i) : SV_Target {
   float d = overlay_distance(i.local);
   return float4(tint.rgb, tint.a * opacity * saturate(0.5 - d));
+}
+
+/// A drop shadow: the shape's silhouette, blurred, in a flat colour.
+///
+/// Analytic, not a blur pass. The alternative is the honest one -- draw the
+/// silhouette to a scratch target, run a separable Gaussian over it, composite
+/// -- which costs three passes and two render targets per shadow layer, and the
+/// default webcam style carries three of them. Here the shape is already an
+/// exact distance field, and blurring a hard edge is the same as softening the
+/// step across it, so the whole thing collapses into one draw with no target.
+///
+/// The profile is right, not just plausible. A Gaussian-blurred half-plane has
+/// alpha `phi(-d / sigma)`, and a smoothstep whose half-width is 1.88 sigma has
+/// the same slope through the middle -- within a couple of percent everywhere,
+/// which is well under a step of 8-bit alpha. Canvas defines `shadowBlur` as a
+/// Gaussian with sigma = blur/2, so the caller passes 0.94 * blur and this
+/// matches what the Canvas2D compositor draws.
+///
+/// The one real difference from a Gaussian is that a smoothstep reaches zero
+/// rather than approaching it, which is a feature: the quad can be sized to the
+/// exact reach of the falloff with nothing cut off, where a true Gaussian would
+/// have to be truncated somewhere and show a faint edge where it was.
+float4 ps_shadow(QuadOut i) : SV_Target {
+  float d = shape_distance(i.local, shadow_half_px, corner_radius_px);
+
+  // A shadow with no blur is a hard offset silhouette, and a step function
+  // aliases. Half a pixel is the same feather the other masks use.
+  float w = max(shadow_softness_px, 0.5);
+  float a = 1.0 - smoothstep(-w, w, d);
+
+  return float4(tint.rgb, tint.a * opacity * a);
 }
 
 /// Cursor sprite: alpha comes from the image, no mask.

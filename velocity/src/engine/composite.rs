@@ -242,7 +242,9 @@ pub fn fit_source(rect: Rect, src_width: u32, src_height: u32, fit: FitMode) -> 
 /// computes -- the anchor grid and size ratios are resolved on the JS side and
 /// arrive here already flattened, so there is exactly one placement formula in
 /// the app rather than two that have to agree.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// Not `Copy`: the shadow stack is a `Vec`. Cloned where it used to be copied,
+/// which happens once per layout change rather than once per frame.
+#[derive(Clone, Debug, PartialEq)]
 pub struct WebcamLayout {
   pub rect: Rect,
   pub shape: OverlayShape,
@@ -252,6 +254,71 @@ pub struct WebcamLayout {
   /// Border thickness in canvas pixels, drawn outside the rect. Zero is none.
   pub border_width: f32,
   pub border_colour: [f32; 4],
+  /// Drop shadows, drawn under everything else in the order given. Usually two
+  /// or three: a style is built out of a tight dark one and a wide soft one.
+  pub shadows: Vec<WebcamShadow>,
+}
+
+/// One drop shadow layer under the camera.
+///
+/// The same four numbers a CSS box-shadow or a Canvas2D `shadowBlur` carries,
+/// because that is where the values come from -- the editor's webcam styles are
+/// authored as shadow stacks and this is what they mean.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WebcamShadow {
+  /// Canvas pixels, positive right and down.
+  pub offset: [f32; 2],
+  /// Canvas's `shadowBlur`, which is a Gaussian of sigma = blur/2.
+  pub blur: f32,
+  pub colour: [f32; 4],
+}
+
+/// Turning canvas's blur radius into the smoothstep half-width `ps_shadow` uses.
+///
+/// A Gaussian-blurred edge has alpha `phi(-d / sigma)`; a smoothstep of
+/// half-width 1.88 sigma has the same slope through the middle and tracks it to
+/// within a couple of percent. Canvas defines `shadowBlur` as sigma = blur/2,
+/// so 1.88 * 0.5 = 0.94.
+const SHADOW_SOFTNESS_PER_BLUR: f32 = 0.94;
+
+impl WebcamShadow {
+  /// How far the falloff reaches past the shape, in pixels.
+  ///
+  /// Exact rather than a guess, because a smoothstep actually reaches zero --
+  /// there is no tail to truncate. The extra pixel is slack against rounding at
+  /// the quad's edge.
+  pub fn reach(&self) -> f32 {
+    self.softness() + 1.0
+  }
+
+  pub fn softness(&self) -> f32 {
+    self.blur.max(0.0) * SHADOW_SOFTNESS_PER_BLUR
+  }
+
+  /// The quad to draw this shadow in: the shape moved by the offset, then grown
+  /// on every side by the reach so nothing is clipped.
+  pub fn quad_rect(&self, shape: Rect) -> Rect {
+    Rect {
+      x: shape.x + self.offset[0],
+      y: shape.y + self.offset[1],
+      width: shape.width,
+      height: shape.height,
+    }
+    .expanded(self.reach())
+  }
+
+  /// Whether this layer would put anything on screen.
+  ///
+  /// Transparent is the obvious one; a style carries disabled layers as
+  /// all-zeroes and each still costs a quad the size of the box plus its blur.
+  /// No blur *and* no offset is the subtler one: the silhouette then lands
+  /// exactly under the camera that is about to be drawn over it, so the only
+  /// thing it can affect is the antialiased edge. The Canvas2D compositor skips
+  /// that case too, and the two have to agree or a style looks different in the
+  /// preview than it did before.
+  pub fn is_visible(&self) -> bool {
+    self.colour[3] > 0.0 && (self.blur > 0.0 || self.offset != [0.0, 0.0])
+  }
 }
 
 impl Default for WebcamLayout {
@@ -269,6 +336,7 @@ impl Default for WebcamLayout {
       fit: FitMode::Cover,
       border_width: 0.0,
       border_colour: [0.0, 0.0, 0.0, 1.0],
+      shadows: Vec::new(),
     }
   }
 }
@@ -288,6 +356,15 @@ impl WebcamLayout {
     self.opacity = self.opacity.clamp(0.0, 1.0);
     self.corner_radius = self.corner_radius.max(0.0);
     self.border_width = self.border_width.max(0.0);
+    // A shadow that cannot be seen still costs a quad the size of the box plus
+    // its blur, and a style with three layers is the common case rather than
+    // the exotic one.
+    self.shadows.retain(|shadow| {
+      shadow.is_visible()
+        && shadow.blur.is_finite()
+        && shadow.offset[0].is_finite()
+        && shadow.offset[1].is_finite()
+    });
     if !self.rect.x.is_finite() || !self.rect.y.is_finite() {
       self.rect.x = 0.0;
       self.rect.y = 0.0;
@@ -307,6 +384,7 @@ pub struct Overlays {
   ps_sprite: ID3D11PixelShader,
   ps_smear: ID3D11PixelShader,
   ps_solid: ID3D11PixelShader,
+  ps_shadow: ID3D11PixelShader,
   blend: ID3D11BlendState,
   constants: ID3D11Buffer,
 }
@@ -363,6 +441,22 @@ pub enum Fill {
   Smear([f32; 2]),
   /// A flat colour, no texture. Borders.
   Solid([f32; 4]),
+  /// The shape's silhouette, blurred, in a flat colour. Drop shadows.
+  Shadow(ShadowFill),
+}
+
+/// A shadow quad's shape, in the form `ps_shadow` wants it.
+///
+/// The half-size is here rather than being taken from the quad because the two
+/// differ: the quad is grown to hold the blur, and the silhouette must stay the
+/// size of the box it is cast by.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShadowFill {
+  pub colour: [f32; 4],
+  /// Half the shape's size, in destination pixels.
+  pub half: [f32; 2],
+  /// Half-width of the edge falloff, in pixels.
+  pub softness: f32,
 }
 
 impl Overlays {
@@ -373,6 +467,7 @@ impl Overlays {
     ps_sprite: ID3D11PixelShader,
     ps_smear: ID3D11PixelShader,
     ps_solid: ID3D11PixelShader,
+    ps_shadow: ID3D11PixelShader,
   ) -> Result<Self> {
     // Straight alpha over the destination. The overlays are drawn after the
     // base is already opaque, so there is nothing to preserve in the
@@ -393,9 +488,9 @@ impl Overlays {
     let mut blend = None;
     unsafe { gpu.device.CreateBlendState(&desc, Some(&mut blend))? };
 
-    // 24 floats: the rect, the mask, the grade, the uv sub-rect, the tint and
-    // the smear vector.
-    let constants = super::render::create_constant_buffer(gpu, 24 * 4)?;
+    // 28 floats: the rect, the mask, the grade, the uv sub-rect, the tint, the
+    // smear vector and the shadow's shape.
+    let constants = super::render::create_constant_buffer(gpu, 28 * 4)?;
 
     Ok(Self {
       vs,
@@ -403,6 +498,7 @@ impl Overlays {
       ps_sprite,
       ps_smear,
       ps_solid,
+      ps_shadow,
       blend: blend.unwrap(),
       constants,
     })
@@ -449,6 +545,7 @@ impl Overlays {
           Fill::Sprite => &self.ps_sprite,
           Fill::Smear(_) => &self.ps_smear,
           Fill::Solid(_) => &self.ps_solid,
+          Fill::Shadow(_) => &self.ps_shadow,
         },
         None,
       );
@@ -473,11 +570,16 @@ impl Overlays {
   unsafe fn upload(&self, ctx: &ID3D11DeviceContext, ndc: [f32; 4], quad: Quad) -> Result<()> {
     let tint = match quad.fill {
       Fill::Solid(colour) => colour,
+      Fill::Shadow(shadow) => shadow.colour,
       _ => [0.0, 0.0, 0.0, 0.0],
     };
     let smear = match quad.fill {
       Fill::Smear(offset) => offset,
       _ => [0.0, 0.0],
+    };
+    let (shadow_half, shadow_softness) = match quad.fill {
+      Fill::Shadow(shadow) => (shadow.half, shadow.softness),
+      _ => ([0.0, 0.0], 0.0),
     };
 
     let values = [
@@ -506,6 +608,10 @@ impl Overlays {
       tint[3],
       smear[0],
       smear[1],
+      shadow_half[0],
+      shadow_half[1],
+      shadow_softness,
+      0.0,
       0.0,
       0.0,
     ];
@@ -1392,6 +1498,109 @@ mod tests {
     let track = CursorTrack::new(vec![sample(0.0, 0.0)]);
 
     assert!(track.motion_at(0.0).is_none());
+  }
+
+  // --- webcam shadows ------------------------------------------------------
+
+  fn shadow(offset: [f32; 2], blur: f32) -> WebcamShadow {
+    WebcamShadow {
+      offset,
+      blur,
+      colour: [0.0, 0.0, 0.0, 0.5],
+    }
+  }
+
+  fn box_rect() -> Rect {
+    Rect {
+      x: 100.0,
+      y: 200.0,
+      width: 320.0,
+      height: 180.0,
+    }
+  }
+
+  /// The one that would be visible if it were wrong: a falloff wider than the
+  /// quad is cut off, and a cut-off shadow has a hard straight edge running
+  /// through it. Asserted as a property over a range of blurs rather than one
+  /// case, because the failure is a constant being slightly too small.
+  #[test]
+  fn a_shadow_quad_holds_the_whole_falloff() {
+    for blur in [0.0, 1.0, 8.0, 40.0, 200.0] {
+      let s = shadow([0.0, 0.0], blur);
+      let quad = s.quad_rect(box_rect());
+      let slack = (quad.width - box_rect().width) * 0.5;
+
+      assert!(
+        slack >= s.softness(),
+        "blur {blur}: quad grew by {slack} for a falloff of {}",
+        s.softness()
+      );
+    }
+  }
+
+  #[test]
+  fn a_shadow_is_cast_from_the_box_it_is_offset_from() {
+    let quad = shadow([12.0, -6.0], 0.0).quad_rect(box_rect());
+
+    // Centres, which is what the shader measures `local` from: the shape sits
+    // in the middle of its quad, moved by the offset.
+    let centre = |r: Rect| (r.x + r.width * 0.5, r.y + r.height * 0.5);
+    let (bx, by) = centre(box_rect());
+    let (qx, qy) = centre(quad);
+
+    assert!((qx - (bx + 12.0)).abs() < 1e-3, "x moved to {qx}");
+    assert!((qy - (by - 6.0)).abs() < 1e-3, "y moved to {qy}");
+  }
+
+  /// Canvas's `shadowBlur` is a Gaussian of sigma = blur/2, and the shader's
+  /// smoothstep matches it at a half-width of 1.88 sigma. Pinned because the
+  /// number is the whole of the match: get it wrong and every shadow in the
+  /// app is softer or harder than the style says.
+  #[test]
+  fn softness_follows_canvas_blur() {
+    assert!((shadow([0.0, 0.0], 20.0).softness() - 18.8).abs() < 1e-3);
+    assert_eq!(shadow([0.0, 0.0], 0.0).softness(), 0.0);
+    // Negative is not a smaller blur, it is nonsense arriving from a config.
+    assert_eq!(shadow([0.0, 0.0], -5.0).softness(), 0.0);
+  }
+
+  #[test]
+  fn a_shadow_that_cannot_be_seen_is_not_drawn() {
+    let transparent = WebcamShadow {
+      colour: [0.0, 0.0, 0.0, 0.0],
+      ..shadow([4.0, 4.0], 10.0)
+    };
+    assert!(!transparent.is_visible());
+
+    // No blur and no offset lands exactly under the camera drawn over it.
+    assert!(!shadow([0.0, 0.0], 0.0).is_visible());
+    // ...but either one alone puts something outside the box.
+    assert!(shadow([2.0, 0.0], 0.0).is_visible());
+    assert!(shadow([0.0, 0.0], 2.0).is_visible());
+  }
+
+  #[test]
+  fn sanitizing_drops_the_shadows_that_would_draw_nothing() {
+    let layout = WebcamLayout {
+      rect: box_rect(),
+      shadows: vec![
+        shadow([0.0, 0.0], 0.0),
+        shadow([4.0, 4.0], 12.0),
+        WebcamShadow {
+          blur: f32::NAN,
+          ..shadow([0.0, 0.0], 0.0)
+        },
+        WebcamShadow {
+          offset: [f32::INFINITY, 0.0],
+          ..shadow([0.0, 0.0], 8.0)
+        },
+      ],
+      ..WebcamLayout::default()
+    }
+    .sanitized();
+
+    assert_eq!(layout.shadows.len(), 1);
+    assert_eq!(layout.shadows[0].blur, 12.0);
   }
 
   #[test]

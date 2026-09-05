@@ -302,6 +302,27 @@ export interface EngineWebcamOverlay {
   /** Border thickness in canvas pixels, drawn outside the box. Defaults to 0. */
   borderWidth?: number;
   borderColour?: EngineColour;
+  /** Drop shadows under the camera, drawn in the order given. Empty is none. */
+  shadows?: EngineWebcamShadow[];
+}
+
+/**
+ * One drop shadow under the camera.
+ *
+ * The same four numbers a CSS box-shadow carries, because the editor's webcam
+ * styles are authored as shadow stacks and this is where they arrive.
+ */
+export interface EngineWebcamShadow {
+  /** Canvas pixels, positive right and down. Default 0. */
+  offsetX?: number;
+  offsetY?: number;
+  /**
+   * Canvas's `shadowBlur`: a Gaussian of sigma = blur/2. Default 0, which is a
+   * hard offset silhouette rather than nothing.
+   */
+  blur?: number;
+  /** A fully transparent shadow is dropped rather than drawn. */
+  colour?: EngineColour;
 }
 
 /**

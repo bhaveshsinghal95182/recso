@@ -29,7 +29,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::engine::composite::{
   fit_source, smear_geometry, CursorImages, CursorTrack, Fill, Grade, HiddenSpans, OverlayShape,
-  Overlays, Quad, Rect, SpriteTexture, UvRect, WebcamLayout,
+  Overlays, Quad, Rect, ShadowFill, SpriteTexture, UvRect, WebcamLayout,
 };
 use crate::engine::d3d::{gpu, Gpu};
 use crate::engine::zoom::{lerp_rect, WebcamZoomState, WebcamZoomTrack, ZoomState, ZoomTrack};
@@ -595,6 +595,7 @@ impl RenderChain {
     let sprite_blob = compile(HLSL, "ps_sprite", "ps_5_0")?;
     let smear_blob = compile(HLSL, "ps_smear", "ps_5_0")?;
     let solid_blob = compile(HLSL, "ps_solid", "ps_5_0")?;
+    let shadow_blob = compile(HLSL, "ps_shadow", "ps_5_0")?;
 
     let mut vs = None;
     let mut ps_convert = None;
@@ -637,6 +638,7 @@ impl RenderChain {
     let mut ps_sprite = None;
     let mut ps_smear = None;
     let mut ps_solid = None;
+    let mut ps_shadow = None;
     unsafe {
       gpu
         .device
@@ -653,6 +655,9 @@ impl RenderChain {
       gpu
         .device
         .CreatePixelShader(blob(&solid_blob), None, Some(&mut ps_solid))?;
+      gpu
+        .device
+        .CreatePixelShader(blob(&shadow_blob), None, Some(&mut ps_shadow))?;
     }
 
     let overlays = Overlays::new(
@@ -662,6 +667,7 @@ impl RenderChain {
       ps_sprite.expect("sprite shader"),
       ps_smear.expect("smear shader"),
       ps_solid.expect("solid shader"),
+      ps_shadow.expect("shadow shader"),
     )?;
 
     // Three effect floats plus a texel size, padded to a 16-byte multiple.
@@ -1501,7 +1507,46 @@ impl RenderChain {
       // Pass 2: blend it into the frame, back at canvas resolution.
       set_viewport(ctx, self.canvas_width, self.canvas_height);
 
-      // Border first, under the camera, same as the video layer.
+      // Shadows first, under everything. Cast by the camera's own rectangle
+      // rather than the bordered one, matching the Canvas2D compositor: it
+      // fills the shape and draws the border *outside* it, so a thick border
+      // sits on top of the shadow's inner edge. Worth knowing, because it is
+      // the one place where a shadow does not look the way a CSS one would.
+      for shadow in &self.webcam_layout.shadows {
+        // Faded out with the corner radius and the border as the camera fills
+        // the frame -- a shadow cast by something the size of the canvas has
+        // nowhere to land. The compositor cuts them at 85% instead, which pops.
+        let colour = [
+          shadow.colour[0],
+          shadow.colour[1],
+          shadow.colour[2],
+          shadow.colour[3] * softened,
+        ];
+        if colour[3] <= 0.0 {
+          continue;
+        }
+
+        self.draw_quad_locked(
+          ctx,
+          dst_rtv,
+          &webcam.bgra_srv,
+          Quad {
+            rect: shadow.quad_rect(rect),
+            shape,
+            corner_radius,
+            opacity,
+            uv: UvRect::default(),
+            grade: Grade::default(),
+            fill: Fill::Shadow(ShadowFill {
+              colour,
+              half: [rect.width * 0.5, rect.height * 0.5],
+              softness: shadow.softness(),
+            }),
+          },
+        )?;
+      }
+
+      // Border next, under the camera, same as the video layer.
       if border_width > 0.0 {
         self.draw_quad_locked(
           ctx,

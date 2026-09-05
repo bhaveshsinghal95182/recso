@@ -4,7 +4,7 @@
 //! exists, which keeps the Windows code testable from `cargo test` and keeps
 //! the class wrappers thin enough to read in one pass.
 
-use super::composite::{CursorSample, FitMode, OverlayShape, Rect, WebcamLayout};
+use super::composite::{CursorSample, FitMode, OverlayShape, Rect, WebcamLayout, WebcamShadow};
 use super::{audio, cuts, d3d, decode, encode, exporter, pattern, player, render, zoom};
 
 use napi::bindgen_prelude::*;
@@ -697,6 +697,37 @@ pub struct WebcamOverlay {
   /// Border thickness in canvas pixels, drawn outside the box. Defaults to 0.
   pub border_width: Option<f64>,
   pub border_colour: Option<Colour>,
+  /// Drop shadows under the camera, drawn in the order given. Empty is none.
+  pub shadows: Option<Vec<WebcamShadowLayer>>,
+}
+
+/// One drop shadow under the camera.
+///
+/// The same four numbers a CSS box-shadow carries, because the editor's webcam
+/// styles are authored as shadow stacks and this is where they arrive.
+#[napi(object)]
+pub struct WebcamShadowLayer {
+  /// Canvas pixels, positive right and down. Default 0.
+  pub offset_x: Option<f64>,
+  pub offset_y: Option<f64>,
+  /// Canvas's `shadowBlur`: a Gaussian of sigma = blur/2. Default 0, which is a
+  /// hard offset silhouette rather than nothing.
+  pub blur: Option<f64>,
+  /// A fully transparent shadow is dropped rather than drawn.
+  pub colour: Option<Colour>,
+}
+
+impl From<WebcamShadowLayer> for WebcamShadow {
+  fn from(shadow: WebcamShadowLayer) -> Self {
+    WebcamShadow {
+      offset: [
+        shadow.offset_x.unwrap_or(0.0) as f32,
+        shadow.offset_y.unwrap_or(0.0) as f32,
+      ],
+      blur: shadow.blur.unwrap_or(0.0) as f32,
+      colour: colour_or(shadow.colour.as_ref(), [0.0, 0.0, 0.0, 0.0]),
+    }
+  }
 }
 
 impl From<WebcamOverlay> for WebcamLayout {
@@ -722,6 +753,12 @@ impl From<WebcamOverlay> for WebcamLayout {
         .unwrap_or_default(),
       border_width: layout.border_width.unwrap_or(0.0) as f32,
       border_colour: colour_or(layout.border_colour.as_ref(), [0.0, 0.0, 0.0, 1.0]),
+      shadows: layout
+        .shadows
+        .unwrap_or_default()
+        .into_iter()
+        .map(WebcamShadow::from)
+        .collect(),
     }
     // Ranges enforced on the way in rather than trusted: an opacity above 1
     // multiplies into the blend's source alpha and burns the overlay's edge

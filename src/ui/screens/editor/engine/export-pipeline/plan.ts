@@ -31,10 +31,12 @@ export interface ExportPlan {
   /**
    * Cosmetic details the engine will skip, when it runs.
    *
-   * Reported rather than refused over. The webcam shadow is the whole reason
+   * Reported rather than refused over. The webcam shadow was the whole reason
    * this distinction exists: the default style has three blurred layers, so
    * treating it as blocking meant every export with a camera took the Canvas2D
-   * path -- the slow, memory-bound one the engine was made to replace.
+   * path -- the slow, memory-bound one the engine was made to replace. The
+   * engine draws shadows now and the list is empty, but the split is what stops
+   * the next cosmetic gap from doing the same thing.
    */
   omissions: UnsupportedFeature[];
   composition: CompositionConfig;

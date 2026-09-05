@@ -358,6 +358,80 @@ try {
     skip('a webcam zoom region grows the camera', 'no camera in this run')
   }
 
+  // Webcam shadows. Analytic rather than a blur pass, so the thing worth
+  // checking is not "is there a shadow" but "does it behave like a blur":
+  // strongest at the edge, fading with distance, and *ending* where the quad
+  // ends. A hard silhouette or a clipped falloff would both still be a shadow.
+  if (hasWebcam) {
+    const shadowBox = { x: 700, y: 300, width: 320, height: 180 }
+    const bottom = shadowBox.y + shadowBox.height
+    const blur = 40
+    // Matches SHADOW_SOFTNESS_PER_BLUR: past this the falloff is over.
+    const reach = blur * 0.94 + 1
+
+    const layout = { ...shadowBox, shape: 'rect', cornerRadius: 0, opacity: 1 }
+    player.setWebcamLayout(layout)
+    await sleep(400)
+    player.seek(Math.min(10, info.duration * 0.5), true)
+    await waitFrame()
+    await sleep(300)
+    const bare = player.snapshotBgra()
+
+    // Magenta, so the measurement does not depend on what the video happens to
+    // be showing under the box -- a black shadow over dark footage moves
+    // nothing and would pass a "did anything change" test by luck.
+    player.setWebcamLayout({
+      ...layout,
+      shadows: [{ offsetX: 0, offsetY: 0, blur, colour: { r: 1, g: 0, b: 1, a: 1 } }],
+    })
+    await sleep(400)
+    const shadowed = player.snapshotBgra()
+
+    // Three bands below the box: hard against the edge, partway out, and past
+    // the end of the falloff.
+    const band = (buf, offset, height) => averageBgra(buf, stride, 750, bottom + offset, 100, height)
+    const delta = (offset, height) =>
+      difference(band(bare, offset, height), band(shadowed, offset, height))
+
+    const near = delta(1, 8)
+    const mid = delta(20, 8)
+    const past = delta(Math.ceil(reach) + 4, 8)
+
+    check('a webcam shadow falls outside the box', near > 40, `delta ${near.toFixed(1)}`)
+    check(
+      'and fades with distance rather than stopping dead',
+      near > mid + 10,
+      `${near.toFixed(1)} at the edge, ${mid.toFixed(1)} further out`,
+    )
+    // The quad is sized from the same constant the shader fades over. If it
+    // were sized short, the falloff would be cut off mid-gradient and this
+    // band would still be tinted -- with a straight edge across it.
+    check(
+      'and ends inside its own quad, with nothing clipped',
+      past < 2,
+      `delta ${past.toFixed(1)} past the falloff`,
+    )
+
+    // An offset shadow is directional: down means down, not both ways.
+    player.setWebcamLayout({
+      ...layout,
+      shadows: [{ offsetX: 0, offsetY: 60, blur: 8, colour: { r: 1, g: 0, b: 1, a: 1 } }],
+    })
+    await sleep(400)
+    const offset = player.snapshotBgra()
+
+    const below = difference(band(bare, 40, 20), band(offset, 40, 20))
+    const aboveBar = (buf) => averageBgra(buf, stride, 750, shadowBox.y - 30, 100, 20)
+    const above = difference(aboveBar(bare), aboveBar(offset))
+
+    check('an offset shadow lands on the side it was offset to', below > 40, `delta ${below.toFixed(1)}`)
+    check('and not on the other one', above < 2, `delta ${above.toFixed(1)}`)
+
+    player.setWebcamLayout(layout)
+  } else {
+    skip('a webcam shadow falls outside the box', 'no camera in this run')
+  }
+
   // An empty box is the off switch, and must cost nothing.
   player.setWebcamLayout({ x: 0, y: 0, width: 0, height: 0 })
   await sleep(400)

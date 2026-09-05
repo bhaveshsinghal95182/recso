@@ -35,6 +35,7 @@ import type {
   CompositionCutRegion,
   CompositionZoomRegion,
   WebcamOverlayShape,
+  WebcamShadowLayer,
 } from '../types';
 import type { CursorBitmapTable } from './raster';
 import {
@@ -249,6 +250,36 @@ function toEngineLayerOrder(config: CompositionConfig): string[] {
   return (config.layerStates ?? []).map((layer) => layer.id);
 }
 
+/**
+ * The webcam's shadow stack, as the engine takes it.
+ *
+ * A straight translation -- the engine draws the same silhouette from the same
+ * four numbers the Canvas2D compositor uses, so there is nothing to resolve
+ * here. Which layers are worth drawing is decided in the engine instead, next
+ * to the code that would otherwise size a quad for an invisible one.
+ *
+ * An unparseable colour drops the layer rather than falling back to black. A
+ * shadow is decoration, and inventing an opaque black one under the camera is a
+ * worse answer than leaving it out.
+ */
+function toEngineWebcamShadows(
+  shadows: WebcamShadowLayer[] | undefined,
+): NonNullable<Parameters<EnginePlayer['setWebcamLayout']>[0]['shadows']> {
+  return (shadows ?? []).flatMap((shadow) => {
+    const colour = parseCssColour(shadow.color);
+    return colour
+      ? [
+          {
+            offsetX: shadow.offsetX,
+            offsetY: shadow.offsetY,
+            blur: shadow.blur,
+            colour,
+          },
+        ]
+      : [];
+  });
+}
+
 function toEngineCuts(cuts: CompositionCutRegion[] | undefined): EngineCutRegion[] {
   return (cuts ?? []).map((cut) => ({ startMs: cut.startMs, endMs: cut.endMs }));
 }
@@ -346,6 +377,7 @@ export async function resolveComposition(
           opacity: config.webcam!.opacity,
           borderWidth: config.webcam!.border.width,
           borderColour: parseCssColour(config.webcam!.border.color) ?? undefined,
+          shadows: toEngineWebcamShadows(config.webcam!.shadows),
         };
       })()
     : { x: 0, y: 0, width: 0, height: 0 };

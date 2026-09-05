@@ -37,16 +37,16 @@ GPU engine (Rust/D3D11, in `velocity/src/engine/`). This document says
 
 ---
 
-> **Status.** The engine draws every composition the editor can describe, bar
-> one cosmetic detail. Recording, preview and export all run through it by
-> default, and nothing routes an export back to the Canvas2D path any more --
-> webcam cuts, webcam zoom regions, layer ordering and legacy zoom keyframes
-> were the four that did, and they are done.
+> **Status.** Parity is done. The engine draws every composition the editor can
+> describe, `unsupportedFeatures` returns an empty list, and nothing routes an
+> export back to the Canvas2D path -- webcam cuts, webcam zoom regions, layer
+> ordering and legacy zoom keyframes were the four that did.
 >
-> Webcam shadows are what is left, and they are cosmetic: the engine draws the
-> box, its radius and its border, and skips the blur behind it. That is reported
-> rather than refused over, because refusing meant the engine never ran at all
-> for anyone with a camera -- the default style carries three blurred layers.
+> Webcam shadows were the last of it, and they are analytic rather than a blur
+> pass: the shape is already an exact distance field, and blurring a hard edge
+> is the same as softening the step across it, so a shadow is one extra quad
+> with no scratch target. The profile matches canvas's own Gaussian to within a
+> couple of percent -- see `ps_shadow`.
 >
 > What remains is not parity but the things neither path has: audio as the
 > master clock, and multiple clips. Then the test suite, then mediabunny goes.
@@ -150,7 +150,7 @@ colour is the exception, because a clear is free.
 | Corner radius                         | yes        | yes        |                                                                    |
 | Opacity                               | yes        | yes        |                                                                    |
 | Border (width, colour)                | yes        | **yes**    | The same `ps_solid` quad the video layer's border uses.            |
-| Shadows (multi-layer)                 | yes        | **no**     | `shadows[]` — offset, blur, colour, each its own `ctx.shadow*`.    |
+| Shadows (multi-layer)                 | yes        | **yes**    | `shadows[]` — offset, blur, colour; one analytic quad each.        |
 | ~~Webcam cuts (hide by region)~~      | yes        | yes        | `HiddenSpans`, staged per slot like the cursor's rect.             |
 | ~~Zoom-driven height override~~       | yes        | yes        | The caller lays out each region's box; the engine eases between.   |
 | ~~Zoom-driven full-canvas mode~~      | yes        | yes        | Blends box → full canvas, dissolving radius and border on the way. |
