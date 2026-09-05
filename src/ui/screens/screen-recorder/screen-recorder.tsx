@@ -124,7 +124,6 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
       recordSystemAudio,
       undefined,
       undefined,
-      undefined,
       cameraSource,
       nativeMicDeviceId || undefined,
     );

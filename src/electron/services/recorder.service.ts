@@ -26,11 +26,7 @@ import type {
 import { completeRecording, createRecording, getRecording } from './database.service.js';
 import { phoneCameraState } from './phone-camera.service.js';
 import { initProjectFolder } from './project-storage.service.js';
-import {
-  phoneCameraProblem,
-  planNativeAudio,
-  shouldUseNativeSingularClock as planNativeSingularClock,
-} from './recorder-capture-plan.js';
+import { phoneCameraProblem, planNativeAudio } from './recorder-capture-plan.js';
 
 interface VelocityStopper {
   /**
@@ -63,18 +59,7 @@ interface VelocityBindings {
     width: number;
     height: number;
   }>;
-  startMonitorRecording(
-    outputPath: string,
-    bitrate: number,
-    includeSystemAudio?: boolean,
-  ): VelocityStopper;
-  startWindowRecording(
-    windowTitle: string,
-    outputPath: string,
-    bitrate: number,
-    includeSystemAudio?: boolean,
-  ): VelocityStopper;
-  startMonitorRecordingV2?: (options: {
+  startMonitorRecordingV2: (options: {
     outputPath: string;
     bitrate: number;
     includeSystemAudio?: boolean;
@@ -85,7 +70,7 @@ interface VelocityBindings {
     includeMicrophone?: boolean;
     microphoneDeviceId?: string;
   }) => VelocityStopper;
-  startWindowRecordingV2?: (options: {
+  startWindowRecordingV2: (options: {
     windowTitle: string;
     outputPath: string;
     bitrate: number;
@@ -100,7 +85,6 @@ interface VelocityBindings {
 }
 
 interface NativeClockOptions {
-  useSingularClock: boolean;
   targetFps: 30 | 60;
   enableWebcam: boolean;
   webcamDeviceId?: string;
@@ -118,13 +102,6 @@ interface NativeWebcamCapability {
   reason?: string;
 }
 
-interface AuxStreamState {
-  streamId: string;
-  tempPath: string;
-  fd: number;
-  bytesWritten: number;
-}
-
 interface ActiveRecording {
   id: string;
   tempPath: string;
@@ -137,7 +114,6 @@ interface ActiveRecording {
   startedAt: number;
   wallClockStartMs: number;
   stopper: VelocityStopper;
-  auxStreams: Record<string, AuxStreamState>;
 }
 
 interface SourceCaptureBounds {
@@ -239,31 +215,19 @@ function startVelocityMonitorRecording(
   outputPath: string,
   bitrate: number,
   includeSystemAudio: boolean,
-  nativeClockOptions?: NativeClockOptions,
+  nativeClockOptions: NativeClockOptions,
 ): VelocityStopper {
-  if (
-    nativeClockOptions?.useSingularClock &&
-    typeof velocity.startMonitorRecordingV2 === 'function'
-  ) {
-    return velocity.startMonitorRecordingV2({
-      outputPath,
-      bitrate,
-      includeSystemAudio,
-      targetFps: nativeClockOptions.targetFps,
-      enableWebcam: nativeClockOptions.enableWebcam,
-      webcamDeviceId: nativeClockOptions.webcamDeviceId,
-      webcamSource: nativeClockOptions.webcamSource,
-      includeMicrophone: nativeClockOptions.includeMicrophone,
-      microphoneDeviceId: nativeClockOptions.microphoneDeviceId,
-    });
-  }
-
-  try {
-    return velocity.startMonitorRecording(outputPath, bitrate, includeSystemAudio);
-  } catch {
-    // Backward compatibility for older prebuilt binaries with the two-argument signature.
-    return velocity.startMonitorRecording(outputPath, bitrate);
-  }
+  return velocity.startMonitorRecordingV2({
+    outputPath,
+    bitrate,
+    includeSystemAudio,
+    targetFps: nativeClockOptions.targetFps,
+    enableWebcam: nativeClockOptions.enableWebcam,
+    webcamDeviceId: nativeClockOptions.webcamDeviceId,
+    webcamSource: nativeClockOptions.webcamSource,
+    includeMicrophone: nativeClockOptions.includeMicrophone,
+    microphoneDeviceId: nativeClockOptions.microphoneDeviceId,
+  });
 }
 
 function startVelocityWindowRecording(
@@ -272,32 +236,20 @@ function startVelocityWindowRecording(
   outputPath: string,
   bitrate: number,
   includeSystemAudio: boolean,
-  nativeClockOptions?: NativeClockOptions,
+  nativeClockOptions: NativeClockOptions,
 ): VelocityStopper {
-  if (
-    nativeClockOptions?.useSingularClock &&
-    typeof velocity.startWindowRecordingV2 === 'function'
-  ) {
-    return velocity.startWindowRecordingV2({
-      windowTitle,
-      outputPath,
-      bitrate,
-      includeSystemAudio,
-      targetFps: nativeClockOptions.targetFps,
-      enableWebcam: nativeClockOptions.enableWebcam,
-      webcamDeviceId: nativeClockOptions.webcamDeviceId,
-      webcamSource: nativeClockOptions.webcamSource,
-      includeMicrophone: nativeClockOptions.includeMicrophone,
-      microphoneDeviceId: nativeClockOptions.microphoneDeviceId,
-    });
-  }
-
-  try {
-    return velocity.startWindowRecording(windowTitle, outputPath, bitrate, includeSystemAudio);
-  } catch {
-    // Backward compatibility for older prebuilt binaries with the two-argument signature.
-    return velocity.startWindowRecording(windowTitle, outputPath, bitrate);
-  }
+  return velocity.startWindowRecordingV2({
+    windowTitle,
+    outputPath,
+    bitrate,
+    includeSystemAudio,
+    targetFps: nativeClockOptions.targetFps,
+    enableWebcam: nativeClockOptions.enableWebcam,
+    webcamDeviceId: nativeClockOptions.webcamDeviceId,
+    webcamSource: nativeClockOptions.webcamSource,
+    includeMicrophone: nativeClockOptions.includeMicrophone,
+    microphoneDeviceId: nativeClockOptions.microphoneDeviceId,
+  });
 }
 
 function resolveNativeWebcamCapability(
@@ -529,44 +481,6 @@ function inferNativeCameraSidecarPath(videoPath: string): string {
   return path.join(parsed.dir, `${parsed.name}_camera${parsed.ext || '.mp4'}`);
 }
 
-function openAuxStream(
-  tempDir: string,
-  recordingId: string,
-  streamId: string,
-  ext: string,
-): AuxStreamState {
-  const tempPath = path.join(tempDir, `rec_aux_${recordingId}_${streamId}.${ext}`);
-  const fd = fs.openSync(tempPath, 'w');
-  return {
-    streamId,
-    tempPath,
-    fd,
-    bytesWritten: 0,
-  };
-}
-
-function closeAuxStreams(auxStreams: Record<string, AuxStreamState>): void {
-  Object.values(auxStreams).forEach((stream) => {
-    try {
-      fs.closeSync(stream.fd);
-    } catch {
-      // ignored
-    }
-  });
-}
-
-function cleanupAuxTempFiles(auxStreams: Record<string, AuxStreamState>): void {
-  Object.values(auxStreams).forEach((stream) => {
-    try {
-      if (fs.existsSync(stream.tempPath)) {
-        fs.unlinkSync(stream.tempPath);
-      }
-    } catch {
-      // ignored
-    }
-  });
-}
-
 const NATIVE_FINALIZE_POLL_MS = 250;
 const NATIVE_FINALIZE_STABLE_SAMPLES = 2;
 const NATIVE_FINALIZE_TIMEOUT_MS = 120_000;
@@ -679,249 +593,6 @@ async function waitForNativeRecordingFile(filePath: string): Promise<boolean> {
 }
 
 /**
- * Reports whether a file carries *usable* audio.
- *
- * The presence of an audio track is not enough: windows-capture (the crate behind velocity) always
- * registers an audio stream on its encoder, even when audio capture is disabled, so every
- * video-only native recording contains an AAC track with zero samples. Treating that stub as real
- * audio would make the caller throw away the desktop-audio sidecar and ship a silent recording.
- */
-async function hasPrimaryAudioTrack(filePath: string): Promise<boolean> {
-  const { ALL_FORMATS, FilePathSource, Input } = await import('mediabunny');
-
-  const input = new Input({
-    source: new FilePathSource(filePath),
-    formats: ALL_FORMATS,
-  });
-
-  try {
-    const audioTrack = await input.getPrimaryAudioTrack();
-    if (!audioTrack) {
-      return false;
-    }
-
-    return (await audioTrack.computeDuration()) > 0;
-  } catch {
-    return false;
-  } finally {
-    input.dispose();
-  }
-}
-
-async function muxDesktopAudioIntoVideo(
-  videoPath: string,
-  audioPath: string,
-  fileExtension: 'mp4' | 'mkv',
-): Promise<boolean> {
-  const ext = `.${fileExtension}`;
-  const videoDir = path.dirname(videoPath);
-  const videoBaseName = path.basename(videoPath, ext);
-  const muxedOutputPath = path.join(videoDir, `${videoBaseName}_muxed${ext}`);
-
-  const {
-    ALL_FORMATS,
-    EncodedAudioPacketSource,
-    EncodedPacketSink,
-    EncodedVideoPacketSource,
-    FilePathSource,
-    FilePathTarget,
-    Input,
-    MkvOutputFormat,
-    Mp4OutputFormat,
-    Output,
-  } = await import('mediabunny');
-
-  const videoInput = new Input({
-    source: new FilePathSource(videoPath),
-    formats: ALL_FORMATS,
-  });
-
-  const audioInput = new Input({
-    source: new FilePathSource(audioPath),
-    formats: ALL_FORMATS,
-  });
-
-  let output: any = null;
-
-  try {
-    const videoTrack = await videoInput.getPrimaryVideoTrack();
-    const audioTrack = await audioInput.getPrimaryAudioTrack();
-
-    if (!videoTrack || !audioTrack || !videoTrack.codec || !audioTrack.codec) {
-      console.warn('[RecorderService] Unable to mux desktop audio: missing compatible tracks.');
-      return false;
-    }
-
-    const format =
-      fileExtension === 'mkv'
-        ? new MkvOutputFormat()
-        : new Mp4OutputFormat({ fastStart: 'in-memory' });
-
-    output = new Output({
-      format,
-      target: new FilePathTarget(muxedOutputPath),
-    });
-
-    const videoSource = new EncodedVideoPacketSource(videoTrack.codec);
-    output.addVideoTrack(videoSource);
-
-    const audioSource = new EncodedAudioPacketSource(audioTrack.codec);
-    output.addAudioTrack(audioSource);
-
-    const videoSink = new EncodedPacketSink(videoTrack);
-    const audioSink = new EncodedPacketSink(audioTrack);
-
-    const videoDecoderConfig = await videoTrack.getDecoderConfig();
-    const audioDecoderConfig = await audioTrack.getDecoderConfig();
-    const videoMeta = videoDecoderConfig ? { decoderConfig: videoDecoderConfig } : undefined;
-    const audioMeta = audioDecoderConfig ? { decoderConfig: audioDecoderConfig } : undefined;
-
-    const videoStartTimestamp = await videoTrack.getFirstTimestamp();
-    const audioStartTimestamp = await audioTrack.getFirstTimestamp();
-
-    // Base offset calculation from file timestamps. Mediabunny reports timestamps in seconds.
-    let audioTimestampOffset = videoStartTimestamp - audioStartTimestamp;
-
-    // Detect and compensate for audio initialization delay.
-    // The audio stream opens after native video capture is already running, but both are stopped
-    // together — so the device warm-up shows up as audio being shorter than the video, and the
-    // audio has to be pushed later by that difference to line up with the picture.
-    const videoDuration = await videoInput.computeDuration();
-    const audioDuration = await audioInput.computeDuration();
-
-    if (Number.isFinite(videoDuration) && Number.isFinite(audioDuration) && videoDuration > 0) {
-      const audioInitDelaySeconds = videoDuration - audioDuration;
-
-      // Typical audio device init is well under a second; anything larger is not a warm-up delay
-      // (e.g. a truncated sidecar) and is left uncorrected.
-      if (audioInitDelaySeconds > 0.05 && audioInitDelaySeconds <= 3) {
-        audioTimestampOffset += audioInitDelaySeconds;
-
-        console.log(
-          '[RecorderService] Audio sync fix: detected',
-          (audioInitDelaySeconds * 1000).toFixed(0),
-          'ms init delay, adjusting offset from',
-          (videoStartTimestamp - audioStartTimestamp).toFixed(3),
-          's to',
-          audioTimestampOffset.toFixed(3),
-          's',
-        );
-      }
-    }
-
-    await output.start();
-
-    let videoPacket = await videoSink.getFirstPacket();
-    let audioPacket = await audioSink.getFirstPacket();
-
-    let wroteVideo = false;
-    let wroteAudio = false;
-    let videoPacketCount = 0;
-    let audioPacketCount = 0;
-
-    while (videoPacket || audioPacket) {
-      const shouldWriteAudio =
-        audioPacket !== null &&
-        (videoPacket === null ||
-          audioPacket.timestamp + audioTimestampOffset <= videoPacket.timestamp);
-
-      if (shouldWriteAudio && audioPacket) {
-        const shiftedTimestamp = audioPacket.timestamp + audioTimestampOffset;
-        const shiftedEndTimestamp = shiftedTimestamp + audioPacket.duration;
-
-        if (shiftedEndTimestamp > 0) {
-          const shiftedPacket = audioPacket.clone({ timestamp: shiftedTimestamp });
-          await audioSource.add(shiftedPacket, wroteAudio ? undefined : audioMeta);
-          wroteAudio = true;
-          audioPacketCount += 1;
-        }
-
-        audioPacket = await audioSink.getNextPacket(audioPacket);
-        continue;
-      }
-
-      if (videoPacket) {
-        await videoSource.add(videoPacket, wroteVideo ? undefined : videoMeta);
-        wroteVideo = true;
-        videoPacketCount += 1;
-        videoPacket = await videoSink.getNextPacket(videoPacket);
-      }
-    }
-
-    if (!wroteVideo || !wroteAudio) {
-      console.warn(
-        `[RecorderService] Desktop audio mux aborted: no usable ${wroteVideo ? 'desktop audio' : 'video'} packets.`,
-      );
-      await output.cancel();
-      output = null;
-      if (fs.existsSync(muxedOutputPath)) {
-        fs.unlinkSync(muxedOutputPath);
-      }
-      return false;
-    }
-
-    console.log(
-      `[RecorderService] Desktop audio mux packet summary: video=${videoPacketCount}, audio=${audioPacketCount}, baseOffset=${(videoStartTimestamp - audioStartTimestamp).toFixed(3)}s, appliedOffset=${audioTimestampOffset.toFixed(3)}s`,
-    );
-
-    await output.finalize();
-    output = null;
-
-    if (!fs.existsSync(muxedOutputPath)) {
-      return false;
-    }
-
-    const validationInput = new Input({
-      source: new FilePathSource(muxedOutputPath),
-      formats: ALL_FORMATS,
-    });
-
-    try {
-      const validationVideoTrack = await validationInput.getPrimaryVideoTrack();
-      const validationAudioTrack = await validationInput.getPrimaryAudioTrack();
-      const validationDuration = await validationInput.computeDuration();
-
-      const validOutput =
-        Boolean(validationVideoTrack) &&
-        Boolean(validationAudioTrack) &&
-        Number.isFinite(validationDuration) &&
-        validationDuration > 0;
-
-      if (!validOutput) {
-        console.warn('[RecorderService] Desktop audio mux produced invalid output file.');
-        fs.unlinkSync(muxedOutputPath);
-        return false;
-      }
-    } finally {
-      validationInput.dispose();
-    }
-
-    fs.unlinkSync(videoPath);
-    fs.renameSync(muxedOutputPath, videoPath);
-    return true;
-  } catch (error) {
-    console.error('[RecorderService] Mediabunny desktop audio mux failed:', error);
-
-    try {
-      if (output && output.state !== 'finalized' && output.state !== 'canceled') {
-        await output.cancel();
-      }
-    } catch {
-      // ignored
-    }
-
-    if (fs.existsSync(muxedOutputPath)) {
-      fs.unlinkSync(muxedOutputPath);
-    }
-
-    return false;
-  } finally {
-    videoInput.dispose();
-    audioInput.dispose();
-  }
-}
-
-/**
  * Start a new recording session.
  *
  * Native screen/window video starts in velocity.
@@ -933,7 +604,6 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
   }
 
   let stopper: VelocityStopper | null = null;
-  const auxStreams: Record<string, AuxStreamState> = {};
 
   try {
     const velocity = getVelocityBindings();
@@ -964,19 +634,11 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
       return { success: false, error: phoneProblem };
     }
 
-    // Native unless something asks otherwise. A phone forces it regardless:
-    // its frames only reach a recording through the native webcam sidecar.
-    const useNativeSingularClock = planNativeSingularClock({
-      nativeCaptureMode: config.nativeCaptureMode,
-      cameraSource: config.cameraSource,
-      legacyForced: process.env.RECSO_LEGACY_CAPTURE === '1',
-    });
     // Audio goes into the video's own track when the native path is running, so
     // there is no second clock to reconcile afterwards. See `planNativeAudio`.
     const nativeAudio = planNativeAudio({
       recordSystemAudio: config.recordSystemAudio,
       recordMic: config.recordMic,
-      useSingularClock: useNativeSingularClock,
       platform: process.platform,
     });
     const useNativeSystemAudio = nativeAudio.systemAudio;
@@ -988,7 +650,6 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
     }
 
     const nativeClockOptions: NativeClockOptions = {
-      useSingularClock: useNativeSingularClock,
       includeMicrophone: nativeAudio.microphone,
       // Only meaningful to the native path: a browser device id would not
       // resolve to a WASAPI endpoint.
@@ -1001,7 +662,7 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
     let useNativeWebcam = false;
     let nativeWebcamDeviceId = nativeClockOptions.webcamDeviceId;
 
-    if (nativeClockOptions.useSingularClock && nativeClockOptions.enableWebcam) {
+    if (nativeClockOptions.enableWebcam) {
       if (usePhoneCamera) {
         // Liveness was already checked above. Skipping the local capability
         // probe on purpose: it asks what cameras this machine has, which says
@@ -1037,7 +698,7 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
       webcamDeviceId: useNativeWebcam ? nativeWebcamDeviceId : undefined,
     };
 
-    if (nativeClockOptions.useSingularClock) {
+    {
       console.log('[RecorderService] Native singular-clock capture mode enabled', {
         targetFps: nativeClockOptions.targetFps,
         webcamEnabled: useNativeWebcam,
@@ -1146,19 +807,6 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
       }
     }
 
-    if (config.recordCamera && !useNativeWebcam) {
-      auxStreams.camera = openAuxStream(tempDir, recordingId, 'camera', fileExt);
-    }
-
-    const shouldWriteStandaloneMic = config.recordMic && (!config.recordCamera || useNativeWebcam);
-    if (shouldWriteStandaloneMic) {
-      auxStreams.mic = openAuxStream(tempDir, recordingId, 'mic', fileExt);
-    }
-
-    if (config.recordSystemAudio) {
-      auxStreams['desktop-audio'] = openAuxStream(tempDir, recordingId, 'desktop-audio', fileExt);
-    }
-
     createRecording({
       id: recordingId,
       status: 'recording',
@@ -1185,14 +833,9 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
       startedAt: Date.now(),
       wallClockStartMs: Date.now(),
       stopper,
-      auxStreams,
     };
 
-    console.log(
-      '[RecorderService] Started hybrid recording:',
-      recordingId,
-      `aux=${Object.keys(auxStreams).join(',') || 'none'}`,
-    );
+    console.log('[RecorderService] Started recording:', recordingId);
 
     return {
       success: true,
@@ -1211,9 +854,6 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
       }
     }
 
-    closeAuxStreams(auxStreams);
-    cleanupAuxTempFiles(auxStreams);
-
     const safeError = getSafeStartRecordingError(error, config.sourceId);
 
     console.error('[RecorderService] Failed to start hybrid recording:', error);
@@ -1221,43 +861,6 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
       success: false,
       error: safeError,
     };
-  }
-}
-
-/**
- * Legacy sequential append API (unused in hybrid flow).
- */
-export function appendChunk(recordingId: string, _chunk: Buffer): boolean {
-  return Boolean(activeRecording && activeRecording.id === recordingId);
-}
-
-/**
- * Write a chunk at a specific byte offset to an auxiliary stream.
- */
-export function writeChunk(
-  recordingId: string,
-  streamId: string,
-  position: number,
-  chunk: Buffer,
-): boolean {
-  if (!activeRecording || activeRecording.id !== recordingId) {
-    console.warn('[RecorderService] No active recording for writeChunk:', recordingId);
-    return false;
-  }
-
-  const stream = activeRecording.auxStreams[streamId];
-  if (!stream) {
-    console.warn('[RecorderService] Unknown aux stream for writeChunk:', streamId);
-    return false;
-  }
-
-  try {
-    fs.writeSync(stream.fd, chunk, 0, chunk.length, position);
-    stream.bytesWritten = Math.max(stream.bytesWritten, position + chunk.length);
-    return true;
-  } catch (error) {
-    console.error('[RecorderService] Failed to write aux stream chunk:', streamId, error);
-    return false;
   }
 }
 
@@ -1306,8 +909,6 @@ async function finalizeRecording(recordingId: string): Promise<StopRecordingResu
     console.log(
       `[RecorderService] Native capture finalize took ${Date.now() - finalizeStartedAtMs}ms (ready=${nativeFileReady})`,
     );
-
-    closeAuxStreams(currentRecording.auxStreams);
 
     if (!nativeFileReady) {
       // Leaving the temp file and the incomplete database row in place lets the recovery flow
@@ -1366,84 +967,6 @@ async function finalizeRecording(recordingId: string): Promise<StopRecordingResu
         }
       } catch (error) {
         console.warn('[RecorderService] Failed to finalize native webcam sidecar:', error);
-      }
-    }
-
-    const desktopAudioStream = currentRecording.auxStreams['desktop-audio'];
-
-    Object.values(currentRecording.auxStreams).forEach((stream) => {
-      if (stream.streamId === 'desktop-audio') {
-        return;
-      }
-
-      if (!fs.existsSync(stream.tempPath)) {
-        return;
-      }
-
-      const stats = fs.statSync(stream.tempPath);
-      if (stats.size === 0) {
-        fs.unlinkSync(stream.tempPath);
-        return;
-      }
-
-      const finalAuxPath = path.join(
-        recordingFolderPath,
-        `${folderName}_${stream.streamId}.${currentRecording.fileExtension}`,
-      );
-      fs.renameSync(stream.tempPath, finalAuxPath);
-    });
-
-    if (desktopAudioStream && fs.existsSync(desktopAudioStream.tempPath)) {
-      const desktopAudioStats = fs.statSync(desktopAudioStream.tempPath);
-      if (desktopAudioStats.size === 0) {
-        fs.unlinkSync(desktopAudioStream.tempPath);
-      } else {
-        // The recorder counted the audio bytes it actually captured, so this no
-        // longer needs a demux pass to tell real audio from the empty AAC track
-        // windows-capture always writes. Fall back to the old probe only when
-        // the native side did not report anything.
-        const nativeAudioAvailable = !currentRecording.nativeSystemAudioRequested
-          ? false
-          : screenMedia
-            ? screenMedia.hasAudio
-            : await hasPrimaryAudioTrack(finalScreenPath);
-
-        if (nativeAudioAvailable) {
-          fs.unlinkSync(desktopAudioStream.tempPath);
-          console.log('[RecorderService] Native system audio was embedded by velocity.');
-          completeRecording(
-            recordingId,
-            finalScreenPath,
-            mediaAtFinalPath(screenMedia, finalScreenPath),
-          );
-          activeRecording = null;
-          return {
-            success: true,
-            filePath: finalScreenPath,
-            media: mediaAtFinalPath(screenMedia, finalScreenPath),
-          };
-        }
-
-        const muxed = await muxDesktopAudioIntoVideo(
-          finalScreenPath,
-          desktopAudioStream.tempPath,
-          currentRecording.fileExtension,
-        );
-
-        if (muxed) {
-          fs.unlinkSync(desktopAudioStream.tempPath);
-          console.log('[RecorderService] Embedded desktop audio into main recording file.');
-        } else {
-          const finalDesktopAudioPath = path.join(
-            recordingFolderPath,
-            `${folderName}_${desktopAudioStream.streamId}.${currentRecording.fileExtension}`,
-          );
-          fs.renameSync(desktopAudioStream.tempPath, finalDesktopAudioPath);
-          console.warn(
-            '[RecorderService] Failed to embed desktop audio. Saved sidecar file instead:',
-            finalDesktopAudioPath,
-          );
-        }
       }
     }
 
@@ -1562,11 +1085,6 @@ export function getState(): RecordingStateEvent {
   } catch {
     // ignore
   }
-
-  bytesWritten += Object.values(activeRecording.auxStreams).reduce(
-    (sum, stream) => sum + stream.bytesWritten,
-    0,
-  );
 
   return {
     state: activeRecording.state,

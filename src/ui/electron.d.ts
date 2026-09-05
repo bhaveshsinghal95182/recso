@@ -546,17 +546,6 @@ interface ElectronAPI {
     /** Start a new recording session */
     start: (config: RecordingConfig) => Promise<StartRecordingResult>;
 
-    /** Append a video chunk to the active recording (legacy sequential) */
-    appendChunk: (recordingId: string, chunk: ArrayBuffer) => Promise<boolean>;
-
-    /** Write a chunk at a specific byte offset to a specific stream (mediabunny StreamTarget) */
-    writeChunk: (
-      recordingId: string,
-      streamId: string,
-      position: number,
-      chunk: ArrayBuffer,
-    ) => Promise<boolean>;
-
     /** Stop the recording and save the file */
     stop: (recordingId: string) => Promise<StopRecordingResult>;
 

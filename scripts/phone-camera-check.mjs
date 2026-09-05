@@ -77,59 +77,24 @@ try {
   console.log('\nthe capture plan');
   const plan = await load(path.join(build, 'services/recorder-capture-plan.js'));
 
-  check('native is the default', plan.shouldUseNativeSingularClock({}) === true);
-  check(
-    'a phone turns it on by itself',
-    plan.shouldUseNativeSingularClock({ cameraSource: 'phone' }) === true,
-  );
-  check(
-    'an explicit legacy mode opts out',
-    plan.shouldUseNativeSingularClock({ nativeCaptureMode: 'legacy' }) === false,
-  );
-  check(
-    'and so does the environment escape hatch',
-    plan.shouldUseNativeSingularClock({ legacyForced: true }) === false,
-  );
-  check(
-    'but neither can strand a phone with no camera track',
-    plan.shouldUseNativeSingularClock({ cameraSource: 'phone', legacyForced: true }) === true &&
-      plan.shouldUseNativeSingularClock({
-        cameraSource: 'phone',
-        nativeCaptureMode: 'legacy',
-      }) === true,
-  );
-
   // Audio captured natively goes into the video's own track, which is what
   // removes the offset nobody could measure: sidecars start whenever a device
   // finishes opening, and the mux could only guess how late that was.
   const audio = (input) => plan.planNativeAudio({ platform: 'win32', ...input });
 
   check(
-    'system audio is captured natively on the native path',
-    audio({ useSingularClock: true, recordSystemAudio: true }).systemAudio === true,
+    'system audio is captured natively',
+    audio({ recordSystemAudio: true }).systemAudio === true,
   );
-  check(
-    'so is the microphone',
-    audio({ useSingularClock: true, recordMic: true }).microphone === true,
-  );
+  check('so is the microphone', audio({ recordMic: true }).microphone === true);
   check(
     'neither is captured when it was not asked for',
-    audio({ useSingularClock: true }).systemAudio === false &&
-      audio({ useSingularClock: true }).microphone === false,
+    audio({}).systemAudio === false && audio({}).microphone === false,
   );
   check(
-    'the legacy path keeps its renderer sidecars',
-    audio({ useSingularClock: false, recordSystemAudio: true, recordMic: true }).systemAudio ===
-      false,
-  );
-  check(
-    'and so does everything that is not Windows, since this is WASAPI',
-    plan.planNativeAudio({
-      platform: 'darwin',
-      useSingularClock: true,
-      recordSystemAudio: true,
-      recordMic: true,
-    }).microphone === false,
+    'and nothing is, off Windows, since this is WASAPI',
+    plan.planNativeAudio({ platform: 'darwin', recordSystemAudio: true, recordMic: true })
+      .microphone === false,
   );
 
   check(

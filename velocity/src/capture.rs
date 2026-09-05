@@ -6,7 +6,7 @@ mod webcam_capture;
 
 use napi_derive::napi;
 
-pub use desktop_capture::{start_monitor_recording, start_window_recording, Stopper};
+pub use desktop_capture::Stopper;
 pub use borderless::borderless_capture_allowed;
 pub use desktop_capture::{list_audio_capture_devices, AudioDeviceInfo};
 pub use phone_camera::{

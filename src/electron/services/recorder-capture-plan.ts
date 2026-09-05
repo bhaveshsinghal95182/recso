@@ -9,41 +9,6 @@
  * left in there is untestable by construction.
  */
 
-export interface CaptureModeInput {
-  nativeCaptureMode?: 'legacy' | 'native-singular-clock';
-  cameraSource?: 'local' | 'phone';
-  /** `RECSO_LEGACY_CAPTURE=1` in the environment: the escape hatch. */
-  legacyForced?: boolean;
-}
-
-/**
- * Whether to record through the native singular-clock path.
- *
- * Native is the default now. The legacy path drives the screen capture from the
- * renderer and records the camera with a `MediaRecorder` sidecar, which means
- * two independent clocks that have to be reconciled afterwards; the native path
- * writes both tracks from one, which is the whole reason it exists.
- *
- * Two ways back to legacy, in order: an explicit `nativeCaptureMode: 'legacy'`
- * on the recording, or `RECSO_LEGACY_CAPTURE=1` for when something is wrong and
- * the question is whether the native path caused it.
- *
- * A phone overrides even those. Its frames only ever reach a recording through
- * the native webcam sidecar, so falling back would not produce a worse camera
- * track -- it would produce none, silently.
- */
-export function shouldUseNativeSingularClock(config: CaptureModeInput): boolean {
-  if (config.cameraSource === 'phone') {
-    return true;
-  }
-
-  if (config.nativeCaptureMode === 'legacy') {
-    return false;
-  }
-
-  return !config.legacyForced;
-}
-
 export interface PhoneReadiness {
   recordCamera?: boolean;
   cameraSource?: 'local' | 'phone';
@@ -73,9 +38,7 @@ export function phoneCameraProblem(config: PhoneReadiness, phoneLive: boolean): 
 export interface NativeAudioInput {
   recordSystemAudio?: boolean;
   recordMic?: boolean;
-  /** Whether the recording is going through the native path at all. */
-  useSingularClock: boolean;
-  /** WASAPI is Windows-only, so everywhere else keeps the renderer sidecars. */
+  /** WASAPI is Windows-only. */
   platform: string;
 }
 
@@ -103,10 +66,12 @@ export interface NativeAudioPlan {
  * timestamps, and zero-padded while a device is still starting -- so the silence
  * during warm-up lands exactly where the silence actually was.
  *
- * Only on the native path, and only on Windows, since this is WASAPI.
+ * Windows only, since this is WASAPI. There is no longer a renderer fallback
+ * behind it -- recording requires the native addon, which is Windows-only too,
+ * so anywhere this returns false there was never going to be a recording.
  */
 export function planNativeAudio(config: NativeAudioInput): NativeAudioPlan {
-  const available = config.useSingularClock && config.platform === 'win32';
+  const available = config.platform === 'win32';
 
   return {
     systemAudio: available && Boolean(config.recordSystemAudio),

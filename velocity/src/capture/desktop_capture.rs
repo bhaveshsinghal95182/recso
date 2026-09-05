@@ -42,7 +42,6 @@ const AUDIO_CHUNK_BYTES: usize =
   (AUDIO_BYTES_PER_SECOND * AUDIO_CHUNK_MS / 1000 / AUDIO_BLOCK_ALIGN) * AUDIO_BLOCK_ALIGN;
 const DEFAULT_FRAME_DURATION_100NS: i64 = 166_667;
 /// What windows-capture asks for when no interval is set.
-const DEFAULT_CAPTURE_FPS: u32 = 60;
 
 #[napi]
 pub struct Stopper {
@@ -660,25 +659,6 @@ impl GraphicsCaptureApiHandler for Capture {
   }
 }
 
-#[napi]
-pub fn start_monitor_recording(
-  output_path: String,
-  bitrate: u32,
-  include_system_audio: Option<bool>,
-) -> napi::Result<Stopper> {
-  start_monitor_recording_internal(
-    output_path,
-    bitrate,
-    include_system_audio,
-    // The v1 entry point predates microphone capture and its callers have no
-    // way to ask for it.
-    None,
-    None,
-    MinimumUpdateIntervalSettings::Default,
-    DEFAULT_CAPTURE_FPS,
-  )
-}
-
 fn start_monitor_recording_internal(
   output_path: String,
   bitrate: u32,
@@ -740,25 +720,6 @@ fn start_monitor_recording_internal(
   });
 
   Ok(Stopper::with_stats(stop_tx, done_rx, stats))
-}
-
-#[napi]
-pub fn start_window_recording(
-  window_title: String,
-  output_path: String,
-  bitrate: u32,
-  include_system_audio: Option<bool>,
-) -> napi::Result<Stopper> {
-  start_window_recording_internal(
-    window_title,
-    output_path,
-    bitrate,
-    include_system_audio,
-    None,
-    None,
-    MinimumUpdateIntervalSettings::Default,
-    DEFAULT_CAPTURE_FPS,
-  )
 }
 
 fn start_window_recording_internal(

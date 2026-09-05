@@ -115,8 +115,6 @@ export interface RecordingConfig {
    * ignored and whatever Windows called default got recorded instead.
    */
   nativeMicDeviceId?: string;
-  /** Recording engine mode. Defaults to legacy hybrid capture. */
-  nativeCaptureMode?: 'legacy' | 'native-singular-clock';
   /** Target fps for native singular-clock capture path. */
   targetFps?: 30 | 60;
   /** Optional native webcam device id used by velocity v2 path. */

@@ -181,17 +181,6 @@ electron.contextBridge.exposeInMainWorld('electron', {
     start: (config: RecordingConfig): Promise<StartRecordingResult> =>
       electron.ipcRenderer.invoke('recorder:start', config),
 
-    appendChunk: (recordingId: string, chunk: ArrayBuffer): Promise<boolean> =>
-      electron.ipcRenderer.invoke('recorder:append-chunk', recordingId, chunk),
-
-    writeChunk: (
-      recordingId: string,
-      streamId: string,
-      position: number,
-      chunk: ArrayBuffer,
-    ): Promise<boolean> =>
-      electron.ipcRenderer.invoke('recorder:write-chunk', recordingId, streamId, position, chunk),
-
     stop: (recordingId: string): Promise<StopRecordingResult> =>
       electron.ipcRenderer.invoke('recorder:stop', recordingId),
 

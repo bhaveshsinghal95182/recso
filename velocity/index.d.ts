@@ -34,6 +34,7 @@ export declare class Pipeline {
   finishExport(): number
 }
 
+/** What windows-capture asks for when no interval is set. */
 export declare class Stopper {
   /**
    * Stop every capture and describe what was written.
@@ -845,20 +846,7 @@ export interface SourceCropSpec {
   right: number
 }
 
-export declare function startMonitorRecording(
-  outputPath: string,
-  bitrate: number,
-  includeSystemAudio?: boolean | undefined | null,
-): Stopper
-
 export declare function startMonitorRecordingV2(options: NativeRecordingOptions): Stopper
-
-export declare function startWindowRecording(
-  windowTitle: string,
-  outputPath: string,
-  bitrate: number,
-  includeSystemAudio?: boolean | undefined | null,
-): Stopper
 
 export declare function startWindowRecordingV2(options: NativeWindowRecordingOptions): Stopper
 
