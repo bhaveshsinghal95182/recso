@@ -39,6 +39,10 @@
     "dist:mac": "pnpm run transpile:electron && pnpm run build && electron-builder --mac --arm64",
     "dist:linux": "pnpm run transpile:electron && pnpm run build && electron-builder --linux --x64",
     "rebuild:native": "electron-builder install-app-deps",
+    "board": "node scripts/board.mjs",
+    "board:list": "node scripts/board.mjs list",
+    "board:add": "node scripts/board.mjs add",
+    "check:board": "node scripts/board-check.mjs",
     "cleanup:db": "npx electron scripts/cleanup-db.js",
     "prepare": "husky",
     "postinstall": "electron-builder install-app-deps"
@@ -75,6 +79,10 @@
     "dist:mac": "Package the macOS arm64 build",
     "dist:linux": "Package the Linux x64 build",
     "rebuild:native": "Rebuild better-sqlite3 and uiohook-napi against Electron's ABI",
+    "board": "Open the kanban board over board.md in a browser",
+    "board:list": "Print the board to the terminal, no browser",
+    "board:add": "File a card without leaving the terminal - board:add \"title\" --tags bug",
+    "check:board": "The board's parser and serializer round-trip, so a drag cannot mangle board.md",
     "cleanup:db": "Delete every recording row from the local SQLite database",
     "prepare": "Install the Husky hooks (runs automatically after install)",
     "postinstall": "Rebuild native modules for Electron (runs automatically)"
