@@ -326,3 +326,297 @@ mod tests {
     assert!(stats.snapshot().has_audio);
   }
 }
+
+#[cfg(test)]
+mod usability_scenarios {
+  use super::*;
+
+  fn stats() -> RecordingStats {
+    RecordingStats::new("does-not-exist.mp4".into(), "screen", 60, 8_000_000, "h264")
+  }
+
+  #[test]
+  fn a_recording_with_frames_and_geometry_is_usable() {
+    let s = stats();
+    s.set_dimensions(1920, 1080);
+    s.note_frame(0);
+    assert!(s.snapshot().usable);
+  }
+
+  #[test]
+  fn frames_without_geometry_are_not_usable() {
+    // A capture that produced frames but never told us how big they were means
+    // the encoder was never built, so the container is a header and nothing.
+    let s = stats();
+    s.note_frame(0);
+    assert!(!s.snapshot().usable);
+  }
+
+  #[test]
+  fn geometry_without_frames_is_not_usable() {
+    let s = stats();
+    s.set_dimensions(1920, 1080);
+    assert!(!s.snapshot().usable);
+  }
+
+  #[test]
+  fn a_zero_sided_geometry_is_not_usable() {
+    for (w, h) in [(0u32, 1080u32), (1920, 0), (0, 0)] {
+      let s = stats();
+      s.set_dimensions(w, h);
+      s.note_frame(0);
+      assert!(!s.snapshot().usable, "{w}x{h}");
+    }
+  }
+
+  #[test]
+  fn geometry_is_reported_as_it_was_set() {
+    let s = stats();
+    s.set_dimensions(1280, 720);
+    let snapshot = s.snapshot();
+    assert_eq!(snapshot.width, 1280);
+    assert_eq!(snapshot.height, 720);
+  }
+
+  #[test]
+  fn a_later_geometry_replaces_an_earlier_one() {
+    let s = stats();
+    s.set_dimensions(640, 480);
+    s.set_dimensions(1920, 1080);
+    let snapshot = s.snapshot();
+    assert_eq!((snapshot.width, snapshot.height), (1920, 1080));
+  }
+
+  #[test]
+  fn frames_are_counted() {
+    let s = stats();
+    for i in 0..37 {
+      s.note_frame(i * 166_667);
+    }
+    assert_eq!(s.snapshot().frames, 37);
+  }
+
+  #[test]
+  fn the_configured_settings_are_reported_back_unchanged() {
+    let snapshot = stats().snapshot();
+    assert_eq!(snapshot.configured_fps, 60);
+    assert_eq!(snapshot.bitrate, 8_000_000);
+    assert_eq!(snapshot.codec, "h264");
+    assert_eq!(snapshot.role, "screen");
+    assert_eq!(snapshot.output_path, "does-not-exist.mp4");
+  }
+
+  #[test]
+  fn a_webcam_recording_reports_its_own_role() {
+    let s = RecordingStats::new("cam.mp4".into(), "webcam", 30, 4_000_000, "h264");
+    assert_eq!(s.snapshot().role, "webcam");
+  }
+
+  #[test]
+  fn a_missing_file_reports_no_size_rather_than_failing() {
+    assert_eq!(stats().snapshot().file_size, 0.0);
+  }
+}
+
+#[cfg(test)]
+mod audio_reporting_scenarios {
+  use super::*;
+
+  fn stats() -> RecordingStats {
+    RecordingStats::new("does-not-exist.mp4".into(), "screen", 60, 8_000_000, "h264")
+  }
+
+  #[test]
+  fn a_recording_with_no_audio_bytes_reports_no_audio() {
+    // The file always contains an AAC track; this is the flag that says
+    // whether it carries anything.
+    assert!(!stats().snapshot().has_audio);
+  }
+
+  #[test]
+  fn captured_bytes_turn_the_audio_flag_on() {
+    let s = stats();
+    s.note_captured_audio_bytes(192_000);
+    assert!(s.snapshot().has_audio);
+  }
+
+  #[test]
+  fn a_single_captured_byte_counts() {
+    let s = stats();
+    s.note_captured_audio_bytes(1);
+    assert!(s.snapshot().has_audio);
+  }
+
+  #[test]
+  fn zero_padding_does_not_count_as_audio() {
+    // The frame buffer is zero-padded to stay aligned to the cadence; that
+    // padding is not sound and must not make a silent take look recorded.
+    let s = stats();
+    for _ in 0..100 {
+      s.note_captured_audio_bytes(0);
+    }
+    assert!(!s.snapshot().has_audio);
+  }
+
+  #[test]
+  fn captured_bytes_accumulate_across_frames() {
+    let s = stats();
+    for _ in 0..10 {
+      s.note_captured_audio_bytes(3200);
+    }
+    assert!(s.snapshot().has_audio);
+  }
+
+  #[test]
+  fn a_late_burst_of_audio_still_registers() {
+    let s = stats();
+    s.note_captured_audio_bytes(0);
+    s.note_captured_audio_bytes(0);
+    s.note_captured_audio_bytes(4);
+    assert!(s.snapshot().has_audio);
+  }
+}
+
+#[cfg(test)]
+mod rate_scenarios {
+  use super::*;
+
+  fn stats() -> RecordingStats {
+    RecordingStats::new("does-not-exist.mp4".into(), "screen", 60, 8_000_000, "h264")
+  }
+
+  #[test]
+  fn a_recording_with_no_frames_reports_no_rate() {
+    let snapshot = stats().snapshot();
+    assert_eq!(snapshot.fps, 0.0);
+    assert_eq!(snapshot.duration_ms, 0.0);
+  }
+
+  #[test]
+  fn the_duration_falls_back_to_the_timestamp_span_plus_one_interval() {
+    // No stop instant, so the best guess available: the span the frames cover
+    // plus how long the last one probably stayed up.
+    let s = stats();
+    s.note_frame(0);
+    s.note_frame(1_000_000);
+    s.note_frame(2_000_000);
+    let snapshot = s.snapshot();
+    // Two intervals of 100ms each, plus one more for the final frame.
+    assert!((snapshot.duration_ms - 300.0).abs() < 1.0, "{}", snapshot.duration_ms);
+  }
+
+  #[test]
+  fn a_single_frame_falls_back_to_the_configured_frame_period() {
+    // Nothing to measure an interval from, so the requested rate is the only
+    // thing that says how long one frame lasts.
+    let s = stats();
+    s.note_frame(0);
+    let snapshot = s.snapshot();
+    assert!((snapshot.duration_ms - 1000.0 / 60.0).abs() < 0.1, "{}", snapshot.duration_ms);
+  }
+
+  #[test]
+  fn a_single_frame_with_no_configured_rate_reports_no_duration() {
+    let s = RecordingStats::new("does-not-exist.mp4".into(), "screen", 0, 1, "h264");
+    s.note_frame(0);
+    assert_eq!(s.snapshot().duration_ms, 0.0);
+  }
+
+  #[test]
+  fn the_rate_is_frames_over_the_duration() {
+    let s = stats();
+    // Ten frames spanning 900ms, so the fallback duration is 1000ms.
+    for i in 0..10 {
+      s.note_frame(i * 1_000_000);
+    }
+    let snapshot = s.snapshot();
+    assert!((snapshot.fps - 10.0).abs() < 0.2, "{}", snapshot.fps);
+  }
+
+  #[test]
+  fn an_idle_screen_reporting_a_low_rate_is_not_treated_as_a_failure() {
+    // Variable-rate capture delivers a frame only when something changes, so
+    // 1.4fps against a requested 60 is what an idle desktop looks like.
+    let s = stats();
+    s.set_dimensions(1920, 1080);
+    for i in 0..3 {
+      s.note_frame(i * 10_000_000);
+    }
+    let snapshot = s.snapshot();
+    assert!(snapshot.usable);
+    assert!(snapshot.fps < 5.0, "{}", snapshot.fps);
+  }
+
+  #[test]
+  fn frames_arriving_with_the_same_timestamp_do_not_divide_by_zero() {
+    let s = stats();
+    for _ in 0..5 {
+      s.note_frame(1000);
+    }
+    let snapshot = s.snapshot();
+    assert!(snapshot.fps.is_finite());
+    assert!(snapshot.duration_ms.is_finite());
+  }
+
+  #[test]
+  fn a_timestamp_going_backwards_does_not_produce_a_negative_span() {
+    let s = stats();
+    s.note_frame(5_000_000);
+    s.note_frame(1_000_000);
+    let snapshot = s.snapshot();
+    assert!(snapshot.duration_ms >= 0.0, "{}", snapshot.duration_ms);
+    assert!(snapshot.fps >= 0.0);
+  }
+
+  #[test]
+  fn marking_stopped_switches_the_duration_to_the_wall_clock() {
+    let s = stats();
+    s.note_frame(0);
+    s.mark_stopped();
+    let snapshot = s.snapshot();
+    // Wall clock from the first frame to the stop signal, which here is a
+    // sliver rather than the configured frame period.
+    assert!(snapshot.duration_ms < 1000.0 / 60.0, "{}", snapshot.duration_ms);
+  }
+
+  #[test]
+  fn marking_stopped_twice_keeps_the_first_instant() {
+    // Called as the stop signal goes out, not after the encoder finalises --
+    // flushing an MP4 takes long enough to show up in the duration.
+    let s = stats();
+    s.note_frame(0);
+    s.mark_stopped();
+    let first = s.snapshot().duration_ms;
+    s.mark_stopped();
+    assert_eq!(s.snapshot().duration_ms, first);
+  }
+
+  #[test]
+  fn stopping_without_ever_seeing_a_frame_still_reports_nothing() {
+    let s = stats();
+    s.mark_stopped();
+    let snapshot = s.snapshot();
+    assert_eq!(snapshot.duration_ms, 0.0);
+    assert_eq!(snapshot.frames, 0);
+  }
+
+  #[test]
+  fn a_snapshot_can_be_taken_more_than_once() {
+    let s = stats();
+    s.set_dimensions(1920, 1080);
+    s.note_frame(0);
+    let first = s.snapshot();
+    let second = s.snapshot();
+    assert_eq!(first.frames, second.frames);
+    assert_eq!(first.width, second.width);
+  }
+
+  #[test]
+  fn a_snapshot_does_not_consume_the_stats() {
+    let s = stats();
+    s.note_frame(0);
+    let _ = s.snapshot();
+    s.note_frame(1_000_000);
+    assert_eq!(s.snapshot().frames, 2);
+  }
+}

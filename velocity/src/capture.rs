@@ -4,6 +4,15 @@ mod phone_camera;
 mod recording_info;
 mod webcam_capture;
 
+/// Capture-side scenarios and matrices.
+///
+/// The recorder's own units are hard to test -- they end in a Windows API call
+/// -- but the decisions in front of those calls are not: which camera was
+/// asked for, what rate was resolved, where the sidecar is written, and what
+/// the stats say about a take once it is over.
+#[cfg(test)]
+mod scenarios;
+
 use napi_derive::napi;
 
 pub use desktop_capture::Stopper;
@@ -237,5 +246,150 @@ mod tests {
     // Silently falling back to the local camera would record the wrong one and
     // the user would not find out until they opened the editor.
     assert!(parse_webcam_source(Some("laptop".to_string()), None).is_err());
+  }
+}
+
+#[cfg(test)]
+mod webcam_source_scenarios {
+  use super::*;
+
+  fn local_id(source: napi::Result<WebcamSource>) -> Option<String> {
+    match source {
+      Ok(WebcamSource::Local(id)) => id,
+      Ok(WebcamSource::Phone) => panic!("expected a local camera, got the phone"),
+      Err(error) => panic!("expected a local camera, got {}", error.reason),
+    }
+  }
+
+  /// `unwrap_err` would need `WebcamSource: Debug`, which it has no other
+  /// reason to be.
+  fn refusal(source: &str) -> String {
+    match parse_webcam_source(Some(source.to_string()), None) {
+      Err(error) => error.reason.clone(),
+      Ok(_) => panic!("{source} was accepted"),
+    }
+  }
+
+  #[test]
+  fn no_source_named_means_the_camera_attached_to_this_machine() {
+    assert!(matches!(
+      parse_webcam_source(None, None),
+      Ok(WebcamSource::Local(None))
+    ));
+  }
+
+  #[test]
+  fn an_empty_source_means_the_local_camera_too() {
+    // The editor sends "" for "not set" in a couple of places, and treating it
+    // as an unknown source would refuse a recording that used to work.
+    assert!(matches!(
+      parse_webcam_source(Some(String::new()), None),
+      Ok(WebcamSource::Local(None))
+    ));
+  }
+
+  #[test]
+  fn the_local_camera_can_be_asked_for_by_name() {
+    assert!(matches!(
+      parse_webcam_source(Some("local".to_string()), None),
+      Ok(WebcamSource::Local(None))
+    ));
+  }
+
+  #[test]
+  fn a_device_id_rides_along_with_the_local_camera() {
+    let id = local_id(parse_webcam_source(None, Some("cam-7".to_string())));
+    assert_eq!(id.as_deref(), Some("cam-7"));
+  }
+
+  #[test]
+  fn a_device_id_survives_an_explicit_local_source() {
+    let id = local_id(parse_webcam_source(
+      Some("local".to_string()),
+      Some("cam-7".to_string()),
+    ));
+    assert_eq!(id.as_deref(), Some("cam-7"));
+  }
+
+  #[test]
+  fn a_device_id_survives_an_empty_source() {
+    let id = local_id(parse_webcam_source(
+      Some(String::new()),
+      Some("cam-7".to_string()),
+    ));
+    assert_eq!(id.as_deref(), Some("cam-7"));
+  }
+
+  #[test]
+  fn a_phone_is_asked_for_by_name_rather_than_by_a_made_up_device_id() {
+    // A phone is not a device the machine has, so asking for it by id would
+    // mean inventing an id `listWebcamDevices` can never return.
+    assert!(matches!(
+      parse_webcam_source(Some("phone".to_string()), None),
+      Ok(WebcamSource::Phone)
+    ));
+  }
+
+  #[test]
+  fn a_device_id_is_ignored_when_the_phone_is_asked_for() {
+    assert!(matches!(
+      parse_webcam_source(Some("phone".to_string()), Some("cam-7".to_string())),
+      Ok(WebcamSource::Phone)
+    ));
+  }
+
+  #[test]
+  fn an_unknown_source_is_refused_rather_than_guessed() {
+    // Silently falling back would record the wrong camera, and the user would
+    // not find out until they opened the editor.
+    for name in ["laptop", "usb", "webcam", "default", "0"] {
+      assert!(
+        parse_webcam_source(Some(name.to_string()), None).is_err(),
+        "{name}"
+      );
+    }
+  }
+
+  #[test]
+  fn the_source_names_are_case_sensitive() {
+    // The caller is a serialiser, so a capital is a bug on the sending side
+    // rather than something to be forgiving about.
+    for name in ["Phone", "PHONE", "Local", "LOCAL"] {
+      assert!(
+        parse_webcam_source(Some(name.to_string()), None).is_err(),
+        "{name}"
+      );
+    }
+  }
+
+  #[test]
+  fn a_padded_source_name_is_not_trimmed() {
+    assert!(parse_webcam_source(Some(" phone ".to_string()), None).is_err());
+  }
+
+  #[test]
+  fn the_refusal_names_the_source_it_did_not_understand() {
+    let message = refusal("laptop");
+    assert!(message.contains("laptop"), "{message}");
+  }
+
+  #[test]
+  fn the_refusal_says_what_would_have_worked() {
+    let message = refusal("laptop");
+    assert!(message.contains("local"), "{message}");
+    assert!(message.contains("phone"), "{message}");
+  }
+
+  #[test]
+  fn every_accepted_spelling_produces_a_source_the_recorder_can_open() {
+    let accepted: [Option<String>; 3] = [
+      None,
+      Some(String::new()),
+      Some("local".to_string()),
+    ];
+    for source in accepted {
+      assert!(parse_webcam_source(source.clone(), None).is_ok(), "{source:?}");
+    }
+    assert!(parse_webcam_source(Some("phone".to_string()), None).is_ok());
   }
 }

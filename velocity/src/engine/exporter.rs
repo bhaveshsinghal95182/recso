@@ -553,3 +553,104 @@ fn run(shared: &Arc<Shared>, options: Options) -> Result<()> {
   encoder.finish()?;
   Ok(())
 }
+
+#[cfg(test)]
+mod audio_pacing_scenarios {
+  use super::*;
+
+  /// Frames in one second at the mix rate.
+  const SECOND: u64 = MIX_SAMPLE_RATE as u64;
+
+  #[test]
+  fn nothing_is_due_at_the_very_start() {
+    assert_eq!(audio_frames_due(0.0, 0), 0);
+  }
+
+  #[test]
+  fn a_seconds_worth_is_due_after_a_second() {
+    assert_eq!(audio_frames_due(1000.0, 0), SECOND as usize);
+  }
+
+  #[test]
+  fn only_what_has_not_been_written_is_due() {
+    assert_eq!(audio_frames_due(1000.0, SECOND), 0);
+    assert_eq!(audio_frames_due(1000.0, SECOND / 2), (SECOND / 2) as usize);
+  }
+
+  #[test]
+  fn writing_ahead_of_the_picture_asks_for_nothing_rather_than_underflowing() {
+    // The subtraction saturates, so an encoder that ran ahead simply waits.
+    assert_eq!(audio_frames_due(0.0, SECOND), 0);
+    assert_eq!(audio_frames_due(500.0, SECOND * 10), 0);
+  }
+
+  #[test]
+  fn a_negative_position_asks_for_nothing() {
+    assert_eq!(audio_frames_due(-1000.0, 0), 0);
+  }
+
+  #[test]
+  fn the_demand_is_derived_from_the_position_not_accumulated() {
+    // A variable-rate screen recording has no fixed frames per video frame,
+    // and rounding one every frame drifts the audio over a long export.
+    let mut written = 0u64;
+    // Sixty wildly uneven video frames spread over one second.
+    for step in 1..=60 {
+      let ms = 1000.0 * (step as f64 / 60.0);
+      written += audio_frames_due(ms, written) as u64;
+    }
+    assert_eq!(written, SECOND);
+  }
+
+  #[test]
+  fn uneven_frame_spacing_still_lands_on_the_exact_total() {
+    let mut written = 0u64;
+    let stops = [3.0f64, 91.0, 91.5, 400.0, 401.0, 999.0, 1000.0];
+    for ms in stops {
+      written += audio_frames_due(ms, written) as u64;
+    }
+    assert_eq!(written, SECOND);
+  }
+
+  #[test]
+  fn a_long_export_does_not_accumulate_rounding_error() {
+    let mut written = 0u64;
+    // Ten minutes at an awkward 59.94fps.
+    let total_frames = 10 * 60 * 60;
+    for step in 1..=total_frames {
+      let ms = step as f64 * 1000.0 / 59.94;
+      written += audio_frames_due(ms, written) as u64;
+    }
+    let expected = (total_frames as f64 * 1000.0 / 59.94 / 1000.0 * SECOND as f64).round() as u64;
+    assert_eq!(written, expected);
+  }
+
+  #[test]
+  fn the_demand_never_goes_backwards_as_the_position_advances() {
+    let mut last_target = 0u64;
+    for step in 0..500 {
+      let ms = step as f64 * 7.3;
+      let target = audio_frames_due(ms, 0) as u64;
+      assert!(target >= last_target, "step {step}");
+      last_target = target;
+    }
+  }
+
+  #[test]
+  fn half_a_second_is_half_a_seconds_worth() {
+    assert_eq!(audio_frames_due(500.0, 0), (SECOND / 2) as usize);
+  }
+
+  #[test]
+  fn a_fraction_of_a_millisecond_rounds_rather_than_truncating() {
+    // Truncating would leave the audio permanently one frame short of the
+    // picture at every position.
+    let due = audio_frames_due(1.0 / 48.0, 0);
+    assert!(due <= 2, "{due}");
+  }
+
+  #[test]
+  fn an_hour_long_export_is_an_hours_worth_of_frames() {
+    assert_eq!(audio_frames_due(3_600_000.0, 0), (SECOND * 3600) as usize);
+  }
+}

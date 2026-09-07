@@ -1022,3 +1022,901 @@ mod tests {
     assert!(started_at.elapsed() < Duration::from_secs(10));
   }
 }
+
+#[cfg(test)]
+mod pcm_mixing_scenarios {
+  use super::*;
+
+  fn pcm(samples: &[i16]) -> Vec<u8> {
+    samples.iter().flat_map(|s| s.to_le_bytes()).collect()
+  }
+
+  fn decode(bytes: &[u8]) -> Vec<i16> {
+    // `as_chunks` to match what `mix_pcm_into` itself uses, so the test reads
+    // the stream back exactly the way the mixer read it.
+    bytes.as_chunks::<2>().0.iter().copied().map(i16::from_le_bytes).collect()
+  }
+
+  #[test]
+  fn mixing_nothing_leaves_the_accumulator_alone() {
+    let mut acc = vec![5i32, 6, 7];
+    mix_pcm_into(&mut acc, &[]);
+    assert_eq!(acc, vec![5, 6, 7]);
+  }
+
+  #[test]
+  fn one_source_passes_through_unchanged() {
+    let mut acc = vec![0i32; 4];
+    mix_pcm_into(&mut acc, &pcm(&[100, -100, 0, 32767]));
+    assert_eq!(acc, vec![100, -100, 0, 32767]);
+  }
+
+  #[test]
+  fn two_sources_are_summed_not_averaged() {
+    // Two people talking should not each get quieter because the other exists.
+    let mut acc = vec![0i32; 2];
+    mix_pcm_into(&mut acc, &pcm(&[1000, 2000]));
+    mix_pcm_into(&mut acc, &pcm(&[3000, 4000]));
+    assert_eq!(acc, vec![4000, 6000]);
+  }
+
+  #[test]
+  fn many_sources_all_contribute() {
+    let mut acc = vec![0i32; 2];
+    for _ in 0..8 {
+      mix_pcm_into(&mut acc, &pcm(&[1000, -500]));
+    }
+    assert_eq!(acc, vec![8000, -4000]);
+  }
+
+  #[test]
+  fn mixing_is_order_independent() {
+    let mut a = vec![0i32; 2];
+    mix_pcm_into(&mut a, &pcm(&[100, 200]));
+    mix_pcm_into(&mut a, &pcm(&[-50, 400]));
+    let mut b = vec![0i32; 2];
+    mix_pcm_into(&mut b, &pcm(&[-50, 400]));
+    mix_pcm_into(&mut b, &pcm(&[100, 200]));
+    assert_eq!(a, b);
+  }
+
+  #[test]
+  fn the_accumulator_holds_more_than_an_i16_so_the_sum_does_not_clip_early() {
+    // Clipping happens once, at the end, in `pcm_from_accumulator`.
+    let mut acc = vec![0i32; 1];
+    for _ in 0..4 {
+      mix_pcm_into(&mut acc, &pcm(&[30000]));
+    }
+    assert_eq!(acc[0], 120_000);
+  }
+
+  #[test]
+  fn a_source_that_ran_short_leaves_the_rest_alone() {
+    let mut acc = vec![7i32; 4];
+    mix_pcm_into(&mut acc, &pcm(&[1, 2]));
+    assert_eq!(acc, vec![8, 9, 7, 7]);
+  }
+
+  #[test]
+  fn a_source_longer_than_the_frame_is_truncated_rather_than_overrunning() {
+    let mut acc = vec![0i32; 2];
+    mix_pcm_into(&mut acc, &pcm(&[1, 2, 3, 4, 5]));
+    assert_eq!(acc, vec![1, 2]);
+  }
+
+  #[test]
+  fn a_trailing_odd_byte_is_ignored_rather_than_shifting_the_stream() {
+    // Half a sample carried forward swaps the channels for the rest of the
+    // recording, which is far worse than losing one byte.
+    let mut acc = vec![0i32; 3];
+    let mut bytes = pcm(&[100, 200]);
+    bytes.push(0xff);
+    mix_pcm_into(&mut acc, &bytes);
+    assert_eq!(acc, vec![100, 200, 0]);
+  }
+
+  #[test]
+  fn negative_samples_are_read_as_negative() {
+    let mut acc = vec![0i32; 2];
+    mix_pcm_into(&mut acc, &pcm(&[i16::MIN, -1]));
+    assert_eq!(acc, vec![i16::MIN as i32, -1]);
+  }
+
+  #[test]
+  fn an_empty_accumulator_swallows_any_source() {
+    let mut acc: Vec<i32> = Vec::new();
+    mix_pcm_into(&mut acc, &pcm(&[1, 2, 3]));
+    assert!(acc.is_empty());
+  }
+
+  #[test]
+  fn writing_back_a_quiet_mix_returns_what_went_in() {
+    let mut acc = vec![0i32; 4];
+    mix_pcm_into(&mut acc, &pcm(&[100, -100, 0, 500]));
+    assert_eq!(decode(&pcm_from_accumulator(&acc)), vec![100, -100, 0, 500]);
+  }
+
+  #[test]
+  fn a_loud_moment_clips_rather_than_wrapping() {
+    // An i32 sum past 32767 truncated to i16 flips sign, which comes out as a
+    // burst of noise instead of a loud moment.
+    let bytes = pcm_from_accumulator(&[120_000, -120_000]);
+    assert_eq!(decode(&bytes), vec![i16::MAX, i16::MIN]);
+  }
+
+  #[test]
+  fn clipping_happens_at_exactly_the_i16_limits() {
+    let bytes = pcm_from_accumulator(&[32_767, 32_768, -32_768, -32_769]);
+    assert_eq!(
+      decode(&bytes),
+      vec![i16::MAX, i16::MAX, i16::MIN, i16::MIN]
+    );
+  }
+
+  #[test]
+  fn writing_back_produces_two_bytes_a_sample() {
+    for len in [0usize, 1, 2, 480, 4800] {
+      assert_eq!(pcm_from_accumulator(&vec![0i32; len]).len(), len * 2);
+    }
+  }
+
+  #[test]
+  fn writing_back_is_little_endian() {
+    // Which is what WASAPI and the encoder both expect.
+    assert_eq!(pcm_from_accumulator(&[0x0102]), vec![0x02, 0x01]);
+  }
+
+  #[test]
+  fn an_empty_mix_writes_no_bytes() {
+    assert!(pcm_from_accumulator(&[]).is_empty());
+  }
+
+  #[test]
+  fn a_full_round_trip_through_the_mixer_preserves_a_quiet_signal() {
+    let source: Vec<i16> = (0..480).map(|i| (i as i16).wrapping_mul(3)).collect();
+    let mut acc = vec![0i32; source.len()];
+    mix_pcm_into(&mut acc, &pcm(&source));
+    assert_eq!(decode(&pcm_from_accumulator(&acc)), source);
+  }
+}
+
+#[cfg(test)]
+mod capture_rate_scenarios {
+  use super::*;
+
+  fn nanos(settings: &MinimumUpdateIntervalSettings) -> u128 {
+    match settings {
+      MinimumUpdateIntervalSettings::Custom(duration) => duration.as_nanos(),
+      _ => panic!("expected a custom interval"),
+    }
+  }
+
+  #[test]
+  fn asking_for_nothing_gives_60() {
+    assert_eq!(resolved_capture_fps(None, "test"), 60);
+  }
+
+  #[test]
+  fn the_two_supported_rates_are_honoured() {
+    assert_eq!(resolved_capture_fps(Some(30), "test"), 30);
+    assert_eq!(resolved_capture_fps(Some(60), "test"), 60);
+  }
+
+  #[test]
+  fn anything_else_falls_back_to_60() {
+    for fps in [0u32, 1, 24, 25, 45, 90, 144, u32::MAX] {
+      assert_eq!(resolved_capture_fps(Some(fps), "test"), 60, "{fps}");
+    }
+  }
+
+  #[test]
+  fn the_reported_rate_is_always_one_windows_was_actually_asked_for() {
+    for fps in [None, Some(0), Some(30), Some(60), Some(1000)] {
+      assert!(matches!(resolved_capture_fps(fps, "test"), 30 | 60), "{fps:?}");
+    }
+  }
+
+  #[test]
+  fn the_interval_is_the_reciprocal_of_the_rate() {
+    assert_eq!(nanos(&minimum_update_interval_for_fps(60)), 16_666_666);
+    assert_eq!(nanos(&minimum_update_interval_for_fps(30)), 33_333_333);
+  }
+
+  #[test]
+  fn a_faster_rate_means_a_shorter_interval() {
+    let mut last = u128::MAX;
+    for fps in [1u32, 24, 30, 60, 120, 240] {
+      let interval = nanos(&minimum_update_interval_for_fps(fps));
+      assert!(interval < last, "{fps}");
+      last = interval;
+    }
+  }
+
+  #[test]
+  fn a_zero_rate_does_not_divide_by_zero() {
+    assert_eq!(nanos(&minimum_update_interval_for_fps(0)), 1_000_000_000);
+  }
+
+  #[test]
+  fn the_interval_is_never_zero() {
+    // A zero minimum interval asks Windows for every frame it can produce,
+    // which is not what "unsupported rate" should mean.
+    for fps in [0u32, 1, 60, 1_000_000_000, u32::MAX] {
+      assert!(nanos(&minimum_update_interval_for_fps(fps)) >= 1, "{fps}");
+    }
+  }
+
+  #[test]
+  fn the_resolved_rate_and_the_interval_agree() {
+    for requested in [None, Some(30), Some(60), Some(99)] {
+      let fps = resolved_capture_fps(requested, "test");
+      let interval = nanos(&minimum_update_interval_for_fps(fps));
+      let implied = 1_000_000_000u128 / interval;
+      assert_eq!(implied as u32, fps, "{requested:?}");
+    }
+  }
+}
+
+#[cfg(test)]
+mod audio_source_scenarios {
+  use super::*;
+  use std::sync::mpsc::channel;
+
+  fn source() -> (AudioSource, std::sync::mpsc::Sender<Vec<u8>>) {
+    let (tx, rx) = channel::<Vec<u8>>();
+    (
+      AudioSource {
+        label: "test",
+        rx,
+        thread: None,
+        stop: Arc::new(AtomicBool::new(false)),
+        pending: VecDeque::new(),
+        live: true,
+      },
+      tx,
+    )
+  }
+
+  #[test]
+  fn draining_an_idle_source_finds_nothing() {
+    let (mut s, _tx) = source();
+    s.drain();
+    assert!(s.pending.is_empty());
+    assert!(s.live);
+  }
+
+  #[test]
+  fn draining_moves_what_the_capture_thread_produced() {
+    let (mut s, tx) = source();
+    tx.send(vec![1, 2, 3, 4]).unwrap();
+    s.drain();
+    assert_eq!(s.pending.len(), 4);
+  }
+
+  #[test]
+  fn draining_collects_every_chunk_waiting() {
+    let (mut s, tx) = source();
+    for _ in 0..5 {
+      tx.send(vec![0; 4]).unwrap();
+    }
+    s.drain();
+    assert_eq!(s.pending.len(), 20);
+  }
+
+  #[test]
+  fn draining_keeps_the_chunks_in_order() {
+    let (mut s, tx) = source();
+    tx.send(vec![1, 2]).unwrap();
+    tx.send(vec![3, 4]).unwrap();
+    s.drain();
+    assert_eq!(s.pending.iter().copied().collect::<Vec<u8>>(), vec![1, 2, 3, 4]);
+  }
+
+  #[test]
+  fn a_source_whose_thread_has_gone_stops_being_live() {
+    // A dead source stops being mixed rather than contributing silence for the
+    // rest of the take.
+    let (mut s, tx) = source();
+    drop(tx);
+    s.drain();
+    assert!(!s.live);
+  }
+
+  #[test]
+  fn a_dying_source_still_hands_over_what_it_had_already_sent() {
+    let (mut s, tx) = source();
+    tx.send(vec![7, 8]).unwrap();
+    drop(tx);
+    s.drain();
+    assert_eq!(s.pending.len(), 2);
+    assert!(!s.live);
+  }
+
+  #[test]
+  fn a_backlog_past_the_limit_is_trimmed_from_the_oldest_end() {
+    let (mut s, tx) = source();
+    let excess = MAX_AUDIO_BACKLOG_BYTES + AUDIO_BLOCK_ALIGN * 10;
+    tx.send(vec![0u8; excess]).unwrap();
+    s.drain();
+    assert!(s.pending.len() <= MAX_AUDIO_BACKLOG_BYTES);
+  }
+
+  #[test]
+  fn trimming_a_backlog_drops_whole_frames() {
+    // Half a sample dropped swaps the channels for the rest of the recording,
+    // so the amount removed is rounded down to a frame boundary.
+    let (mut s, tx) = source();
+    let sent = MAX_AUDIO_BACKLOG_BYTES + AUDIO_BLOCK_ALIGN * 10 + 2;
+    tx.send(vec![0u8; sent]).unwrap();
+    s.drain();
+    assert_eq!((sent - s.pending.len()) % AUDIO_BLOCK_ALIGN, 0);
+  }
+
+  #[test]
+  fn an_aligned_backlog_stays_aligned_through_a_trim() {
+    // The capture device never hands over a partial frame, so this is the case
+    // that actually happens -- and the one the channel phase depends on.
+    let (mut s, tx) = source();
+    tx.send(vec![0u8; MAX_AUDIO_BACKLOG_BYTES + AUDIO_BLOCK_ALIGN * 10])
+      .unwrap();
+    s.drain();
+    assert_eq!(s.pending.len() % AUDIO_BLOCK_ALIGN, 0);
+    assert!(s.pending.len() <= MAX_AUDIO_BACKLOG_BYTES);
+  }
+
+  #[test]
+  fn a_backlog_under_the_limit_is_left_alone() {
+    let (mut s, tx) = source();
+    tx.send(vec![0u8; 1024]).unwrap();
+    s.drain();
+    assert_eq!(s.pending.len(), 1024);
+  }
+
+  #[test]
+  fn taking_from_an_empty_source_gives_silence() {
+    let (mut s, _tx) = source();
+    let (buffer, captured) = s.take(16);
+    assert_eq!(buffer, vec![0u8; 16]);
+    assert_eq!(captured, 0);
+  }
+
+  #[test]
+  fn taking_returns_exactly_what_was_asked_for() {
+    let (mut s, _tx) = source();
+    s.pending.extend([1, 2, 3]);
+    for wanted in [0usize, 1, 3, 8, 100] {
+      let (buffer, _) = s.take(wanted);
+      assert_eq!(buffer.len(), wanted, "{wanted}");
+    }
+  }
+
+  #[test]
+  fn taking_reports_how_many_bytes_were_real() {
+    // The padding keeps the buffer aligned to the frame cadence; only the real
+    // bytes count as captured audio.
+    let (mut s, _tx) = source();
+    s.pending.extend([1, 2, 3]);
+    let (buffer, captured) = s.take(8);
+    assert_eq!(captured, 3);
+    assert_eq!(&buffer[..3], &[1, 2, 3]);
+    assert_eq!(&buffer[3..], &[0, 0, 0, 0, 0]);
+  }
+
+  #[test]
+  fn taking_consumes_what_it_returned() {
+    let (mut s, _tx) = source();
+    s.pending.extend([1, 2, 3, 4]);
+    let (first, _) = s.take(2);
+    let (second, _) = s.take(2);
+    assert_eq!(first, vec![1, 2]);
+    assert_eq!(second, vec![3, 4]);
+    assert!(s.pending.is_empty());
+  }
+
+  #[test]
+  fn taking_everything_available_reports_all_of_it_as_real() {
+    let (mut s, _tx) = source();
+    s.pending.extend([1, 2, 3, 4]);
+    let (_, captured) = s.take(4);
+    assert_eq!(captured, 4);
+  }
+
+  #[test]
+  fn taking_nothing_takes_nothing() {
+    let (mut s, _tx) = source();
+    s.pending.extend([1, 2]);
+    let (buffer, captured) = s.take(0);
+    assert!(buffer.is_empty());
+    assert_eq!(captured, 0);
+    assert_eq!(s.pending.len(), 2);
+  }
+}
+
+#[cfg(test)]
+mod pcm_matrix {
+  use super::*;
+
+  fn pcm(samples: &[i16]) -> Vec<u8> {
+    samples.iter().flat_map(|s| s.to_le_bytes()).collect()
+  }
+
+  fn decode(bytes: &[u8]) -> Vec<i16> {
+    bytes
+      .as_chunks::<2>()
+      .0
+      .iter()
+      .copied()
+      .map(i16::from_le_bytes)
+      .collect()
+  }
+
+  /// Signal shapes a real capture produces.
+  fn shapes() -> Vec<(&'static str, Vec<i16>)> {
+    vec![
+      ("silence", vec![0; 16]),
+      ("quiet", (0..16).map(|i| i * 3).collect()),
+      ("loud", (0..16).map(|i| i * 2000).collect()),
+      ("full scale", vec![i16::MAX; 16]),
+      ("full negative", vec![i16::MIN; 16]),
+      (
+        "alternating",
+        (0..16)
+          .map(|i| if i % 2 == 0 { 20_000 } else { -20_000 })
+          .collect(),
+      ),
+      ("ramp down", (0..16).map(|i| 16_000 - i * 2_000).collect()),
+    ]
+  }
+
+  #[test]
+  fn one_source_passes_through_unchanged_for_every_shape() {
+    for (name, samples) in shapes() {
+      let mut acc = vec![0i32; samples.len()];
+      mix_pcm_into(&mut acc, &pcm(&samples));
+      let out = decode(&pcm_from_accumulator(&acc));
+      assert_eq!(out, samples, "{name}");
+    }
+  }
+
+  #[test]
+  fn mixing_is_commutative_for_every_pair_of_shapes() {
+    for (a_name, a) in shapes() {
+      for (b_name, b) in shapes() {
+        let mut forward = vec![0i32; 16];
+        mix_pcm_into(&mut forward, &pcm(&a));
+        mix_pcm_into(&mut forward, &pcm(&b));
+        let mut backward = vec![0i32; 16];
+        mix_pcm_into(&mut backward, &pcm(&b));
+        mix_pcm_into(&mut backward, &pcm(&a));
+        assert_eq!(forward, backward, "{a_name} + {b_name}");
+      }
+    }
+  }
+
+  #[test]
+  fn mixing_sums_rather_than_averaging_for_every_pair_of_shapes() {
+    // Two people talking must not each get quieter because the other exists.
+    for (a_name, a) in shapes() {
+      for (b_name, b) in shapes() {
+        let mut acc = vec![0i32; 16];
+        mix_pcm_into(&mut acc, &pcm(&a));
+        mix_pcm_into(&mut acc, &pcm(&b));
+        for (i, (mixed, (left, right))) in acc.iter().zip(a.iter().zip(b.iter())).enumerate() {
+          assert_eq!(
+            *mixed,
+            *left as i32 + *right as i32,
+            "{a_name} + {b_name} at {i}"
+          );
+        }
+      }
+    }
+  }
+
+  #[test]
+  fn mixing_silence_changes_nothing_for_every_shape() {
+    for (name, samples) in shapes() {
+      let mut with = vec![0i32; 16];
+      mix_pcm_into(&mut with, &pcm(&samples));
+      mix_pcm_into(&mut with, &pcm(&[0i16; 16]));
+      let mut without = vec![0i32; 16];
+      mix_pcm_into(&mut without, &pcm(&samples));
+      assert_eq!(with, without, "{name}");
+    }
+  }
+
+  #[test]
+  fn the_accumulator_never_overflows_for_a_realistic_number_of_sources() {
+    // Eight full-scale sources is far more than the two the recorder mixes,
+    // and an i32 still has room -- which is why clipping happens once, at the
+    // end, rather than at every sum.
+    let mut acc = vec![0i32; 16];
+    for _ in 0..8 {
+      mix_pcm_into(&mut acc, &pcm(&[i16::MAX; 16]));
+    }
+    assert_eq!(acc[0], i16::MAX as i32 * 8);
+    let out = decode(&pcm_from_accumulator(&acc));
+    assert_eq!(out[0], i16::MAX);
+  }
+
+  #[test]
+  fn a_source_shorter_than_the_frame_leaves_the_rest_alone_at_every_length() {
+    for len in 0..=16usize {
+      let mut acc = vec![7i32; 16];
+      mix_pcm_into(&mut acc, &pcm(&vec![1i16; len]));
+      for (i, mixed) in acc.iter().enumerate() {
+        let expected = if i < len { 8 } else { 7 };
+        assert_eq!(*mixed, expected, "len {len} at {i}");
+      }
+    }
+  }
+
+  #[test]
+  fn a_source_longer_than_the_frame_is_truncated_at_every_length() {
+    for len in 16..=32usize {
+      let mut acc = vec![0i32; 16];
+      mix_pcm_into(&mut acc, &pcm(&vec![1i16; len]));
+      assert_eq!(acc.len(), 16, "len {len}");
+      assert!(acc.iter().all(|s| *s == 1), "len {len}");
+    }
+  }
+
+  #[test]
+  fn a_trailing_odd_byte_is_ignored_at_every_length() {
+    // Half a sample carried forward swaps the channels for the rest of the
+    // recording, which is far worse than losing one byte.
+    for len in 0..=8usize {
+      let mut acc = vec![0i32; 16];
+      let mut bytes = pcm(&vec![100i16; len]);
+      bytes.push(0xff);
+      mix_pcm_into(&mut acc, &bytes);
+      for (i, mixed) in acc.iter().enumerate() {
+        let expected = if i < len { 100 } else { 0 };
+        assert_eq!(*mixed, expected, "len {len} at {i}");
+      }
+    }
+  }
+
+  #[test]
+  fn clipping_is_symmetric_and_saturating_across_the_range() {
+    let cases: [(i32, i16); 9] = [
+      (0, 0),
+      (1, 1),
+      (-1, -1),
+      (32_766, 32_766),
+      (32_767, i16::MAX),
+      (32_768, i16::MAX),
+      (-32_768, i16::MIN),
+      (-32_769, i16::MIN),
+      (i32::MAX, i16::MAX),
+    ];
+    for (input, expected) in cases {
+      let out = decode(&pcm_from_accumulator(&[input]));
+      assert_eq!(out[0], expected, "{input}");
+    }
+    assert_eq!(decode(&pcm_from_accumulator(&[i32::MIN]))[0], i16::MIN);
+  }
+
+  #[test]
+  fn writing_back_is_two_little_endian_bytes_a_sample_at_every_length() {
+    for len in [0usize, 1, 2, 16, 480, 4_800] {
+      let acc: Vec<i32> = (0..len).map(|i| (i % 1000) as i32).collect();
+      let bytes = pcm_from_accumulator(&acc);
+      assert_eq!(bytes.len(), len * 2, "len {len}");
+      for (i, sample) in acc.iter().enumerate() {
+        let pair = [bytes[i * 2], bytes[i * 2 + 1]];
+        assert_eq!(i16::from_le_bytes(pair) as i32, *sample, "len {len} at {i}");
+      }
+    }
+  }
+
+  #[test]
+  fn a_full_round_trip_preserves_any_unclipped_mix() {
+    for (name, samples) in shapes() {
+      if samples.iter().any(|s| *s == i16::MIN || *s == i16::MAX) {
+        // Full-scale shapes clip when summed; covered separately.
+        continue;
+      }
+      let mut acc = vec![0i32; samples.len()];
+      mix_pcm_into(&mut acc, &pcm(&samples));
+      assert_eq!(decode(&pcm_from_accumulator(&acc)), samples, "{name}");
+    }
+  }
+
+  #[test]
+  fn an_empty_accumulator_or_source_is_always_survivable() {
+    let mut empty: Vec<i32> = Vec::new();
+    for (name, samples) in shapes() {
+      mix_pcm_into(&mut empty, &pcm(&samples));
+      assert!(empty.is_empty(), "{name}");
+    }
+    let mut acc = vec![5i32; 4];
+    mix_pcm_into(&mut acc, &[]);
+    assert_eq!(acc, vec![5, 5, 5, 5]);
+    assert!(pcm_from_accumulator(&[]).is_empty());
+  }
+}
+
+#[cfg(test)]
+mod capture_rate_matrix {
+  use super::*;
+
+  const REQUESTS: [Option<u32>; 12] = [
+    None,
+    Some(0),
+    Some(1),
+    Some(15),
+    Some(24),
+    Some(25),
+    Some(29),
+    Some(30),
+    Some(31),
+    Some(60),
+    Some(120),
+    Some(u32::MAX),
+  ];
+
+  fn nanos(settings: &MinimumUpdateIntervalSettings) -> u128 {
+    match settings {
+      MinimumUpdateIntervalSettings::Custom(duration) => duration.as_nanos(),
+      _ => panic!("expected a custom interval"),
+    }
+  }
+
+  #[test]
+  fn every_request_resolves_to_a_supported_rate() {
+    for request in REQUESTS {
+      let fps = resolved_capture_fps(request, "test");
+      assert!(matches!(fps, 30 | 60), "{request:?} -> {fps}");
+    }
+  }
+
+  #[test]
+  fn only_the_two_supported_rates_are_honoured_exactly() {
+    for request in REQUESTS {
+      let fps = resolved_capture_fps(request, "test");
+      match request {
+        Some(30) => assert_eq!(fps, 30, "{request:?}"),
+        _ => assert_eq!(fps, 60, "{request:?}"),
+      }
+    }
+  }
+
+  #[test]
+  fn the_interval_matches_the_resolved_rate_for_every_request() {
+    for request in REQUESTS {
+      let fps = resolved_capture_fps(request, "test");
+      let implied = 1_000_000_000u128 / nanos(&minimum_update_interval_for_fps(fps));
+      assert_eq!(implied as u32, fps, "{request:?}");
+    }
+  }
+
+  #[test]
+  fn the_interval_is_never_zero_for_any_rate() {
+    for fps in [0u32, 1, 24, 30, 60, 120, 240, 1_000_000_000, u32::MAX] {
+      assert!(nanos(&minimum_update_interval_for_fps(fps)) >= 1, "{fps}");
+    }
+  }
+
+  #[test]
+  fn a_faster_rate_always_means_a_shorter_interval() {
+    let mut last = u128::MAX;
+    for fps in [1u32, 5, 24, 25, 30, 50, 60, 120, 240] {
+      let interval = nanos(&minimum_update_interval_for_fps(fps));
+      assert!(interval < last, "{fps}");
+      last = interval;
+    }
+  }
+
+  #[test]
+  fn the_interval_is_within_a_nanosecond_of_the_ideal_for_every_rate() {
+    for fps in [1u32, 24, 25, 30, 50, 60, 120, 240] {
+      let ideal = 1_000_000_000u128 / fps as u128;
+      let got = nanos(&minimum_update_interval_for_fps(fps));
+      assert!(got.abs_diff(ideal) <= 1, "{fps}: {got} vs {ideal}");
+    }
+  }
+
+  #[test]
+  fn the_resolved_rate_and_the_clock_period_describe_the_same_cadence() {
+    use crate::singular_clock::fps_to_period_100ns;
+    for request in REQUESTS {
+      let fps = resolved_capture_fps(request, "test");
+      let period_ns = fps_to_period_100ns(fps) as u128 * 100;
+      let interval_ns = nanos(&minimum_update_interval_for_fps(fps));
+      // Both are the same cadence expressed in different units, to within the
+      // rounding each one does.
+      assert!(
+        period_ns.abs_diff(interval_ns) < 1_000,
+        "{request:?}: {period_ns} vs {interval_ns}"
+      );
+    }
+  }
+}
+
+#[cfg(test)]
+mod audio_backlog_matrix {
+  use super::*;
+  use std::sync::mpsc::channel;
+
+  fn source() -> (AudioSource, std::sync::mpsc::Sender<Vec<u8>>) {
+    let (tx, rx) = channel::<Vec<u8>>();
+    (
+      AudioSource {
+        label: "test",
+        rx,
+        thread: None,
+        stop: Arc::new(AtomicBool::new(false)),
+        pending: VecDeque::new(),
+        live: true,
+      },
+      tx,
+    )
+  }
+
+  #[test]
+  fn taking_always_returns_exactly_what_was_asked_for() {
+    for available in [0usize, 1, 4, 100, 4_000] {
+      for wanted in [0usize, 1, 4, 100, 4_000] {
+        let (mut s, _tx) = source();
+        s.pending.extend(std::iter::repeat_n(7u8, available));
+        let (buffer, captured) = s.take(wanted);
+        let label = format!("{available} available, {wanted} wanted");
+        assert_eq!(buffer.len(), wanted, "{label}");
+        assert_eq!(captured as usize, available.min(wanted), "{label}");
+      }
+    }
+  }
+
+  #[test]
+  fn the_padding_is_always_silence_and_the_real_bytes_come_first() {
+    for available in [0usize, 1, 4, 17] {
+      let wanted = 32usize;
+      let (mut s, _tx) = source();
+      s.pending.extend((0..available).map(|i| (i + 1) as u8));
+      let (buffer, captured) = s.take(wanted);
+      let label = format!("{available} available");
+      assert_eq!(captured as usize, available, "{label}");
+      for (i, byte) in buffer.iter().enumerate() {
+        let expected = if i < available { (i + 1) as u8 } else { 0 };
+        assert_eq!(*byte, expected, "{label} at {i}");
+      }
+    }
+  }
+
+  #[test]
+  fn taking_consumes_exactly_what_it_reported_as_real() {
+    for available in [0usize, 1, 4, 100] {
+      for wanted in [0usize, 1, 4, 100] {
+        let (mut s, _tx) = source();
+        s.pending.extend(std::iter::repeat_n(1u8, available));
+        let (_, captured) = s.take(wanted);
+        assert_eq!(
+          s.pending.len(),
+          available - captured as usize,
+          "{available} available, {wanted} wanted"
+        );
+      }
+    }
+  }
+
+  #[test]
+  fn repeated_takes_drain_the_queue_in_order() {
+    for chunk in [1usize, 3, 4, 16] {
+      let (mut s, _tx) = source();
+      let total = 64usize;
+      s.pending.extend((0..total).map(|i| i as u8));
+      let mut seen = Vec::new();
+      loop {
+        let (buffer, captured) = s.take(chunk);
+        if captured == 0 {
+          break;
+        }
+        seen.extend_from_slice(&buffer[..captured as usize]);
+      }
+      let expected: Vec<u8> = (0..total).map(|i| i as u8).collect();
+      assert_eq!(seen, expected, "chunk {chunk}");
+    }
+  }
+
+  #[test]
+  fn a_backlog_is_trimmed_to_the_limit_for_every_overflow() {
+    for extra in [0usize, 1, AUDIO_BLOCK_ALIGN, AUDIO_BLOCK_ALIGN * 100, 100_000] {
+      let (mut s, tx) = source();
+      tx.send(vec![0u8; MAX_AUDIO_BACKLOG_BYTES + extra]).unwrap();
+      s.drain();
+      assert!(
+        s.pending.len() <= MAX_AUDIO_BACKLOG_BYTES + AUDIO_BLOCK_ALIGN,
+        "extra {extra}: {}",
+        s.pending.len()
+      );
+    }
+  }
+
+  #[test]
+  fn an_aligned_backlog_stays_aligned_through_every_trim() {
+    // The capture device never hands over a partial frame, so this is the case
+    // that happens -- and the one the channel phase depends on.
+    for extra in [0usize, AUDIO_BLOCK_ALIGN, AUDIO_BLOCK_ALIGN * 7, AUDIO_BLOCK_ALIGN * 5_000] {
+      let (mut s, tx) = source();
+      tx.send(vec![0u8; MAX_AUDIO_BACKLOG_BYTES + extra]).unwrap();
+      s.drain();
+      assert_eq!(s.pending.len() % AUDIO_BLOCK_ALIGN, 0, "extra {extra}");
+    }
+  }
+
+  #[test]
+  fn a_backlog_under_the_limit_is_never_trimmed() {
+    for size in [0usize, 1, 1_024, MAX_AUDIO_BACKLOG_BYTES] {
+      let (mut s, tx) = source();
+      if size > 0 {
+        tx.send(vec![0u8; size]).unwrap();
+      }
+      s.drain();
+      assert_eq!(s.pending.len(), size, "size {size}");
+    }
+  }
+
+  #[test]
+  fn draining_preserves_order_across_any_number_of_chunks() {
+    for chunks in [1usize, 2, 8, 64] {
+      let (mut s, tx) = source();
+      for i in 0..chunks {
+        tx.send(vec![i as u8; 4]).unwrap();
+      }
+      s.drain();
+      assert_eq!(s.pending.len(), chunks * 4, "chunks {chunks}");
+      for i in 0..chunks {
+        assert_eq!(s.pending[i * 4], i as u8, "chunks {chunks} at {i}");
+      }
+    }
+  }
+
+  #[test]
+  fn a_source_stays_live_until_its_sender_is_gone() {
+    for chunks in [0usize, 1, 8] {
+      let (mut s, tx) = source();
+      for _ in 0..chunks {
+        tx.send(vec![0u8; 4]).unwrap();
+      }
+      s.drain();
+      assert!(s.live, "chunks {chunks} should still be live");
+      drop(tx);
+      s.drain();
+      assert!(!s.live, "chunks {chunks} should have died");
+    }
+  }
+
+  #[test]
+  fn a_dead_source_still_hands_over_everything_it_had_sent() {
+    for chunks in [1usize, 4, 32] {
+      let (mut s, tx) = source();
+      for _ in 0..chunks {
+        tx.send(vec![9u8; 4]).unwrap();
+      }
+      drop(tx);
+      s.drain();
+      assert_eq!(s.pending.len(), chunks * 4, "chunks {chunks}");
+      assert!(!s.live, "chunks {chunks}");
+    }
+  }
+
+  #[test]
+  fn the_frame_budget_and_the_take_agree_for_every_frame_rate() {
+    use crate::singular_clock::{expected_audio_bytes, fps_to_period_100ns};
+    for fps in [24u32, 30, 60, 120] {
+      let period = fps_to_period_100ns(fps);
+      let (mut s, tx) = source();
+      tx.send(vec![1u8; 192_000]).unwrap();
+      s.drain();
+      let mut carry = 0.0;
+      for step in 0..10 {
+        let (wanted, next) =
+          expected_audio_bytes(period, AUDIO_BYTES_PER_SECOND, AUDIO_BLOCK_ALIGN, carry);
+        carry = next;
+        let (buffer, _) = s.take(wanted);
+        assert_eq!(buffer.len(), wanted, "{fps}fps step {step}");
+        assert_eq!(buffer.len() % AUDIO_BLOCK_ALIGN, 0, "{fps}fps step {step}");
+      }
+    }
+  }
+}

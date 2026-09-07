@@ -570,3 +570,79 @@ pub fn read_bgra(texture: &ID3D11Texture2D, width: u32, height: u32) -> Result<V
 
   Ok(out)
 }
+
+#[cfg(test)]
+mod texture_format_scenarios {
+  use super::*;
+
+  #[test]
+  fn the_packed_formats_are_four_bytes_a_pixel() {
+    assert_eq!(bytes_per_pixel(DXGI_FORMAT_B8G8R8A8_UNORM), 4);
+    assert_eq!(bytes_per_pixel(DXGI_FORMAT_R8G8B8A8_UNORM), 4);
+  }
+
+  #[test]
+  fn a_planar_format_is_measured_a_byte_at_a_time() {
+    // NV12 has no single pixel stride -- the Y plane is one byte a sample and
+    // the UV plane is half height -- so the row pitch is computed by the
+    // caller and this only has to not lie about the packed case.
+    assert_eq!(bytes_per_pixel(DXGI_FORMAT_NV12), 1);
+  }
+
+  #[test]
+  fn an_unknown_format_falls_back_to_one_byte() {
+    assert_eq!(bytes_per_pixel(DXGI_FORMAT_UNKNOWN), 1);
+  }
+
+  #[test]
+  fn the_stride_is_never_zero() {
+    // A zero stride would make every upload copy nothing.
+    for format in [
+      DXGI_FORMAT_B8G8R8A8_UNORM,
+      DXGI_FORMAT_R8G8B8A8_UNORM,
+      DXGI_FORMAT_NV12,
+      DXGI_FORMAT_UNKNOWN,
+    ] {
+      assert!(bytes_per_pixel(format) >= 1, "{format:?}");
+    }
+  }
+
+  #[test]
+  fn both_sharing_modes_ask_for_an_nt_handle() {
+    // Electron's `importSharedTexture` takes an NT handle; without this flag
+    // `CreateSharedHandle` hands back the legacy kind and the import fails.
+    let nt = D3D11_RESOURCE_MISC_SHARED_NTHANDLE.0;
+    assert_ne!(Sharing::Plain.misc_flags() & nt, 0);
+    assert_ne!(Sharing::KeyedMutex.misc_flags() & nt, 0);
+  }
+
+  #[test]
+  fn the_plain_mode_shares_without_a_mutex() {
+    let flags = Sharing::Plain.misc_flags();
+    assert_ne!(flags & D3D11_RESOURCE_MISC_SHARED.0, 0);
+    assert_eq!(flags & D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX.0, 0);
+  }
+
+  #[test]
+  fn the_keyed_mode_shares_with_one() {
+    // NV12 shared textures carry a mutex and Chromium acquires on key 0.
+    let flags = Sharing::KeyedMutex.misc_flags();
+    assert_ne!(flags & D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX.0, 0);
+    assert_eq!(flags & D3D11_RESOURCE_MISC_SHARED.0, 0);
+  }
+
+  #[test]
+  fn the_two_sharing_modes_are_not_the_same_flags() {
+    assert_ne!(Sharing::Plain.misc_flags(), Sharing::KeyedMutex.misc_flags());
+  }
+
+  #[test]
+  fn neither_mode_asks_for_the_two_mutually_exclusive_flags_at_once() {
+    // SHARED and SHARED_KEYEDMUTEX together is an invalid combination and the
+    // create call fails rather than picking one.
+    for flags in [Sharing::Plain.misc_flags(), Sharing::KeyedMutex.misc_flags()] {
+      let both = D3D11_RESOURCE_MISC_SHARED.0 | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX.0;
+      assert_ne!(flags & both, both);
+    }
+  }
+}

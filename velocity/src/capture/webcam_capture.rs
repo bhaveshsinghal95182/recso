@@ -635,3 +635,323 @@ mod tests {
     assert_eq!(&bgra[4..8], &[4, 5, 6, 255]);
   }
 }
+
+#[cfg(test)]
+mod sidecar_path_scenarios {
+  use super::*;
+
+  fn normalised(path: &str) -> String {
+    camera_sidecar_path(path).replace('\\', "/")
+  }
+
+  #[test]
+  fn the_camera_suffix_goes_before_the_extension() {
+    assert_eq!(normalised("C:/takes/recording.mp4"), "C:/takes/recording_camera.mp4");
+  }
+
+  #[test]
+  fn the_directory_is_kept() {
+    assert!(normalised("C:/a/b/c/take.mp4").starts_with("C:/a/b/c/"));
+  }
+
+  #[test]
+  fn a_bare_filename_stays_bare() {
+    assert_eq!(normalised("take.mp4"), "take_camera.mp4");
+  }
+
+  #[test]
+  fn a_missing_extension_defaults_to_mp4() {
+    // The sidecar is written by the same encoder as the screen track, so it is
+    // an MP4 whatever the caller called the main file.
+    assert_eq!(normalised("C:/takes/recording"), "C:/takes/recording_camera.mp4");
+  }
+
+  #[test]
+  fn an_empty_extension_defaults_to_mp4() {
+    assert_eq!(normalised("C:/takes/recording."), "C:/takes/recording_camera.mp4");
+  }
+
+  #[test]
+  fn a_non_mp4_extension_is_preserved() {
+    assert_eq!(normalised("C:/takes/take.mkv"), "C:/takes/take_camera.mkv");
+    assert_eq!(normalised("C:/takes/take.webm"), "C:/takes/take_camera.webm");
+  }
+
+  #[test]
+  fn only_the_last_extension_counts() {
+    assert_eq!(normalised("C:/takes/take.2024.mp4"), "C:/takes/take.2024_camera.mp4");
+  }
+
+  #[test]
+  fn a_name_with_spaces_survives() {
+    assert_eq!(
+      normalised("C:/my takes/screen recording.mp4"),
+      "C:/my takes/screen recording_camera.mp4"
+    );
+  }
+
+  #[test]
+  fn a_dotfile_style_name_is_treated_as_a_stem() {
+    // `.mp4` has no extension by `Path`'s reckoning, so the whole thing is the
+    // stem and the default extension applies.
+    assert!(normalised(".mp4").ends_with("_camera.mp4"));
+  }
+
+  #[test]
+  fn an_empty_path_falls_back_to_a_named_recording() {
+    assert_eq!(normalised(""), "recording_camera.mp4");
+  }
+
+  #[test]
+  fn a_path_with_no_file_name_falls_back_to_a_named_recording() {
+    assert!(normalised("C:/takes/").ends_with("_camera.mp4"));
+  }
+
+  #[test]
+  fn the_result_always_carries_the_camera_marker() {
+    for path in [
+      "take.mp4",
+      "C:/a/take.mp4",
+      "C:/a/take",
+      "",
+      "C:/a/take.mkv",
+      "weird name.with.dots.mp4",
+    ] {
+      assert!(normalised(path).contains("_camera."), "{path}");
+    }
+  }
+
+  #[test]
+  fn the_sidecar_never_collides_with_the_recording_it_accompanies() {
+    for path in ["take.mp4", "C:/a/take.mp4", "C:/a/take.mkv"] {
+      assert_ne!(normalised(path), path.replace('\\', "/"), "{path}");
+    }
+  }
+
+  #[test]
+  fn the_same_input_always_gives_the_same_sidecar() {
+    assert_eq!(normalised("C:/a/take.mp4"), normalised("C:/a/take.mp4"));
+  }
+}
+
+#[cfg(test)]
+mod webcam_fps_scenarios {
+  use super::*;
+
+  #[test]
+  fn asking_for_nothing_gives_60() {
+    assert_eq!(target_webcam_fps(None), 60);
+  }
+
+  #[test]
+  fn the_two_supported_rates_are_honoured() {
+    assert_eq!(target_webcam_fps(Some(30)), 30);
+    assert_eq!(target_webcam_fps(Some(60)), 60);
+  }
+
+  #[test]
+  fn anything_else_falls_back_to_60() {
+    for fps in [0u32, 1, 24, 25, 29, 31, 59, 61, 120, 144, u32::MAX] {
+      assert_eq!(target_webcam_fps(Some(fps)), 60, "{fps}");
+    }
+  }
+
+  #[test]
+  fn the_result_is_always_a_rate_the_encoder_accepts() {
+    for fps in [None, Some(0), Some(30), Some(60), Some(90), Some(u32::MAX)] {
+      assert!(matches!(target_webcam_fps(fps), 30 | 60), "{fps:?}");
+    }
+  }
+}
+
+#[cfg(test)]
+mod stamp_scenarios {
+  use super::*;
+
+  const PERIOD: i64 = 166_667;
+
+  #[test]
+  fn stamps_advance_by_one_period_when_the_loop_keeps_up() {
+    // The clock has not run past the next stamp, so the period wins.
+    assert_eq!(advance_stamp(0, PERIOD, 100), PERIOD);
+    assert_eq!(advance_stamp(PERIOD, PERIOD, PERIOD + 10), PERIOD * 2);
+  }
+
+  #[test]
+  fn stamps_catch_up_to_the_clock_when_the_encoder_falls_behind() {
+    // Otherwise N frames written over a longer T get labelled N/fps seconds,
+    // and the camera track comes out short and drifting ahead of the picture.
+    assert_eq!(advance_stamp(0, PERIOD, 5_000_000), 5_000_000);
+  }
+
+  #[test]
+  fn stamps_never_go_backwards() {
+    let mut stamp = 0;
+    for step in 0..100 {
+      let elapsed = if step % 7 == 0 { 0 } else { step * 100_000 };
+      let next = advance_stamp(stamp, PERIOD, elapsed);
+      assert!(next > stamp, "step {step}");
+      stamp = next;
+    }
+  }
+
+  #[test]
+  fn a_clock_behind_the_stamp_does_not_pull_it_back() {
+    // Stamps advance even when a frame fails, so the two tracks end the same
+    // length -- an elapsed reading behind the last stamp must not undo that.
+    assert_eq!(advance_stamp(10_000_000, PERIOD, 0), 10_000_000 + PERIOD);
+  }
+
+  #[test]
+  fn the_stamp_moves_by_at_least_a_period_every_time() {
+    for elapsed in [0i64, 1, 100_000, 166_667, 5_000_000] {
+      let next = advance_stamp(1_000_000, PERIOD, elapsed);
+      assert!(next >= 1_000_000 + PERIOD || next == elapsed, "{elapsed}");
+      assert!(next > 1_000_000, "{elapsed}");
+    }
+  }
+
+  #[test]
+  fn a_steady_loop_produces_evenly_spaced_stamps() {
+    let mut stamp = 0;
+    let mut stamps = Vec::new();
+    for frame in 0..60 {
+      // The clock keeps pace exactly, so the period is always the floor.
+      stamp = advance_stamp(stamp, PERIOD, frame * PERIOD);
+      stamps.push(stamp);
+    }
+    for pair in stamps.windows(2) {
+      assert_eq!(pair[1] - pair[0], PERIOD);
+    }
+  }
+
+  #[test]
+  fn a_stalled_loop_still_ends_where_the_clock_did() {
+    // Sixty frames' worth of wall time but only ten writes: the last stamp has
+    // to reflect the wall clock, not ten periods.
+    let mut stamp = 0;
+    for frame in 1..=10i64 {
+      stamp = advance_stamp(stamp, PERIOD, frame * PERIOD * 6);
+    }
+    assert_eq!(stamp, PERIOD * 60);
+  }
+
+  #[test]
+  fn a_stamp_near_the_top_of_the_range_saturates_rather_than_wrapping() {
+    assert_eq!(advance_stamp(i64::MAX, PERIOD, 0), i64::MAX);
+  }
+
+  #[test]
+  fn a_zero_period_still_moves_when_the_clock_does() {
+    assert_eq!(advance_stamp(0, 0, 5_000), 5_000);
+  }
+}
+
+#[cfg(test)]
+mod colour_conversion_scenarios {
+  use super::*;
+
+  #[test]
+  fn the_output_is_four_bytes_a_pixel() {
+    for (w, h) in [(1usize, 1usize), (4, 4), (16, 9), (320, 240)] {
+      let rgb = vec![0u8; w * h * 3];
+      assert_eq!(rgb_to_bgra_bottom_up(&rgb, w, h).len(), w * h * 4, "{w}x{h}");
+    }
+  }
+
+  #[test]
+  fn the_channel_order_is_reversed() {
+    let rgb = vec![10, 20, 30];
+    let bgra = rgb_to_bgra_bottom_up(&rgb, 1, 1);
+    assert_eq!(bgra[0], 30);
+    assert_eq!(bgra[1], 20);
+    assert_eq!(bgra[2], 10);
+  }
+
+  #[test]
+  fn every_pixel_comes_out_fully_opaque() {
+    let rgb: Vec<u8> = (0..(4 * 4 * 3)).map(|i| i as u8).collect();
+    let bgra = rgb_to_bgra_bottom_up(&rgb, 4, 4);
+    for i in (3..bgra.len()).step_by(4) {
+      assert_eq!(bgra[i], 255, "byte {i}");
+    }
+  }
+
+  #[test]
+  fn the_rows_come_out_upside_down() {
+    // The encoder wants bottom-up BGRA; the camera hands over top-down RGB.
+    let rgb = vec![
+      1, 1, 1, // row 0
+      2, 2, 2, // row 1
+      3, 3, 3, // row 2
+    ];
+    let bgra = rgb_to_bgra_bottom_up(&rgb, 1, 3);
+    assert_eq!(bgra[0], 3);
+    assert_eq!(bgra[4], 2);
+    assert_eq!(bgra[8], 1);
+  }
+
+  #[test]
+  fn a_single_row_is_its_own_flip() {
+    let rgb = vec![1, 2, 3, 4, 5, 6];
+    let bgra = rgb_to_bgra_bottom_up(&rgb, 2, 1);
+    assert_eq!(&bgra[..4], &[3, 2, 1, 255]);
+    assert_eq!(&bgra[4..], &[6, 5, 4, 255]);
+  }
+
+  #[test]
+  fn pixels_within_a_row_keep_their_order() {
+    // Only the rows flip; flipping within a row too would mirror the picture.
+    let rgb = vec![1, 0, 0, 2, 0, 0, 3, 0, 0];
+    let bgra = rgb_to_bgra_bottom_up(&rgb, 3, 1);
+    assert_eq!([bgra[2], bgra[6], bgra[10]], [1, 2, 3]);
+  }
+
+  #[test]
+  fn flipping_twice_would_return_the_original_row_order() {
+    let rgb: Vec<u8> = (0..(2 * 5 * 3)).map(|i| i as u8).collect();
+    let bgra = rgb_to_bgra_bottom_up(&rgb, 2, 5);
+    // Row 0 of the source is the last row of the output.
+    let last_row = &bgra[4 * 2 * 4..];
+    assert_eq!(last_row[2], rgb[0]);
+    assert_eq!(last_row[1], rgb[1]);
+    assert_eq!(last_row[0], rgb[2]);
+  }
+
+  #[test]
+  fn a_short_buffer_leaves_the_missing_rows_black() {
+    // `chunks_exact` stops early rather than reading past the end.
+    let rgb = vec![9u8; 3]; // one row of a two row image
+    let bgra = rgb_to_bgra_bottom_up(&rgb, 1, 2);
+    assert_eq!(bgra.len(), 8);
+    // The one row present lands at the bottom; the other stays zeroed.
+    assert_eq!(&bgra[4..], &[9, 9, 9, 255]);
+    assert_eq!(&bgra[..4], &[0, 0, 0, 0]);
+  }
+
+  #[test]
+  fn a_trailing_partial_row_is_ignored() {
+    let rgb = vec![1u8; 3 + 2]; // one full row plus two stray bytes
+    let bgra = rgb_to_bgra_bottom_up(&rgb, 1, 2);
+    assert_eq!(bgra.len(), 8);
+  }
+
+  #[test]
+  fn full_scale_values_survive_the_conversion() {
+    let rgb = vec![255, 0, 128];
+    let bgra = rgb_to_bgra_bottom_up(&rgb, 1, 1);
+    assert_eq!(&bgra[..], &[128, 0, 255, 255]);
+  }
+
+  #[test]
+  fn a_realistic_frame_converts_without_losing_a_byte() {
+    let (w, h) = (320usize, 240usize);
+    let rgb: Vec<u8> = (0..(w * h * 3)).map(|i| (i % 251) as u8).collect();
+    let bgra = rgb_to_bgra_bottom_up(&rgb, w, h);
+    assert_eq!(bgra.len(), w * h * 4);
+    // Every source byte should appear somewhere; spot-check the first pixel of
+    // the first source row, which lands in the last output row.
+    let last_row = (h - 1) * w * 4;
+    assert_eq!(bgra[last_row + 2], rgb[0]);
+  }
+}

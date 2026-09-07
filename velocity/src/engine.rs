@@ -45,3 +45,33 @@ mod player;
 mod render;
 #[cfg(windows)]
 pub mod zoom;
+
+/// Cross-module scenarios: the tracks composed the way the render chain
+/// composes them, rather than one at a time.
+///
+/// The per-module tests pin each timeline on its own. These pin the seams --
+/// above all which clock each one is expressed in, which is the mistake that
+/// does not crash and does not show up until someone watches the frame after a
+/// cut.
+#[cfg(all(windows, test))]
+mod scenarios;
+
+/// Combination matrices: the same functions swept across the cross-product of
+/// the inputs they actually see, asserting the invariants that must hold for
+/// every cell rather than the value of any one of them.
+#[cfg(all(windows, test))]
+mod matrix;
+
+/// Generated editing sessions.
+///
+/// Rather than a handful of hand-written projects, this builds a few hundred
+/// from a deterministic pseudo-random generator and asserts the invariants
+/// that have to hold for every one of them. Hand-picked cases test the shapes
+/// somebody thought of; these test the shapes nobody did.
+#[cfg(all(windows, test))]
+mod sessions;
+
+/// Regressions in this module's own code. See `crate::regressions` for the
+/// ones whose subject is reachable from the crate root.
+#[cfg(all(windows, test))]
+mod regressions;

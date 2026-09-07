@@ -485,3 +485,80 @@ pub fn gpu_decoder_profiles() -> Result<Vec<String>> {
   }
   Ok(out)
 }
+
+#[cfg(test)]
+mod guid_naming_scenarios {
+  use super::*;
+
+  #[test]
+  fn a_video_subtype_is_shown_by_its_fourcc() {
+    // The video subtype GUIDs are all {FOURCC}-0000-0010-8000-00AA00389B71,
+    // and the fourcc is the only part a human reads.
+    let name = guid_name(&h264_subtype());
+    assert!(name.starts_with("H264"), "{name}");
+  }
+
+  #[test]
+  fn hevc_is_named_too() {
+    let name = guid_name(&hevc_subtype());
+    assert!(name.starts_with("HEVC"), "{name}");
+  }
+
+  #[test]
+  fn the_full_guid_is_kept_alongside_the_fourcc() {
+    // The fourcc is for reading; the guid is what you paste into a search when
+    // the fourcc turns out not to be the one you expected.
+    let name = guid_name(&h264_subtype());
+    assert!(name.contains('('), "{name}");
+    assert!(name.contains(')'), "{name}");
+  }
+
+  #[test]
+  fn h264_and_hevc_do_not_get_the_same_name() {
+    assert_ne!(guid_name(&h264_subtype()), guid_name(&hevc_subtype()));
+  }
+
+  #[test]
+  fn a_guid_whose_first_word_is_not_printable_falls_back_to_the_raw_form() {
+    // Plenty of Media Foundation GUIDs are not fourccs at all, and rendering
+    // their first four bytes as text produces control characters.
+    let plain = windows::core::GUID::from_u128(0x0000_0001_0000_0010_8000_00AA_0038_9B71);
+    let name = guid_name(&plain);
+    assert!(!name.contains('('), "{name}");
+  }
+
+  #[test]
+  fn the_fourcc_is_read_little_endian_out_of_the_first_word() {
+    // 'A' 'B' 'C' 'D' packed as a little-endian u32 is 0x44434241.
+    let guid = windows::core::GUID::from_u128(0x4443_4241_0000_0010_8000_00AA_0038_9B71);
+    assert!(guid_name(&guid).starts_with("ABCD"), "{}", guid_name(&guid));
+  }
+
+  #[test]
+  fn a_name_is_always_produced() {
+    for guid in [
+      h264_subtype(),
+      hevc_subtype(),
+      windows::core::GUID::zeroed(),
+      windows::core::GUID::from_u128(u128::MAX),
+    ] {
+      assert!(!guid_name(&guid).is_empty());
+    }
+  }
+
+  #[test]
+  fn an_all_zero_guid_does_not_look_like_a_fourcc() {
+    let name = guid_name(&windows::core::GUID::zeroed());
+    assert!(!name.contains('('), "{name}");
+  }
+
+  #[test]
+  fn naming_is_stable_for_the_same_guid() {
+    assert_eq!(guid_name(&h264_subtype()), guid_name(&h264_subtype()));
+  }
+
+  #[test]
+  fn the_two_codec_subtypes_are_not_the_same_guid() {
+    assert_ne!(h264_subtype(), hevc_subtype());
+  }
+}

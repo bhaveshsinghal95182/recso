@@ -586,3 +586,860 @@ mod tests {
     assert_eq!(placement.place(100.0), Some(900.0));
   }
 }
+
+#[cfg(test)]
+mod accumulate_scenarios {
+  use super::*;
+
+  fn chunk(samples: Vec<f32>) -> AudioChunk {
+    AudioChunk {
+      timestamp_100ns: 0,
+      samples,
+      end_of_stream: false,
+    }
+  }
+
+  /// How many frames a millisecond offset comes to at the mix rate.
+  fn frame_of(ms: f64) -> usize {
+    (ms / 1000.0 * MIX_SAMPLE_RATE as f64).round() as usize
+  }
+
+  #[test]
+  fn an_empty_chunk_writes_nothing() {
+    let mut dst = Vec::new();
+    accumulate(&mut dst, 0, &chunk(Vec::new()), 2, 0.0);
+    assert!(dst.is_empty());
+  }
+
+  #[test]
+  fn a_chunk_with_no_channels_writes_nothing() {
+    // Guarding the divide that works out how many frames the chunk holds.
+    let mut dst = Vec::new();
+    accumulate(&mut dst, 0, &chunk(vec![1.0, 1.0]), 0, 0.0);
+    assert!(dst.is_empty());
+  }
+
+  #[test]
+  fn a_chunk_at_the_start_lands_at_the_start() {
+    let mut dst = Vec::new();
+    accumulate(&mut dst, 0, &chunk(vec![0.5, -0.5]), 2, 0.0);
+    assert_eq!(dst[0], 0.5);
+    assert_eq!(dst[1], -0.5);
+  }
+
+  #[test]
+  fn the_output_is_always_stereo_however_many_channels_came_in() {
+    for channels in [1u32, 2, 4, 6] {
+      let mut dst = Vec::new();
+      let samples = vec![0.25f32; channels as usize];
+      accumulate(&mut dst, 0, &chunk(samples), channels, 0.0);
+      assert_eq!(dst.len(), MIX_CHANNELS as usize, "{channels}");
+    }
+  }
+
+  #[test]
+  fn a_mono_chunk_is_heard_on_both_sides() {
+    // Which is what a listener expects from a microphone that happens to be
+    // mono -- not a signal stuck in the left ear.
+    let mut dst = Vec::new();
+    accumulate(&mut dst, 0, &chunk(vec![0.75]), 1, 0.0);
+    assert_eq!(dst[0], 0.75);
+    assert_eq!(dst[1], 0.75);
+  }
+
+  #[test]
+  fn a_stereo_chunk_keeps_its_two_sides_apart() {
+    let mut dst = Vec::new();
+    accumulate(&mut dst, 0, &chunk(vec![1.0, -1.0]), 2, 0.0);
+    assert_eq!(dst[0], 1.0);
+    assert_eq!(dst[1], -1.0);
+  }
+
+  #[test]
+  fn a_multichannel_chunk_takes_its_first_two_channels() {
+    let mut dst = Vec::new();
+    accumulate(&mut dst, 0, &chunk(vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6]), 6, 0.0);
+    assert_eq!(dst[0], 0.1);
+    assert_eq!(dst[1], 0.2);
+  }
+
+  #[test]
+  fn several_frames_land_next_to_each_other() {
+    let mut dst = Vec::new();
+    accumulate(&mut dst, 0, &chunk(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]), 2, 0.0);
+    assert_eq!(dst, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+  }
+
+  #[test]
+  fn a_chunk_is_placed_at_its_own_offset() {
+    let mut dst = Vec::new();
+    accumulate(&mut dst, 0, &chunk(vec![1.0, -1.0]), 2, 500.0);
+    let frame = frame_of(500.0);
+    assert_eq!(dst[frame * 2], 1.0);
+    assert_eq!(dst[frame * 2 + 1], -1.0);
+  }
+
+  #[test]
+  fn the_space_before_a_placed_chunk_is_silence() {
+    let mut dst = Vec::new();
+    accumulate(&mut dst, 0, &chunk(vec![1.0, 1.0]), 2, 100.0);
+    let frame = frame_of(100.0);
+    assert!(dst[..frame * 2].iter().all(|s| *s == 0.0));
+  }
+
+  #[test]
+  fn sources_sum_rather_than_replace() {
+    // The whole point of an accumulator: two microphones on the same moment
+    // are heard together, not one instead of the other.
+    let mut dst = Vec::new();
+    accumulate(&mut dst, 0, &chunk(vec![0.25, 0.25]), 2, 0.0);
+    accumulate(&mut dst, 0, &chunk(vec![0.5, 0.5]), 2, 0.0);
+    assert_eq!(dst[0], 0.75);
+    assert_eq!(dst[1], 0.75);
+  }
+
+  #[test]
+  fn summing_is_order_independent() {
+    let mut a = Vec::new();
+    accumulate(&mut a, 0, &chunk(vec![0.25, -0.1]), 2, 0.0);
+    accumulate(&mut a, 0, &chunk(vec![0.5, 0.3]), 2, 0.0);
+    let mut b = Vec::new();
+    accumulate(&mut b, 0, &chunk(vec![0.5, 0.3]), 2, 0.0);
+    accumulate(&mut b, 0, &chunk(vec![0.25, -0.1]), 2, 0.0);
+    assert_eq!(a, b);
+  }
+
+  #[test]
+  fn summing_is_not_clamped_here() {
+    // Headroom is the mixer's problem downstream; clipping in the accumulator
+    // would lose information a later gain stage could still have used.
+    let mut dst = Vec::new();
+    for _ in 0..4 {
+      accumulate(&mut dst, 0, &chunk(vec![1.0, 1.0]), 2, 0.0);
+    }
+    assert_eq!(dst[0], 4.0);
+  }
+
+  #[test]
+  fn the_accumulator_grows_rather_than_truncating_a_tail() {
+    // Unlike a fixed-length mix buffer, this one is a sliding view and its far
+    // edge is not a real boundary.
+    let mut dst = vec![0.0; 4];
+    accumulate(&mut dst, 0, &chunk(vec![1.0, 1.0]), 2, 1000.0);
+    assert!(dst.len() > 4);
+    let frame = frame_of(1000.0);
+    assert_eq!(dst[frame * 2], 1.0);
+  }
+
+  #[test]
+  fn growing_does_not_disturb_what_was_already_there() {
+    let mut dst = Vec::new();
+    accumulate(&mut dst, 0, &chunk(vec![0.9, 0.8]), 2, 0.0);
+    accumulate(&mut dst, 0, &chunk(vec![0.1, 0.2]), 2, 500.0);
+    assert_eq!(dst[0], 0.9);
+    assert_eq!(dst[1], 0.8);
+  }
+
+  #[test]
+  fn the_accumulator_places_relative_to_its_base_frame() {
+    // The base moves forward as windows are emitted, so a chunk's absolute
+    // time has to be measured against it rather than against zero.
+    let base = frame_of(1000.0) as u64;
+    let mut dst = Vec::new();
+    accumulate(&mut dst, base, &chunk(vec![1.0, 1.0]), 2, 1000.0);
+    assert_eq!(dst[0], 1.0);
+    assert_eq!(dst.len(), 2);
+  }
+
+  #[test]
+  fn the_accumulator_drops_what_falls_before_its_base() {
+    // Already emitted; writing it would mean writing behind the playhead.
+    let base = frame_of(1000.0) as u64;
+    let mut dst = Vec::new();
+    accumulate(&mut dst, base, &chunk(vec![1.0, 1.0]), 2, 0.0);
+    assert!(dst.is_empty());
+  }
+
+  #[test]
+  fn a_chunk_straddling_the_base_keeps_only_the_part_after_it() {
+    let base = 2u64;
+    let mut dst = Vec::new();
+    // Four frames starting at frame 0; the first two are behind the base.
+    accumulate(
+      &mut dst,
+      base,
+      &chunk(vec![1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0]),
+      2,
+      0.0,
+    );
+    assert_eq!(dst, vec![3.0, 3.0, 4.0, 4.0]);
+  }
+
+  #[test]
+  fn a_negative_offset_is_treated_as_before_the_base() {
+    let mut dst = Vec::new();
+    accumulate(&mut dst, 0, &chunk(vec![1.0, 1.0]), 2, -500.0);
+    assert!(dst.is_empty());
+  }
+
+  #[test]
+  fn a_partial_trailing_frame_is_ignored_rather_than_read_past_the_end() {
+    // Three samples at two channels is one frame and a half.
+    let mut dst = Vec::new();
+    accumulate(&mut dst, 0, &chunk(vec![1.0, 2.0, 3.0]), 2, 0.0);
+    assert_eq!(dst, vec![1.0, 2.0]);
+  }
+
+  #[test]
+  fn a_long_chunk_is_written_end_to_end() {
+    let frames = 1000;
+    let samples: Vec<f32> = (0..frames * 2).map(|i| i as f32).collect();
+    let mut dst = Vec::new();
+    accumulate(&mut dst, 0, &chunk(samples.clone()), 2, 0.0);
+    assert_eq!(dst.len(), frames * 2);
+    assert_eq!(dst[frames * 2 - 1], samples[frames * 2 - 1]);
+  }
+}
+
+#[cfg(test)]
+mod frame_clock_scenarios {
+  use super::*;
+
+  #[test]
+  fn the_first_frame_is_at_zero() {
+    assert_eq!(frame_to_ms(0), 0.0);
+  }
+
+  #[test]
+  fn a_seconds_worth_of_frames_is_a_second() {
+    assert_eq!(frame_to_ms(MIX_SAMPLE_RATE as u64), 1000.0);
+  }
+
+  #[test]
+  fn half_a_seconds_worth_of_frames_is_half_a_second() {
+    assert_eq!(frame_to_ms(MIX_SAMPLE_RATE as u64 / 2), 500.0);
+  }
+
+  #[test]
+  fn one_frame_is_a_small_fraction_of_a_millisecond() {
+    let ms = frame_to_ms(1);
+    assert!(ms > 0.0 && ms < 0.03, "{ms}");
+  }
+
+  #[test]
+  fn the_clock_is_linear_in_the_frame_count() {
+    let step = frame_to_ms(1000) - frame_to_ms(0);
+    let later = frame_to_ms(101_000) - frame_to_ms(100_000);
+    assert!((step - later).abs() < 1e-9);
+  }
+
+  #[test]
+  fn the_clock_rises_with_the_frame_count() {
+    let mut last = -1.0;
+    for frame in [0u64, 1, 100, 48_000, 4_800_000] {
+      let ms = frame_to_ms(frame);
+      assert!(ms > last, "{frame}");
+      last = ms;
+    }
+  }
+
+  #[test]
+  fn an_hours_worth_of_frames_is_an_hour() {
+    let hour = MIX_SAMPLE_RATE as u64 * 3600;
+    assert!((frame_to_ms(hour) - 3_600_000.0).abs() < 1e-6);
+  }
+}
+
+#[cfg(test)]
+mod placement_scenarios {
+  use super::*;
+  use crate::engine::cuts::Cut;
+
+  fn cuts(list: Vec<(f64, f64)>) -> CutTrack {
+    CutTrack::new(
+      list
+        .into_iter()
+        .map(|(start_ms, end_ms)| Cut { start_ms, end_ms })
+        .collect(),
+    )
+  }
+
+  #[test]
+  fn with_no_cuts_and_no_offset_audio_stays_where_it_was() {
+    let track = cuts(Vec::new());
+    let placement = SourcePlacement {
+      cuts: &track,
+      offset_ms: 0.0,
+    };
+    for t in [0.0, 100.0, 5000.0] {
+      assert_eq!(placement.place(t), Some(t), "{t}");
+    }
+  }
+
+  #[test]
+  fn a_chunk_inside_a_cut_is_dropped() {
+    let track = cuts(vec![(1000.0, 2000.0)]);
+    let placement = SourcePlacement {
+      cuts: &track,
+      offset_ms: 0.0,
+    };
+    assert_eq!(placement.place(1500.0), None);
+  }
+
+  #[test]
+  fn a_chunk_on_a_cuts_start_is_dropped() {
+    let track = cuts(vec![(1000.0, 2000.0)]);
+    let placement = SourcePlacement {
+      cuts: &track,
+      offset_ms: 0.0,
+    };
+    assert_eq!(placement.place(1000.0), None);
+  }
+
+  #[test]
+  fn a_chunk_on_a_cuts_end_survives() {
+    // Half open, matching the video side -- the two clocks have to agree or
+    // the sound drifts a frame away from the picture at every cut.
+    let track = cuts(vec![(1000.0, 2000.0)]);
+    let placement = SourcePlacement {
+      cuts: &track,
+      offset_ms: 0.0,
+    };
+    assert_eq!(placement.place(2000.0), Some(1000.0));
+  }
+
+  #[test]
+  fn a_chunk_after_a_cut_moves_back_by_its_length() {
+    let track = cuts(vec![(1000.0, 2000.0)]);
+    let placement = SourcePlacement {
+      cuts: &track,
+      offset_ms: 0.0,
+    };
+    assert_eq!(placement.place(3000.0), Some(2000.0));
+  }
+
+  #[test]
+  fn a_chunk_before_a_cut_does_not_move() {
+    let track = cuts(vec![(1000.0, 2000.0)]);
+    let placement = SourcePlacement {
+      cuts: &track,
+      offset_ms: 0.0,
+    };
+    assert_eq!(placement.place(500.0), Some(500.0));
+  }
+
+  #[test]
+  fn an_offset_shifts_a_sidecar_before_the_cuts_are_applied() {
+    // A camera that started recording half a second after the screen: its own
+    // clock starts at zero, so it has to be moved onto the screen's timeline
+    // before the cut mapping can mean anything.
+    let track = cuts(vec![(1000.0, 2000.0)]);
+    let placement = SourcePlacement {
+      cuts: &track,
+      offset_ms: 500.0,
+    };
+    // Source 700 is really 1200 on the screen's clock, which is inside the cut.
+    assert_eq!(placement.place(700.0), None);
+  }
+
+  #[test]
+  fn an_offset_moves_a_chunk_that_is_not_cut() {
+    let track = cuts(Vec::new());
+    let placement = SourcePlacement {
+      cuts: &track,
+      offset_ms: 500.0,
+    };
+    assert_eq!(placement.place(100.0), Some(600.0));
+  }
+
+  #[test]
+  fn a_negative_offset_pulls_a_sidecar_earlier() {
+    let track = cuts(Vec::new());
+    let placement = SourcePlacement {
+      cuts: &track,
+      offset_ms: -200.0,
+    };
+    assert_eq!(placement.place(1000.0), Some(800.0));
+  }
+
+  #[test]
+  fn a_negative_offset_cannot_push_audio_before_the_start() {
+    let track = cuts(Vec::new());
+    let placement = SourcePlacement {
+      cuts: &track,
+      offset_ms: -5000.0,
+    };
+    assert_eq!(placement.place(100.0), Some(0.0));
+  }
+
+  #[test]
+  fn several_cuts_accumulate_for_audio_the_same_way_they_do_for_video() {
+    let track = cuts(vec![(1000.0, 2000.0), (4000.0, 4500.0)]);
+    let placement = SourcePlacement {
+      cuts: &track,
+      offset_ms: 0.0,
+    };
+    assert_eq!(placement.place(5000.0), Some(3500.0));
+  }
+
+  #[test]
+  fn every_surviving_chunk_lands_on_the_same_clock_the_video_uses() {
+    let track = cuts(vec![(1000.0, 2000.0), (4000.0, 4500.0)]);
+    let placement = SourcePlacement {
+      cuts: &track,
+      offset_ms: 0.0,
+    };
+    for step in 0..80 {
+      let source = step as f64 * 100.0;
+      if let Some(at) = placement.place(source) {
+        assert_eq!(at, track.to_composition(source), "{source}");
+      } else {
+        assert!(track.contains(source), "{source}");
+      }
+    }
+  }
+
+  #[test]
+  fn placement_never_goes_backwards() {
+    let track = cuts(vec![(1000.0, 2000.0), (4000.0, 4500.0)]);
+    let placement = SourcePlacement {
+      cuts: &track,
+      offset_ms: 0.0,
+    };
+    let mut last = -1.0;
+    for step in 0..80 {
+      if let Some(at) = placement.place(step as f64 * 100.0) {
+        assert!(at >= last, "step {step}");
+        last = at;
+      }
+    }
+  }
+}
+
+#[cfg(test)]
+mod accumulate_matrix {
+  use super::*;
+
+  /// Channel counts a real source reports.
+  const CHANNELS: [u32; 6] = [1, 2, 3, 4, 6, 8];
+
+  /// Offsets in milliseconds, including ones that do not land on a frame.
+  const OFFSETS: [f64; 9] = [0.0, 0.01, 1.0, 10.0, 20.833, 100.0, 500.0, 1000.0, 3600.0];
+
+  fn chunk(samples: Vec<f32>) -> AudioChunk {
+    AudioChunk {
+      timestamp_100ns: 0,
+      samples,
+      end_of_stream: false,
+    }
+  }
+
+  fn frame_of(ms: f64) -> usize {
+    (ms / 1000.0 * MIX_SAMPLE_RATE as f64).round() as usize
+  }
+
+  /// `frames` frames of a ramp, interleaved across `channels`.
+  fn ramp(frames: usize, channels: u32) -> Vec<f32> {
+    (0..frames * channels as usize)
+      .map(|i| (i % 97) as f32 / 97.0)
+      .collect()
+  }
+
+  #[test]
+  fn the_output_is_stereo_for_every_channel_count() {
+    for channels in CHANNELS {
+      let mut dst = Vec::new();
+      accumulate(&mut dst, 0, &chunk(ramp(1, channels)), channels, 0.0);
+      assert_eq!(dst.len(), MIX_CHANNELS as usize, "{channels}ch");
+    }
+  }
+
+  #[test]
+  fn the_frame_count_survives_every_channel_count() {
+    for channels in CHANNELS {
+      for frames in [1usize, 2, 10, 480] {
+        let mut dst = Vec::new();
+        accumulate(&mut dst, 0, &chunk(ramp(frames, channels)), channels, 0.0);
+        assert_eq!(
+          dst.len(),
+          frames * MIX_CHANNELS as usize,
+          "{channels}ch {frames} frames"
+        );
+      }
+    }
+  }
+
+  #[test]
+  fn mono_is_duplicated_and_multichannel_is_taken_from_the_front() {
+    for channels in CHANNELS {
+      let mut dst = Vec::new();
+      let samples: Vec<f32> = (0..channels).map(|c| (c + 1) as f32 / 10.0).collect();
+      accumulate(&mut dst, 0, &chunk(samples.clone()), channels, 0.0);
+      if channels == 1 {
+        assert_eq!(dst[0], dst[1], "{channels}ch should be heard on both sides");
+        assert_eq!(dst[0], samples[0], "{channels}ch");
+      } else {
+        assert_eq!(dst[0], samples[0], "{channels}ch left");
+        assert_eq!(dst[1], samples[1], "{channels}ch right");
+      }
+    }
+  }
+
+  #[test]
+  fn a_chunk_lands_at_its_offset_for_every_offset_and_channel_count() {
+    for channels in CHANNELS {
+      for offset in OFFSETS {
+        let mut dst = Vec::new();
+        let samples: Vec<f32> = (0..channels).map(|_| 1.0).collect();
+        accumulate(&mut dst, 0, &chunk(samples), channels, offset);
+        let frame = frame_of(offset);
+        assert_eq!(
+          dst.len(),
+          (frame + 1) * MIX_CHANNELS as usize,
+          "{channels}ch at {offset}ms"
+        );
+        assert_eq!(dst[frame * 2], 1.0, "{channels}ch at {offset}ms");
+      }
+    }
+  }
+
+  #[test]
+  fn everything_before_a_placed_chunk_is_silence_for_every_offset() {
+    for offset in OFFSETS.iter().filter(|o| **o > 0.05) {
+      let mut dst = Vec::new();
+      accumulate(&mut dst, 0, &chunk(vec![1.0, 1.0]), 2, *offset);
+      let frame = frame_of(*offset);
+      assert!(
+        dst[..frame * 2].iter().all(|s| *s == 0.0),
+        "{offset}ms leaked into the gap"
+      );
+    }
+  }
+
+  #[test]
+  fn summing_is_commutative_across_every_channel_pairing() {
+    for a_ch in CHANNELS {
+      for b_ch in CHANNELS {
+        let a = ramp(4, a_ch);
+        let b = ramp(4, b_ch);
+        let mut forward = Vec::new();
+        accumulate(&mut forward, 0, &chunk(a.clone()), a_ch, 0.0);
+        accumulate(&mut forward, 0, &chunk(b.clone()), b_ch, 0.0);
+        let mut backward = Vec::new();
+        accumulate(&mut backward, 0, &chunk(b), b_ch, 0.0);
+        accumulate(&mut backward, 0, &chunk(a), a_ch, 0.0);
+        assert_eq!(forward, backward, "{a_ch}ch + {b_ch}ch");
+      }
+    }
+  }
+
+  #[test]
+  fn summing_is_associative_for_three_sources() {
+    let mut left = Vec::new();
+    for samples in [vec![0.1f32, 0.2], vec![0.3, 0.4], vec![0.5, 0.6]] {
+      accumulate(&mut left, 0, &chunk(samples), 2, 0.0);
+    }
+    let mut right = Vec::new();
+    for samples in [vec![0.5f32, 0.6], vec![0.1, 0.2], vec![0.3, 0.4]] {
+      accumulate(&mut right, 0, &chunk(samples), 2, 0.0);
+    }
+    for (a, b) in left.iter().zip(right.iter()) {
+      assert!((a - b).abs() < 1e-6, "{a} vs {b}");
+    }
+  }
+
+  #[test]
+  fn a_source_never_writes_behind_the_base_for_any_base_and_offset() {
+    for base_ms in [0.0f64, 10.0, 100.0, 1000.0] {
+      for offset in OFFSETS {
+        let base = frame_of(base_ms) as u64;
+        let mut dst = Vec::new();
+        accumulate(&mut dst, base, &chunk(vec![1.0, 1.0]), 2, offset);
+        let label = format!("base {base_ms}ms offset {offset}ms");
+        if offset < base_ms {
+          assert!(dst.is_empty(), "{label}");
+        } else {
+          assert!(!dst.is_empty(), "{label}");
+        }
+      }
+    }
+  }
+
+  #[test]
+  fn a_chunk_straddling_the_base_keeps_only_what_is_ahead_of_it() {
+    for kept in 0..=4usize {
+      let total = 4usize;
+      let base = (total - kept) as u64;
+      let samples: Vec<f32> = (0..total * 2).map(|i| (i / 2 + 1) as f32).collect();
+      let mut dst = Vec::new();
+      accumulate(&mut dst, base, &chunk(samples), 2, 0.0);
+      assert_eq!(dst.len(), kept * 2, "kept {kept}");
+      if kept > 0 {
+        // The first surviving frame is the one at the base.
+        assert_eq!(dst[0], (total - kept + 1) as f32, "kept {kept}");
+      }
+    }
+  }
+
+  #[test]
+  fn a_partial_trailing_frame_is_dropped_for_every_channel_count() {
+    for channels in CHANNELS {
+      let mut samples = ramp(2, channels);
+      samples.pop();
+      let mut dst = Vec::new();
+      accumulate(&mut dst, 0, &chunk(samples), channels, 0.0);
+      assert_eq!(dst.len(), MIX_CHANNELS as usize, "{channels}ch");
+    }
+  }
+
+  #[test]
+  fn nothing_is_written_for_a_degenerate_chunk_in_any_configuration() {
+    for channels in CHANNELS {
+      for offset in OFFSETS {
+        let mut dst = Vec::new();
+        accumulate(&mut dst, 0, &chunk(Vec::new()), channels, offset);
+        assert!(dst.is_empty(), "{channels}ch at {offset}ms");
+      }
+    }
+    for offset in OFFSETS {
+      let mut dst = Vec::new();
+      accumulate(&mut dst, 0, &chunk(vec![1.0, 1.0]), 0, offset);
+      assert!(dst.is_empty(), "0ch at {offset}ms");
+    }
+  }
+
+  #[test]
+  fn a_negative_offset_never_writes_for_any_channel_count() {
+    for channels in CHANNELS {
+      for offset in [-0.01f64, -1.0, -1000.0] {
+        let mut dst = Vec::new();
+        accumulate(&mut dst, 0, &chunk(ramp(4, channels)), channels, offset);
+        // Whatever survives must be the tail that lands at or after zero.
+        assert!(dst.len() <= 4 * MIX_CHANNELS as usize, "{channels}ch at {offset}");
+      }
+    }
+  }
+
+  #[test]
+  fn every_written_sample_is_finite_across_the_matrix() {
+    for channels in CHANNELS {
+      for offset in OFFSETS {
+        for frames in [1usize, 7, 480] {
+          let mut dst = Vec::new();
+          accumulate(&mut dst, 0, &chunk(ramp(frames, channels)), channels, offset);
+          assert!(
+            dst.iter().all(|s| s.is_finite()),
+            "{channels}ch {frames} frames at {offset}ms"
+          );
+        }
+      }
+    }
+  }
+
+  #[test]
+  fn a_long_chunk_is_written_end_to_end_for_every_channel_count() {
+    for channels in CHANNELS {
+      let frames = 2_000;
+      let samples = ramp(frames, channels);
+      let mut dst = Vec::new();
+      accumulate(&mut dst, 0, &chunk(samples.clone()), channels, 0.0);
+      assert_eq!(dst.len(), frames * MIX_CHANNELS as usize, "{channels}ch");
+      let last = (frames - 1) * channels as usize;
+      assert_eq!(dst[(frames - 1) * 2], samples[last], "{channels}ch");
+    }
+  }
+
+  #[test]
+  fn growing_the_accumulator_never_disturbs_what_was_already_written() {
+    let mut dst = Vec::new();
+    accumulate(&mut dst, 0, &chunk(vec![0.9, 0.8]), 2, 0.0);
+    let head = (dst[0], dst[1]);
+    for offset in [1.0f64, 10.0, 100.0, 1000.0] {
+      accumulate(&mut dst, 0, &chunk(vec![0.1, 0.2]), 2, offset);
+      assert_eq!((dst[0], dst[1]), head, "after {offset}ms");
+    }
+  }
+
+  #[test]
+  fn the_frame_clock_agrees_with_where_a_chunk_lands_for_every_offset() {
+    for offset in OFFSETS {
+      let mut dst = Vec::new();
+      accumulate(&mut dst, 0, &chunk(vec![1.0, 1.0]), 2, offset);
+      let frame = dst.len() / MIX_CHANNELS as usize - 1;
+      // `frame_to_ms` is the inverse the mixer uses when reporting position.
+      assert!(
+        (frame_to_ms(frame as u64) - offset).abs() < 0.03,
+        "{offset}ms landed at frame {frame}"
+      );
+    }
+  }
+}
+
+#[cfg(test)]
+mod placement_matrix {
+  use super::*;
+  use crate::engine::cuts::Cut;
+
+  fn cuts(list: &[(f64, f64)]) -> CutTrack {
+    CutTrack::new(
+      list
+        .iter()
+        .map(|(start_ms, end_ms)| Cut {
+          start_ms: *start_ms,
+          end_ms: *end_ms,
+        })
+        .collect(),
+    )
+  }
+
+  fn cut_sets() -> Vec<(&'static str, Vec<(f64, f64)>)> {
+    vec![
+      ("none", vec![]),
+      ("one", vec![(1_000.0, 2_000.0)]),
+      ("two", vec![(1_000.0, 2_000.0), (5_000.0, 6_500.0)]),
+      ("touching", vec![(1_000.0, 2_000.0), (2_000.0, 3_000.0)]),
+      ("overlapping", vec![(1_000.0, 3_000.0), (2_000.0, 4_000.0)]),
+      ("at the start", vec![(0.0, 1_000.0)]),
+      (
+        "many",
+        (0..8)
+          .map(|i| (i as f64 * 1_500.0 + 400.0, i as f64 * 1_500.0 + 700.0))
+          .collect(),
+      ),
+    ]
+  }
+
+  const OFFSETS: [f64; 7] = [-2_000.0, -500.0, 0.0, 1.0, 250.0, 1_000.0, 5_000.0];
+
+  #[test]
+  fn placement_agrees_with_the_video_clock_for_every_cut_set_and_offset() {
+    // The sound and the picture have to be on one clock, or they slide apart
+    // by the length of the cuts.
+    for (name, list) in cut_sets() {
+      let track = cuts(&list);
+      for offset in OFFSETS {
+        let placement = SourcePlacement {
+          cuts: &track,
+          offset_ms: offset,
+        };
+        for step in 0..200 {
+          let source = step as f64 * 50.0;
+          let shifted = source + offset;
+          match placement.place(source) {
+            Some(at) => {
+              assert!(!track.contains(shifted), "{name} offset {offset} at {source}");
+              assert_eq!(at, track.to_composition(shifted), "{name} offset {offset}");
+            }
+            None => assert!(track.contains(shifted), "{name} offset {offset} at {source}"),
+          }
+        }
+      }
+    }
+  }
+
+  #[test]
+  fn placement_never_goes_backwards_for_any_cut_set_and_offset() {
+    for (name, list) in cut_sets() {
+      let track = cuts(&list);
+      for offset in OFFSETS {
+        let placement = SourcePlacement {
+          cuts: &track,
+          offset_ms: offset,
+        };
+        let mut last = -1.0;
+        for step in 0..200 {
+          if let Some(at) = placement.place(step as f64 * 50.0) {
+            assert!(at >= last, "{name} offset {offset} step {step}");
+            last = at;
+          }
+        }
+      }
+    }
+  }
+
+  #[test]
+  fn placement_never_returns_a_negative_time_for_any_cut_set_and_offset() {
+    for (name, list) in cut_sets() {
+      let track = cuts(&list);
+      for offset in OFFSETS {
+        let placement = SourcePlacement {
+          cuts: &track,
+          offset_ms: offset,
+        };
+        for step in 0..200 {
+          if let Some(at) = placement.place(step as f64 * 50.0) {
+            assert!(at >= 0.0, "{name} offset {offset} step {step}: {at}");
+            assert!(at.is_finite(), "{name} offset {offset} step {step}");
+          }
+        }
+      }
+    }
+  }
+
+  #[test]
+  fn a_positive_offset_delays_the_sound_by_exactly_that_much_with_no_cuts() {
+    let track = cuts(&[]);
+    for offset in OFFSETS {
+      let placement = SourcePlacement {
+        cuts: &track,
+        offset_ms: offset,
+      };
+      for source in [0.0f64, 100.0, 5_000.0] {
+        let expected = (source + offset).max(0.0);
+        assert_eq!(placement.place(source), Some(expected), "offset {offset}");
+      }
+    }
+  }
+
+  #[test]
+  fn a_sidecar_and_the_screen_land_together_when_the_offset_is_right() {
+    // A camera that started half a second late: its own clock starts at zero,
+    // so shifting it by the difference puts the same instant in both files at
+    // the same place in the edit.
+    let track = cuts(&[(2_000.0, 3_000.0)]);
+    let screen = SourcePlacement {
+      cuts: &track,
+      offset_ms: 0.0,
+    };
+    let camera = SourcePlacement {
+      cuts: &track,
+      offset_ms: 500.0,
+    };
+    for step in 0..100 {
+      let screen_ms = step as f64 * 50.0;
+      let camera_ms = screen_ms - 500.0;
+      if camera_ms < 0.0 {
+        continue;
+      }
+      assert_eq!(
+        screen.place(screen_ms),
+        camera.place(camera_ms),
+        "step {step}"
+      );
+    }
+  }
+
+  #[test]
+  fn every_dropped_chunk_was_genuinely_inside_a_cut() {
+    for (name, list) in cut_sets() {
+      let track = cuts(&list);
+      for offset in OFFSETS {
+        let placement = SourcePlacement {
+          cuts: &track,
+          offset_ms: offset,
+        };
+        let mut dropped = 0;
+        for step in 0..200 {
+          let source = step as f64 * 50.0;
+          if placement.place(source).is_none() {
+            dropped += 1;
+            assert!(track.contains(source + offset), "{name} offset {offset}");
+          }
+        }
+        if list.is_empty() {
+          assert_eq!(dropped, 0, "{name} offset {offset}");
+        }
+      }
+    }
+  }
+}

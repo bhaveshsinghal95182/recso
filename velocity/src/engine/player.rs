@@ -849,6 +849,7 @@ fn decode_loop(
     let mut pending_webcam_cuts: Option<Vec<(f64, f64)>> = None;
     let mut pending_layer_order: Option<[Layer; 3]> = None;
     let mut pending_webcam_zoom: Option<Vec<WebcamZoomRegion>> = None;
+    let mut pending_snapshots: Vec<std::sync::mpsc::SyncSender<Option<Vec<u8>>>> = Vec::new();
     let mut stopping = false;
     loop {
       match rx.try_recv() {
@@ -873,16 +874,12 @@ fn decode_loop(
         Ok(Command::SetWebcamCuts(spans)) => pending_webcam_cuts = Some(spans),
         Ok(Command::SetLayerOrder(order)) => pending_layer_order = Some(order),
         Ok(Command::SetWebcamZoomRegions(regions)) => pending_webcam_zoom = Some(regions),
-        // Answered inline rather than coalesced: a snapshot is a question, and
-        // dropping all but the last would leave earlier callers waiting forever.
-        Ok(Command::Snapshot(reply)) => {
-          let current = *shared.current.lock().unwrap();
-          let pixels = current.and_then(|frame| {
-            let texture = &pool[frame.slot % pool.len()];
-            crate::engine::d3d::read_bgra(&texture.texture, texture.width, texture.height).ok()
-          });
-          let _ = reply.send(pixels);
-        }
+        // Held rather than answered here, because the setters drained alongside
+        // it have not been applied yet -- answering now reads back the frame
+        // from before them. Kept as a list rather than coalesced: a snapshot is
+        // a question, and dropping all but the last would leave earlier callers
+        // waiting forever.
+        Ok(Command::Snapshot(reply)) => pending_snapshots.push(reply),
         Err(TryRecvError::Empty) => break,
       }
     }
@@ -1041,6 +1038,20 @@ fn decode_loop(
 
     if needs_repaint {
       repaint_slots(&shared, &mut chain, &pool_rtvs);
+    }
+
+    // After the repaint, so a caller that sets something and then snapshots
+    // sees what it set. Before the seek below, which is asynchronous by
+    // contract and so is not something a snapshot waits on.
+    if !pending_snapshots.is_empty() {
+      let current = *shared.current.lock().unwrap();
+      let pixels = current.and_then(|frame| {
+        let texture = &pool[frame.slot % pool.len()];
+        crate::engine::d3d::read_bgra(&texture.texture, texture.width, texture.height).ok()
+      });
+      for reply in pending_snapshots {
+        let _ = reply.send(pixels.clone());
+      }
     }
 
     if let Some((target, mode)) = pending_seek {
@@ -1369,4 +1380,206 @@ fn do_seek(
   shared
     .last_seek_decoded
     .store(decoded_here, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod clock_scenarios {
+  use super::*;
+
+  fn clock(duration_ms: f64) -> Clock {
+    Clock {
+      playing: false,
+      rate: 1.0,
+      anchor_media_ms: 0.0,
+      anchor_at: Instant::now(),
+      duration_ms,
+    }
+  }
+
+  #[test]
+  fn a_paused_clock_reports_its_anchor() {
+    let mut c = clock(10_000.0);
+    c.anchor_media_ms = 2500.0;
+    assert_eq!(c.now_ms(), 2500.0);
+  }
+
+  #[test]
+  fn a_paused_clock_does_not_advance() {
+    let c = clock(10_000.0);
+    let first = c.now_ms();
+    // Some work between the two reads; a paused clock must not notice.
+    let mut sink = 0u64;
+    for i in 0..200_000u64 {
+      sink = sink.wrapping_add(i);
+    }
+    assert_eq!(c.now_ms(), first, "sink {sink}");
+  }
+
+  #[test]
+  fn jumping_moves_the_clock_immediately() {
+    let mut c = clock(10_000.0);
+    c.jump_to(4000.0);
+    assert_eq!(c.now_ms(), 4000.0);
+  }
+
+  #[test]
+  fn jumping_works_while_paused_and_while_playing() {
+    for playing in [false, true] {
+      let mut c = clock(10_000.0);
+      c.playing = playing;
+      c.jump_to(3000.0);
+      // Playing, a sliver of wall time may have passed; paused, none has.
+      assert!((c.now_ms() - 3000.0).abs() < 50.0, "playing {playing}");
+    }
+  }
+
+  #[test]
+  fn the_clock_never_runs_past_the_end_of_the_file() {
+    // Free-running against the wall clock, so without the clamp it keeps
+    // counting forever once playback passes the end.
+    let mut c = clock(5000.0);
+    c.jump_to(9999.0);
+    assert_eq!(c.now_ms(), 5000.0);
+  }
+
+  #[test]
+  fn the_clock_never_runs_before_the_start() {
+    let mut c = clock(5000.0);
+    c.jump_to(-9999.0);
+    assert_eq!(c.now_ms(), 0.0);
+  }
+
+  #[test]
+  fn a_file_with_no_duration_pins_the_clock_at_zero() {
+    let mut c = clock(0.0);
+    c.jump_to(1000.0);
+    assert_eq!(c.now_ms(), 0.0);
+  }
+
+  #[test]
+  fn a_negative_duration_is_treated_as_no_duration() {
+    let mut c = clock(-100.0);
+    c.jump_to(1000.0);
+    assert_eq!(c.now_ms(), 0.0);
+  }
+
+  #[test]
+  fn setting_the_rate_clamps_it_to_something_playable() {
+    let mut c = clock(10_000.0);
+    c.set_rate(100.0);
+    assert_eq!(c.rate, 8.0);
+    c.set_rate(0.0);
+    assert_eq!(c.rate, 0.1);
+    c.set_rate(-4.0);
+    assert_eq!(c.rate, 0.1);
+  }
+
+  #[test]
+  fn an_ordinary_rate_is_left_alone() {
+    for rate in [0.1f64, 0.5, 1.0, 2.0, 8.0] {
+      let mut c = clock(10_000.0);
+      c.set_rate(rate);
+      assert_eq!(c.rate, rate, "{rate}");
+    }
+  }
+
+  #[test]
+  fn changing_the_rate_reanchors_first() {
+    // Otherwise the time elapsed since the last anchor gets applied at the new
+    // rate, and the playhead jumps.
+    let mut c = clock(10_000.0);
+    c.playing = true;
+    c.jump_to(2000.0);
+    c.set_rate(4.0);
+    assert!((c.anchor_media_ms - 2000.0).abs() < 50.0, "{}", c.anchor_media_ms);
+  }
+
+  #[test]
+  fn pausing_reanchors_so_the_playhead_stays_where_it_was() {
+    let mut c = clock(10_000.0);
+    c.playing = true;
+    c.jump_to(3000.0);
+    let before = c.now_ms();
+    c.set_playing(false);
+    assert!((c.now_ms() - before).abs() < 50.0);
+  }
+
+  #[test]
+  fn pausing_and_resuming_does_not_lose_the_position() {
+    let mut c = clock(10_000.0);
+    c.jump_to(4000.0);
+    c.set_playing(true);
+    c.set_playing(false);
+    assert!((c.now_ms() - 4000.0).abs() < 50.0, "{}", c.now_ms());
+  }
+
+  #[test]
+  fn pausing_twice_is_harmless() {
+    let mut c = clock(10_000.0);
+    c.jump_to(1500.0);
+    c.set_playing(false);
+    c.set_playing(false);
+    assert_eq!(c.now_ms(), 1500.0);
+  }
+
+  #[test]
+  fn reanchoring_a_paused_clock_changes_nothing_visible() {
+    let mut c = clock(10_000.0);
+    c.jump_to(2222.0);
+    c.reanchor();
+    assert_eq!(c.now_ms(), 2222.0);
+  }
+
+  #[test]
+  fn reanchoring_clamps_the_anchor_to_the_file() {
+    // `reanchor` takes `now_ms`, which is already clamped, so an out-of-range
+    // anchor cannot survive a rate change.
+    let mut c = clock(5000.0);
+    c.jump_to(99_999.0);
+    c.reanchor();
+    assert_eq!(c.anchor_media_ms, 5000.0);
+  }
+
+  #[test]
+  fn a_playing_clock_advances() {
+    let mut c = clock(60_000.0);
+    c.jump_to(0.0);
+    c.set_playing(true);
+    let first = c.now_ms();
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    assert!(c.now_ms() > first, "{} <= {first}", c.now_ms());
+  }
+
+  #[test]
+  fn a_faster_rate_advances_the_clock_faster() {
+    let mut slow = clock(600_000.0);
+    slow.jump_to(0.0);
+    slow.rate = 1.0;
+    slow.set_playing(true);
+    let mut fast = clock(600_000.0);
+    fast.jump_to(0.0);
+    fast.rate = 8.0;
+    fast.set_playing(true);
+    std::thread::sleep(std::time::Duration::from_millis(40));
+    assert!(fast.now_ms() > slow.now_ms(), "{} vs {}", fast.now_ms(), slow.now_ms());
+  }
+
+  #[test]
+  fn a_playing_clock_still_stops_at_the_end() {
+    let mut c = clock(1.0);
+    c.jump_to(0.0);
+    c.set_playing(true);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    assert_eq!(c.now_ms(), 1.0);
+  }
+
+  #[test]
+  fn the_clock_stays_inside_the_file_whatever_it_is_asked_to_do() {
+    let mut c = clock(5000.0);
+    for target in [-1e9, -1.0, 0.0, 2500.0, 5000.0, 5001.0, 1e9] {
+      c.jump_to(target);
+      let now = c.now_ms();
+      assert!((0.0..=5000.0).contains(&now), "{target} -> {now}");
+    }
+  }
 }

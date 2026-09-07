@@ -234,3 +234,136 @@ pub fn push_phone_frame(jpeg: Buffer) -> AsyncTask<DecodeFrame> {
     jpeg: jpeg.to_vec(),
   })
 }
+
+#[cfg(test)]
+mod phone_frame_scenarios {
+  use super::*;
+
+  /// A real JPEG of the given size, since `accept` decodes rather than trusts.
+  fn jpeg(width: u32, height: u32) -> Vec<u8> {
+    let mut pixels = image::RgbImage::new(width, height);
+    for (x, y, pixel) in pixels.enumerate_pixels_mut() {
+      *pixel = image::Rgb([(x % 256) as u8, (y % 256) as u8, 128]);
+    }
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(pixels)
+      .write_to(&mut out, ImageFormat::Jpeg)
+      .expect("encoding a test frame");
+    out.into_inner()
+  }
+
+  #[test]
+  fn empty_bytes_are_not_a_frame() {
+    assert!(accept(&[]).is_err());
+  }
+
+  #[test]
+  fn garbage_is_not_a_frame() {
+    assert!(accept(b"this is not a jpeg at all").is_err());
+  }
+
+  #[test]
+  fn a_truncated_jpeg_is_refused() {
+    let full = jpeg(32, 32);
+    assert!(accept(&full[..full.len() / 3]).is_err());
+  }
+
+  #[test]
+  fn a_jpeg_header_with_no_body_is_refused() {
+    assert!(accept(&[0xff, 0xd8, 0xff]).is_err());
+  }
+
+  #[test]
+  fn the_refusal_says_it_could_not_decode() {
+    match accept(b"nonsense") {
+      Err(message) => assert!(message.contains("decode"), "{message}"),
+      Ok(_) => panic!("garbage was accepted as a frame"),
+    }
+  }
+
+  #[test]
+  fn a_png_is_refused_because_the_phone_is_told_to_send_jpeg() {
+    // Decoding whatever turned up would work until someone changed the phone
+    // page and quietly doubled the per-frame cost.
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(image::RgbImage::new(8, 8))
+      .write_to(&mut out, ImageFormat::Png)
+      .unwrap();
+    assert!(accept(&out.into_inner()).is_err());
+  }
+
+  #[test]
+  fn a_refused_frame_leaves_the_slot_alone() {
+    // Nothing is written until the decode succeeds, so a corrupt post cannot
+    // blank a picture the sidecar is still holding.
+    let before = phone_camera_status().frames_received;
+    let _ = accept(b"nonsense");
+    assert_eq!(phone_camera_status().frames_received, before);
+  }
+
+  /// The whole stateful path in one test.
+  ///
+  /// The slot, the sequence counter and the last-seen record are process-wide,
+  /// so splitting this across several `#[test]`s would have them racing each
+  /// other for the one slot rather than testing anything.
+  #[test]
+  fn a_frame_arrives_is_counted_and_is_taken_exactly_once() {
+    reset_phone_camera();
+    assert!(take_frame().is_none(), "reset left a frame behind");
+    assert!(!is_live(), "reset left the link looking live");
+
+    let before = phone_camera_status().frames_received;
+
+    // A frame arrives.
+    let size = accept(&jpeg(64, 48)).expect("a real jpeg should decode");
+    assert_eq!(size, (64, 48));
+
+    let status = phone_camera_status();
+    assert_eq!(status.frames_received, before + 1.0);
+    assert_eq!((status.width, status.height), (64, 48));
+    assert!(status.live, "a frame that just arrived should be live");
+    assert!(is_live());
+
+    // The sidecar takes it, and it is gone.
+    let (bgra, width, height) = take_frame().expect("the frame should be waiting");
+    assert_eq!((width, height), (64, 48));
+    assert_eq!(bgra.len(), 64 * 48 * 4);
+    assert!(take_frame().is_none(), "the frame was handed out twice");
+
+    // But the link is still live -- freshness is asked of the last arrival,
+    // not of the slot, which is usually empty while a recording drains it.
+    assert!(is_live());
+
+    // A frame replaced before anything read it is counted as dropped.
+    let dropped_before = phone_camera_status().frames_dropped;
+    accept(&jpeg(32, 32)).unwrap();
+    accept(&jpeg(32, 32)).unwrap();
+    assert_eq!(
+      phone_camera_status().frames_dropped,
+      dropped_before + 1.0,
+      "replacing an unread frame should count once"
+    );
+
+    // And a reset clears the slot for the next session, so a recording cannot
+    // open on a frame from a pairing session the user abandoned.
+    let lifetime = phone_camera_status().frames_received;
+    reset_phone_camera();
+    assert!(take_frame().is_none());
+    assert!(!is_live(), "reset should make the link look dead again");
+    let after = phone_camera_status();
+    assert_eq!(after.frames_dropped, 0.0);
+    assert_eq!((after.width, after.height), (0, 0));
+    // `frames_received` is a lifetime counter -- "since the process started" --
+    // so it survives a reset on purpose. It is a diagnostic, not session state.
+    assert_eq!(after.frames_received, lifetime);
+  }
+
+  #[test]
+  fn a_decoded_frame_is_four_bytes_a_pixel_in_the_form_the_encoder_wants() {
+    // Checked without touching the slot: the conversion is the same one the
+    // USB path uses, which is what lets a phone be a camera.
+    let rgb = vec![10u8, 20, 30];
+    let bgra = rgb_to_bgra_bottom_up(&rgb, 1, 1);
+    assert_eq!(bgra, vec![30, 20, 10, 255]);
+  }
+}

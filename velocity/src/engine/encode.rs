@@ -367,3 +367,94 @@ unsafe fn create_attributes(count: u32) -> Result<IMFAttributes> {
   unsafe { MFCreateAttributes(&mut attrs, count)? };
   Ok(attrs.expect("attributes"))
 }
+
+#[cfg(test)]
+mod packing_scenarios {
+  use super::*;
+
+  #[test]
+  fn packing_puts_the_first_half_in_the_high_word() {
+    assert_eq!(pack(1, 0), 1u64 << 32);
+  }
+
+  #[test]
+  fn packing_puts_the_second_half_in_the_low_word() {
+    assert_eq!(pack(0, 1), 1);
+  }
+
+  #[test]
+  fn packing_zeroes_is_zero() {
+    assert_eq!(pack(0, 0), 0);
+  }
+
+  #[test]
+  fn the_two_halves_do_not_bleed_into_each_other() {
+    // Which is the whole point: a width of 1920 and a height of 1080 have to
+    // come back out as 1920 and 1080, not as one number.
+    let packed = pack(1920, 1080);
+    assert_eq!((packed >> 32) as u32, 1920);
+    assert_eq!(packed as u32, 1080);
+  }
+
+  #[test]
+  fn a_full_width_low_half_does_not_reach_the_high_half() {
+    let packed = pack(0, u32::MAX);
+    assert_eq!(packed >> 32, 0);
+    assert_eq!(packed as u32, u32::MAX);
+  }
+
+  #[test]
+  fn a_full_width_high_half_does_not_reach_the_low_half() {
+    let packed = pack(u32::MAX, 0);
+    assert_eq!((packed >> 32) as u32, u32::MAX);
+    assert_eq!(packed as u32, 0);
+  }
+
+  #[test]
+  fn both_halves_at_full_width_fill_the_word() {
+    assert_eq!(pack(u32::MAX, u32::MAX), u64::MAX);
+  }
+
+  #[test]
+  fn packing_round_trips_for_every_pair_it_is_used_with() {
+    let sizes = [
+      (1920u32, 1080u32),
+      (3840, 2160),
+      (1280, 720),
+      (1, 1),
+      (0, 0),
+      (48_000, 2),
+    ];
+    for (hi, lo) in sizes {
+      let packed = pack(hi, lo);
+      assert_eq!(((packed >> 32) as u32, packed as u32), (hi, lo), "{hi}/{lo}");
+    }
+  }
+
+  #[test]
+  fn swapping_the_arguments_gives_a_different_value() {
+    assert_ne!(pack(1920, 1080), pack(1080, 1920));
+  }
+
+  #[test]
+  fn the_default_audio_spec_is_forty_eight_kilohertz_stereo() {
+    let spec = AudioSpec::default();
+    assert_eq!(spec.sample_rate, 48_000);
+    assert_eq!(spec.channels, 2);
+  }
+
+  #[test]
+  fn the_default_audio_bitrate_is_transparent_enough_for_narration() {
+    assert_eq!(AudioSpec::default().bitrate, 128_000);
+  }
+
+  #[test]
+  fn the_default_audio_spec_matches_the_mixers_own_format() {
+    // The mixer produces 48kHz stereo; a spec that disagreed would make the
+    // sink writer resample every export for no reason.
+    use crate::engine::audio::{MIX_CHANNELS, MIX_SAMPLE_RATE};
+    let spec = AudioSpec::default();
+    assert_eq!(spec.sample_rate, MIX_SAMPLE_RATE);
+    assert_eq!(spec.channels, MIX_CHANNELS);
+  }
+}
