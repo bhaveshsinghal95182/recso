@@ -15,7 +15,7 @@ export {
   mapSourceCutRangesToCompositionCutRanges,
   mapSourceTimeToCompositionTimeMs,
 } from './cuts';
-export { computeVideoLayout, computeWebcamLayout } from './layout';
+export { computeVideoLayout, computeWebcamLayout, computeWebcamRegionLayout } from './layout';
 export { renderCompositionFrame, type RenderCompositionFrameOptions } from './render';
 export { drawVideoLayer, drawWebcamLayer } from './video-layers';
 export { computeZoomState, computeZoomStateFromConfig, computeZoomStateFromRegions } from './zoom';

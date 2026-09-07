@@ -179,6 +179,37 @@ try {
     return null
   }
 
+  /** How close a frame's pts has to be to the clock to count as answering it. */
+  const SEEK_LANDED_MS = 40
+
+  /**
+   * Seek, and wait for the frame that actually answers the seek.
+   *
+   * `seek` returns before the decode thread has moved, and the first `tick`
+   * after it still hands back the frame that was already on screen -- so a pts
+   * read from that frame is the *old* playhead, which can be seconds away from
+   * the new one. Anything placed relative to it then lands nowhere near where
+   * the playhead ends up, and the cursor checks below read as "nothing was
+   * drawn" when the pointer is really parked off in the stretch of timeline
+   * that was just left.
+   *
+   * The engine clock moves on the seek immediately, so a presented frame
+   * agreeing with it is what separates the new frame from the stale one.
+   */
+  async function seekSettled(ms, timeoutMs = 5000) {
+    player.seek(ms, true)
+
+    const deadline = Date.now() + timeoutMs
+    let pts = null
+    while (Date.now() < deadline) {
+      pts = player.tick()?.pts ?? pts
+      const clock = player.stats().currentTime
+      if (pts !== null && Math.abs(pts - clock) <= SEEK_LANDED_MS) return pts
+      await sleep(2)
+    }
+    return pts ?? player.stats().currentTime
+  }
+
   check('first frame decodes', (await waitFrame()) !== null)
 
   const stride = info.codedWidth
@@ -238,8 +269,7 @@ try {
   if (hasWebcam) {
     player.setWebcamCuts([{ startMs: 0, endMs: Math.max(400, info.duration) }])
     await sleep(400)
-    player.seek(Math.min(10, info.duration * 0.5), true)
-    await waitFrame()
+    await seekSettled(Math.min(10, info.duration * 0.5))
     await sleep(300)
     const duringCut = player.snapshotBgra()
 
@@ -251,8 +281,7 @@ try {
 
     player.setWebcamCuts([])
     await sleep(400)
-    player.seek(Math.min(10, info.duration * 0.5), true)
-    await waitFrame()
+    await seekSettled(Math.min(10, info.duration * 0.5))
     await sleep(300)
     check('and clearing the cut brings it back', difference(inside(plain), inside(player.snapshotBgra())) > 6)
   } else {
@@ -275,8 +304,7 @@ try {
 
     player.setLayerOrder(['video', 'cursor', 'webcam'])
     await sleep(400)
-    player.seek(Math.min(10, info.duration * 0.5), true)
-    await waitFrame()
+    await seekSettled(Math.min(10, info.duration * 0.5))
     await sleep(300)
     const cursorUnder = player.snapshotBgra()
 
@@ -306,8 +334,7 @@ try {
     player.setWebcamLayout({ ...smallBox, shape: 'rect', cornerRadius: 0, opacity: 1 })
     player.setWebcamZoomRegions([])
     await sleep(400)
-    player.seek(Math.min(10, info.duration * 0.5), true)
-    await waitFrame()
+    await seekSettled(Math.min(10, info.duration * 0.5))
     await sleep(300)
     const small = player.snapshotBgra()
 
@@ -372,8 +399,7 @@ try {
     const layout = { ...shadowBox, shape: 'rect', cornerRadius: 0, opacity: 1 }
     player.setWebcamLayout(layout)
     await sleep(400)
-    player.seek(Math.min(10, info.duration * 0.5), true)
-    await waitFrame()
+    await seekSettled(Math.min(10, info.duration * 0.5))
     await sleep(300)
     const bare = player.snapshotBgra()
 
@@ -483,8 +509,7 @@ try {
     return null
   }
 
-  player.seek(10, true)
-  await waitFrame()
+  await seekSettled(10)
   await sleep(300)
   const early = findMagenta(player.snapshotBgra())
 
@@ -501,8 +526,7 @@ try {
   }
 
   // Move the playhead past the second sample; the pointer should follow.
-  player.seek(duration * 0.75, true)
-  await waitFrame()
+  await seekSettled(duration * 0.75)
   await sleep(300)
   const late = findMagenta(player.snapshotBgra())
 
@@ -579,9 +603,7 @@ try {
   //
   // Setting the track is enough to move between shapes: it repaints, and a
   // repaint re-stages the pointer against the frame already on screen.
-  player.seek(Math.min(10, duration * 0.5), true)
-  const shapeFrame = await waitFrame()
-  const shapeMs = shapeFrame ? shapeFrame.pts : 0
+  const shapeMs = await seekSettled(Math.min(10, duration * 0.5))
 
   player.setCursorTrack([{ timestampMs: shapeMs - 100, x: 0.2, y: 0.2, imageId: 0 }])
   await sleep(400)
@@ -670,10 +692,8 @@ try {
   // two frames long, and everything below is timed against the pointer being
   // fresh at whatever instant is on screen -- guessing it from `duration` would
   // quietly resolve to no motion at all and pass by drawing nothing.
-  player.seek(Math.min(10, duration * 0.5), true)
-  const landed = await waitFrame()
+  const nowMs = await seekSettled(Math.min(10, duration * 0.5))
   await sleep(300)
-  const nowMs = landed ? landed.pts : 0
 
   // A pointer that has been sitting still: no click to animate, and nothing to
   // measure a velocity from. Everything else is compared against this.

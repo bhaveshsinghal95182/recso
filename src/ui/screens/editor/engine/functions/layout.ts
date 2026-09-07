@@ -31,6 +31,21 @@ export function computeVideoLayout(
   return { x, y, width, height, scale: videoScale };
 }
 
+/** The webcam's inset from the frame edge, clamped so it can never invert. */
+function resolveWebcamMarginPx(
+  frameWidth: number,
+  frameHeight: number,
+  webcamConfig: WebcamOverlayConfig,
+): number {
+  return clamp(
+    Math.round(
+      Number.isFinite(webcamConfig.marginPx) ? webcamConfig.marginPx : DEFAULT_WEBCAM_MARGIN_PX,
+    ),
+    0,
+    Math.max(0, Math.floor(Math.min(frameWidth, frameHeight) / 2)),
+  );
+}
+
 export function computeWebcamLayout(
   frameWidth: number,
   frameHeight: number,
@@ -57,13 +72,7 @@ export function computeWebcamLayout(
     0.08,
     0.75,
   );
-  const margin = clamp(
-    Math.round(
-      Number.isFinite(webcamConfig.marginPx) ? webcamConfig.marginPx : DEFAULT_WEBCAM_MARGIN_PX,
-    ),
-    0,
-    Math.max(0, Math.floor(Math.min(frameWidth, frameHeight) / 2)),
-  );
+  const margin = resolveWebcamMarginPx(frameWidth, frameHeight, webcamConfig);
 
   let height = Math.max(1, Math.round(frameHeight * heightRatio));
   let width = Math.max(1, Math.round(height * aspectRatio));
@@ -96,5 +105,59 @@ export function computeWebcamLayout(
     width,
     height,
     scale: height / Math.max(1, frameHeight),
+  };
+}
+
+/**
+ * The box a webcam zoom region should use, at its own `heightRatio`.
+ *
+ * The anchor grid is only half the story. A webcam the user dragged on the
+ * preview carries an explicit `layout`, and the region path used to drop that
+ * and fall back to `anchor` -- which is still wherever it was before the drag.
+ * So a camera dragged to the bottom-right jumped to the middle the moment a
+ * region began and slid back at the end, having never been anchored centre in
+ * the first place.
+ *
+ * With a custom position the region resizes the box about its own centre, which
+ * is where the camera visibly is, then pushes it back inside the margin. A
+ * corner-parked camera therefore grows into its corner instead of off-frame.
+ */
+export function computeWebcamRegionLayout(
+  frameWidth: number,
+  frameHeight: number,
+  webcamConfig: WebcamOverlayConfig,
+  heightRatio: number,
+): VideoLayout {
+  // `layout` cleared so the size comes from `heightRatio` rather than handing
+  // back the rect already resolved for the base.
+  const resized = computeWebcamLayout(frameWidth, frameHeight, {
+    ...webcamConfig,
+    heightRatio,
+    layout: undefined,
+  });
+
+  const custom = webcamConfig.layout;
+  if (!custom) {
+    return resized;
+  }
+
+  const margin = resolveWebcamMarginPx(frameWidth, frameHeight, webcamConfig);
+  const centerX = custom.x + custom.width / 2;
+  const centerY = custom.y + custom.height / 2;
+
+  // `computeWebcamLayout` already caps the box at the frame less both margins,
+  // so these ranges are never inverted.
+  return {
+    ...resized,
+    x: clamp(
+      Math.round(centerX - resized.width / 2),
+      margin,
+      Math.max(margin, frameWidth - margin - resized.width),
+    ),
+    y: clamp(
+      Math.round(centerY - resized.height / 2),
+      margin,
+      Math.max(margin, frameHeight - margin - resized.height),
+    ),
   };
 }

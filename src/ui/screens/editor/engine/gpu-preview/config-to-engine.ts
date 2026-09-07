@@ -23,6 +23,7 @@ import type { Project } from '@/types';
 import {
   computeVideoLayout,
   computeWebcamLayout,
+  computeWebcamRegionLayout,
   isInCutRegion,
   mapSourceTimeToCompositionTimeMs,
 } from '../functions';
@@ -222,13 +223,7 @@ function toEngineWebcamZoomRegions(
       Math.max(0.08, explicit ?? baseHeightRatio * Math.max(0.1, zoomLevel)),
     );
 
-    // `layout` cleared so the box is recomputed at the region's height rather
-    // than handing back the one already resolved for the base.
-    const box = computeWebcamLayout(canvas.width, canvas.height, {
-      ...webcam,
-      heightRatio: target,
-      layout: undefined,
-    });
+    const box = computeWebcamRegionLayout(canvas.width, canvas.height, webcam, target);
 
     return {
       startMs: region.startMs,

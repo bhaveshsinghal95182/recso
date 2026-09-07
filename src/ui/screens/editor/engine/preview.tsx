@@ -43,7 +43,7 @@ const GPU_CANVAS_SELECTOR = '#gpu-preview-canvas';
 export function EnginePreview() {
   const { project, mouseEvents, updateWebcamOverlay } = useProjectStore();
   const { zoomRegions, zoomRegionsBySource, cuts, focus, updateZoom } = useTimelineStore();
-  const { isPlaying, currentTime, play, pause, setDuration } = usePlaybackStore();
+  const { isPlaying, currentTime, play, pause, finish, setDuration } = usePlaybackStore();
   const screenZoomRegions = zoomRegionsBySource.screen;
   const webcamZoomRegions = zoomRegionsBySource.webcam;
 
@@ -175,8 +175,29 @@ export function EnginePreview() {
     if (!useGpuEngine || !isPlaying) {
       return;
     }
-    usePlaybackStore.setState({ currentTime: gpu.currentTimeMs });
-  }, [useGpuEngine, isPlaying, gpu.currentTimeMs]);
+
+    // The engine stops its own clock once the decoder is done and the frame
+    // queue has drained. Nothing else tells the transport that, so without this
+    // the editor stayed in "playing" forever after the recording ended.
+    //
+    // Both halves matter: `playing` is false before the first tick lands too, and
+    // `endOfStream` is what separates "finished" from "not started yet". It is
+    // cleared on seek, so this cannot latch.
+    if (gpu.endOfStream && !gpu.playing) {
+      // Rewinds as well as stops, so skip the position sync below -- it would
+      // only put the playhead back at the end we are leaving.
+      finish();
+      return;
+    }
+
+    // `seek` rather than a raw `setState`: the engine clamps its clock to the
+    // duration the *decoder* reports, which can sit a frame past the length the
+    // editor derived from the project. Writing that straight into the store put
+    // `currentTime` above `duration`, and the timeline positions the playhead at
+    // `currentTime / duration` with no clamp of its own -- so it walked off the
+    // right-hand edge. Going through the action clamps both to the same number.
+    usePlaybackStore.getState().seek(gpu.currentTimeMs);
+  }, [useGpuEngine, isPlaying, gpu.currentTimeMs, gpu.endOfStream, gpu.playing, finish]);
 
   /**
    * Sound, while the engine draws the picture.

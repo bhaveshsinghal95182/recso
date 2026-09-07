@@ -11,6 +11,8 @@ interface PlaybackState {
   // Actions
   play: () => void;
   pause: () => void;
+  /** Playback ran to the end of the timeline. */
+  finish: () => void;
   seek: (timeMs: number) => void;
   setDuration: (duration: number) => void;
   tick: (deltaOrTimeMs: number, mode?: 'delta' | 'absolute') => void;
@@ -37,6 +39,17 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
 
   pause: () => set({ isPlaying: false }),
 
+  /**
+   * Stop and rewind.
+   *
+   * Parking the playhead at the far right left the transport in a state with
+   * nowhere to go: the only thing pressing play could do was jump back to the
+   * start anyway. Doing it here means the timeline shows where the next play
+   * will actually begin, and every clock -- the `<video>` element or the native
+   * engine -- resolves the same way.
+   */
+  finish: () => set({ currentTime: 0, isPlaying: false }),
+
   seek: (timeMs) => {
     const { duration } = get();
     // If duration is unknown (0), treat it as unbounded for seeking.
@@ -57,7 +70,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       }
 
       if (state.duration > 0 && nextTime >= state.duration) {
-        return { currentTime: state.duration, isPlaying: false };
+        return { currentTime: 0, isPlaying: false };
       }
       return { currentTime: Math.max(0, nextTime) };
     });

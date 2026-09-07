@@ -17,6 +17,7 @@ import {
   type RegionVariant,
   TimelineRegion,
 } from '@/screens/editor/timeline-region';
+import { timeToPercent as toTimelinePercent } from '@/screens/editor/timeline-scale';
 import { TimelineWaveform } from '@/screens/editor/timeline-waveform';
 import { usePlaybackStore } from '@/store/playback-store';
 import { useProjectStore } from '@/store/project-store';
@@ -242,7 +243,7 @@ export function Timeline() {
   }, [duration, majorInterval, minorInterval]);
 
   // Convert time to percentage position
-  const timeToPercent = (time: number) => (duration > 0 ? (time / duration) * 100 : 0);
+  const timeToPercent = (time: number) => toTimelinePercent(time, duration);
 
   // Convert clientX to time
   const clientXToTime = useCallback(

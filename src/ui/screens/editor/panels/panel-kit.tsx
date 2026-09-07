@@ -137,6 +137,33 @@ export function Segmented<T extends string>({
   );
 }
 
+/**
+ * A reference point drawn on a slider's track. Absolute sliders ("webcam height
+ * is 40% of the canvas") are hard to read on their own because nothing tells you
+ * where the value you started from sits, so a marker turns the track into a
+ * before/after comparison: left of the tick shrinks, right of it grows.
+ */
+export interface PanelSliderMarker {
+  value: number;
+  /** Shown under the tick. Keep it to a word or two - the track is narrow. */
+  label?: string;
+}
+
+/** Width of the range thumb in px, mirroring `size-3.5` in the class list. */
+const SLIDER_THUMB_PX = 14;
+
+/**
+ * The browser insets a range thumb by half its width at each end, so a raw
+ * percentage lands the marker slightly off from where the thumb actually stops.
+ * This applies the same inset the thumb gets.
+ */
+function markerOffset(value: number, min: number, max: number): string {
+  const span = max - min;
+  const fraction = span <= 0 ? 0 : Math.max(0, Math.min(1, (value - min) / span));
+
+  return `calc(${fraction * 100}% + ${(0.5 - fraction) * SLIDER_THUMB_PX}px)`;
+}
+
 /** Range input with a monospace readout, sharing one value formatter. */
 export function PanelSlider({
   label,
@@ -148,6 +175,7 @@ export function PanelSlider({
   format,
   disabled,
   hint,
+  marker,
 }: {
   label: string;
   value: number;
@@ -158,7 +186,10 @@ export function PanelSlider({
   format: (value: number) => string;
   disabled?: boolean;
   hint?: string;
+  marker?: PanelSliderMarker;
 }) {
+  const showMarker = Boolean(marker && marker.value >= min && marker.value <= max);
+
   return (
     <div className={cn('space-y-2', disabled && 'opacity-40')}>
       <div className="flex items-baseline justify-between gap-3">
@@ -166,23 +197,44 @@ export function PanelSlider({
         <span className="font-mono text-[12px] tabular-nums text-white/80">{format(value)}</span>
       </div>
 
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        disabled={disabled}
-        aria-label={label}
-        onChange={(event) => onChange(Number(event.target.value))}
-        className={cn(
-          'h-1.5 w-full cursor-pointer appearance-none rounded-full bg-white/10 disabled:cursor-not-allowed',
-          '[&::-webkit-slider-thumb]:size-3.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full',
-          '[&::-webkit-slider-thumb]:border [&::-webkit-slider-thumb]:border-white/30 [&::-webkit-slider-thumb]:bg-white',
-          '[&::-webkit-slider-thumb]:shadow-[0_1px_4px_rgba(0,0,0,0.5)] [&::-webkit-slider-thumb]:transition',
-          '[&::-webkit-slider-thumb]:hover:border-[#5eead4]/60',
+      <div className={cn('relative', showMarker && marker?.label && 'pb-4')}>
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          disabled={disabled}
+          aria-label={label}
+          onChange={(event) => onChange(Number(event.target.value))}
+          className={cn(
+            'relative z-10 h-1.5 w-full cursor-pointer appearance-none rounded-full bg-white/10 disabled:cursor-not-allowed',
+            '[&::-webkit-slider-thumb]:size-3.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full',
+            '[&::-webkit-slider-thumb]:border [&::-webkit-slider-thumb]:border-white/30 [&::-webkit-slider-thumb]:bg-white',
+            '[&::-webkit-slider-thumb]:shadow-[0_1px_4px_rgba(0,0,0,0.5)] [&::-webkit-slider-thumb]:transition',
+            '[&::-webkit-slider-thumb]:hover:border-[#5eead4]/60',
+          )}
+        />
+
+        {marker && showMarker && (
+          <>
+            <span
+              aria-hidden
+              className="pointer-events-none absolute top-1/2 z-0 h-3 w-px -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#5eead4]/70"
+              style={{ left: markerOffset(marker.value, min, max) }}
+            />
+            {marker.label ? (
+              <span
+                aria-hidden
+                className="pointer-events-none absolute top-[calc(50%+9px)] z-0 -translate-x-1/2 whitespace-nowrap text-[10px] leading-none text-[#5eead4]/60"
+                style={{ left: markerOffset(marker.value, min, max) }}
+              >
+                {marker.label}
+              </span>
+            ) : null}
+          </>
         )}
-      />
+      </div>
 
       {hint ? <p className="text-[11px] leading-snug text-white/35">{hint}</p> : null}
     </div>

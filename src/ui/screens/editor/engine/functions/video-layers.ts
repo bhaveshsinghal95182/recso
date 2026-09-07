@@ -6,7 +6,7 @@ import type {
   WebcamOverlayConfig,
 } from '../types';
 import { clamp, roundRectPath } from './common';
-import { computeWebcamLayout } from './layout';
+import { computeWebcamLayout, computeWebcamRegionLayout } from './layout';
 
 function beginWebcamShapePath(
   ctx: Canvas2DContext,
@@ -107,10 +107,23 @@ export function drawWebcamLayer(
   activeWebcamFullScreenProgress = 0,
 ): void {
   // When a zoom region overrides the webcam height ratio, create a modified
-  // config copy that forces layout recalculation with the new ratio.
+  // config copy that forces layout recalculation with the new ratio. A camera
+  // the user dragged keeps its position through the region rather than snapping
+  // back to the anchor grid, so the resolved rect is handed straight back.
   const baseConfig =
     activeWebcamHeightRatio !== undefined
-      ? { ...webcamConfig, heightRatio: activeWebcamHeightRatio, layout: undefined }
+      ? {
+          ...webcamConfig,
+          heightRatio: activeWebcamHeightRatio,
+          layout: webcamConfig.layout
+            ? computeWebcamRegionLayout(
+                frameWidth,
+                frameHeight,
+                webcamConfig,
+                activeWebcamHeightRatio,
+              )
+            : undefined,
+        }
       : webcamConfig;
   const progress = clamp(activeWebcamFullScreenProgress, 0, 1);
 

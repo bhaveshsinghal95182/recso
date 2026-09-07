@@ -57,6 +57,17 @@ import {
   PanelSlider,
   Segmented,
 } from './panel-kit';
+import {
+  GROW_ZOOM_CEILING,
+  GROW_ZOOM_STEP,
+  isGrowSaturated,
+  MAX_HEIGHT_RATIO,
+  MIN_HEIGHT_RATIO,
+  type RegionSizeMode,
+  resolveGrowMaxZoom,
+  resolveRegionHeightRatio,
+  resolveRegionSizeMode,
+} from './webcam-region-sizing';
 
 const DEFAULT_WEBCAM_ANCHOR: WebcamOverlayAnchor = 'bottom-right';
 const DEFAULT_WEBCAM_SIZE: WebcamOverlaySize = 'medium';
@@ -66,12 +77,8 @@ const DEFAULT_WEBCAM_BORDER_RADIUS_PX = 24;
 
 const MIN_ASPECT_RATIO = 0.2;
 const MAX_ASPECT_RATIO = 5;
-const MIN_HEIGHT_RATIO = 0.08;
-const MAX_HEIGHT_RATIO = 0.75;
 
 type WebcamSizeOption = WebcamOverlaySize | 'custom';
-/** How a webcam zoom region decides the webcam's size while it runs. */
-type RegionSizeMode = 'grow' | 'exact' | 'fill';
 
 interface IconOption<T extends string> {
   value: T;
@@ -93,11 +100,21 @@ const SIZE_OPTIONS: { value: WebcamSizeOption; label: string }[] = [
   { value: 'custom', label: 'Custom' },
 ];
 
-const REGION_MODE_OPTIONS: { value: RegionSizeMode; label: string; hint: string }[] = [
-  { value: 'grow', label: 'Grow', hint: 'Scale the webcam by the zoom level' },
-  { value: 'exact', label: 'Exact', hint: 'Pin the webcam to a specific size' },
-  { value: 'fill', label: 'Fill frame', hint: 'Webcam takes over the whole canvas' },
-];
+function regionModeOptions(
+  growIsSaturated: boolean,
+): { value: RegionSizeMode; label: string; hint: string }[] {
+  return [
+    {
+      value: 'grow',
+      label: 'Grow',
+      hint: growIsSaturated
+        ? 'Unavailable: the webcam is already at its maximum size'
+        : 'Scale the webcam by the zoom level',
+    },
+    { value: 'exact', label: 'Exact', hint: 'Pin the webcam to a specific size' },
+    { value: 'fill', label: 'Fill frame', hint: 'Webcam takes over the whole canvas' },
+  ];
+}
 
 const SHAPE_ASPECT_RATIO: Record<WebcamOverlayShape, number> = {
   circle: 1,
@@ -214,36 +231,6 @@ function shapeFromAspectRatio(aspectRatio: number): WebcamOverlayShape {
   return aspectRatio > 1.05 ? 'rectangle-landscape' : 'rectangle-portrait';
 }
 
-/** Which of the three exclusive sizing modes a region is currently in. */
-function resolveRegionSizeMode(region: ZoomRegion | undefined): RegionSizeMode {
-  if (!region) {
-    return 'grow';
-  }
-
-  if (region.webcamFullScreen === true) {
-    return 'fill';
-  }
-
-  return Number.isFinite(region.webcamHeightRatio) ? 'exact' : 'grow';
-}
-
-/** The size a region resolves to, mirroring computeActiveWebcamHeightRatio. */
-function resolveRegionHeightRatio(region: ZoomRegion | undefined, baseHeightRatio: number): number {
-  if (!region) {
-    return clamp(baseHeightRatio, MIN_HEIGHT_RATIO, MAX_HEIGHT_RATIO);
-  }
-
-  if (Number.isFinite(region.webcamHeightRatio)) {
-    return clamp(region.webcamHeightRatio as number, MIN_HEIGHT_RATIO, MAX_HEIGHT_RATIO);
-  }
-
-  return clamp(
-    baseHeightRatio * Math.max(0.1, region.zoomLevel),
-    MIN_HEIGHT_RATIO,
-    MAX_HEIGHT_RATIO,
-  );
-}
-
 /**
  * The phone-as-webcam flow is UI-only for now: there is no signalling service, no
  * WebRTC transport and no IPC behind it (see
@@ -346,6 +333,42 @@ export function WebcamPanel() {
   );
 
   const regionMode = resolveRegionSizeMode(selectedRegion);
+
+  const growMaxZoom = useMemo(() => resolveGrowMaxZoom(currentHeightRatio), [currentHeightRatio]);
+  /** True when the base size already sits at the ceiling, so Grow has nowhere to go. */
+  const growIsSaturated = isGrowSaturated(currentHeightRatio);
+  /** The stored zoom can exceed the usable range on an older region; show what actually applies. */
+  const growZoom = clamp(localRegionZoom, 1, growMaxZoom);
+
+  const growHint = useMemo(() => {
+    const reachedPct = Math.round(
+      clamp(currentHeightRatio * growZoom, MIN_HEIGHT_RATIO, MAX_HEIGHT_RATIO) * 100,
+    );
+
+    if (growMaxZoom < GROW_ZOOM_CEILING) {
+      return `Webcam reaches ${reachedPct}% of canvas height. From a ${Math.round(
+        currentHeightRatio * 100,
+      )}% base, ${growMaxZoom.toFixed(1)}x is as far as it goes before the ${Math.round(
+        MAX_HEIGHT_RATIO * 100,
+      )}% ceiling.`;
+    }
+
+    return `Webcam reaches ${reachedPct}% of canvas height.`;
+  }, [currentHeightRatio, growMaxZoom, growZoom]);
+
+  const exactHint = useMemo(() => {
+    const basePct = Math.round(currentHeightRatio * 100);
+    const targetPct = Math.round(localRegionSize * 100);
+
+    if (targetPct === basePct) {
+      return `Same as the ${basePct}% base size — the webcam holds still through this region.`;
+    }
+
+    const multiplier = localRegionSize / Math.max(currentHeightRatio, 0.0001);
+    const direction = targetPct > basePct ? 'Grows' : 'Shrinks';
+
+    return `${direction} from the ${basePct}% base to ${targetPct}% (${multiplier.toFixed(2)}x).`;
+  }, [currentHeightRatio, localRegionSize]);
 
   useEffect(() => {
     const parts = ratioToParts(currentAspectRatio);
@@ -735,31 +758,38 @@ export function WebcamPanel() {
             {selectedRegion ? (
               <>
                 <Segmented
-                  options={REGION_MODE_OPTIONS}
+                  options={regionModeOptions(growIsSaturated)}
                   value={regionMode}
                   onChange={handleRegionModeChange}
                 />
 
                 {regionMode === 'grow' && (
-                  <PanelSlider
-                    label="Zoom level"
-                    value={localRegionZoom}
-                    min={1}
-                    max={5}
-                    step={0.1}
-                    onChange={(value) => {
-                      setLocalRegionZoom(value);
-                      commitRegion({ zoomLevel: value });
-                    }}
-                    format={(value) => `${value.toFixed(1)}x`}
-                    hint={`Webcam reaches ${Math.round(
-                      clamp(
-                        currentHeightRatio * Math.max(0.1, localRegionZoom),
-                        MIN_HEIGHT_RATIO,
-                        MAX_HEIGHT_RATIO,
-                      ) * 100,
-                    )}% of canvas height.`}
-                  />
+                  <>
+                    <PanelSlider
+                      label="Zoom level"
+                      value={growZoom}
+                      min={1}
+                      max={growIsSaturated ? 2 : growMaxZoom}
+                      step={GROW_ZOOM_STEP}
+                      disabled={growIsSaturated}
+                      onChange={(value) => {
+                        const next = clamp(value, 1, growMaxZoom);
+                        setLocalRegionZoom(next);
+                        commitRegion({ zoomLevel: next });
+                      }}
+                      format={(value) => `${value.toFixed(1)}x`}
+                      hint={growIsSaturated ? undefined : growHint}
+                    />
+
+                    {growIsSaturated && (
+                      <PanelNote>
+                        Grow scales the base size, but at {Math.round(currentHeightRatio * 100)}% it
+                        leaves no usable room under the {Math.round(MAX_HEIGHT_RATIO * 100)}% canvas
+                        height ceiling. Shrink the base size above, switch to Exact to pick a size
+                        directly, or use Fill frame to cover the whole canvas.
+                      </PanelNote>
+                    )}
+                  </>
                 )}
 
                 {regionMode === 'exact' && (
@@ -769,12 +799,14 @@ export function WebcamPanel() {
                     min={MIN_HEIGHT_RATIO * 100}
                     max={MAX_HEIGHT_RATIO * 100}
                     step={1}
+                    marker={{ value: Math.round(currentHeightRatio * 100), label: 'Base' }}
                     onChange={(value) => {
                       const ratio = clamp(value / 100, MIN_HEIGHT_RATIO, MAX_HEIGHT_RATIO);
                       setLocalRegionSize(ratio);
                       commitRegion({ webcamHeightRatio: ratio });
                     }}
                     format={(value) => `${Math.round(value)}% of canvas`}
+                    hint={exactHint}
                   />
                 )}
 

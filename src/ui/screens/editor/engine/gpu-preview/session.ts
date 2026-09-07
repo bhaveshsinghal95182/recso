@@ -30,6 +30,19 @@ export interface GpuPreviewState {
   currentTimeMs: number;
   /** The edit's length: the file's duration less what has been cut. */
   durationMs: number;
+  /**
+   * Whether the engine's own clock is still running.
+   *
+   * The engine stops itself once the decoder is finished and the frame queue has
+   * drained, and this is the only way the editor finds out. Without it the
+   * transport stays stuck in "playing" after the recording ends.
+   */
+  playing: boolean;
+  /**
+   * The decoder has reached the end of the file. Cleared on seek, so it reads as
+   * "playback finished" rather than "this player has finished once".
+   */
+  endOfStream: boolean;
 }
 
 export interface UseGpuPreviewOptions {
@@ -63,6 +76,8 @@ export function useGpuPreview({
     error: null,
     currentTimeMs: 0,
     durationMs: 0,
+    playing: false,
+    endOfStream: false,
   });
 
   const openRef = useRef(false);
@@ -190,9 +205,16 @@ export function useGpuPreview({
       .then((result) => {
         if (result) {
           setState((previous) =>
-            previous.currentTimeMs === result.currentTime
+            previous.currentTimeMs === result.currentTime &&
+            previous.playing === result.playing &&
+            previous.endOfStream === result.endOfStream
               ? previous
-              : { ...previous, currentTimeMs: result.currentTime },
+              : {
+                  ...previous,
+                  currentTimeMs: result.currentTime,
+                  playing: result.playing,
+                  endOfStream: result.endOfStream,
+                },
           );
         }
       })

@@ -112,22 +112,45 @@ check(
 // its own slop -- capture startup latency, the encoder's timeline base, the
 // tail sample -- and none of it is observable from the other side.
 //
-// Measured across runs the delta ranged +658ms to -518ms with no relationship
-// to frame rate (it was -402ms at 12fps, where a frame is 81ms), so this is a
-// few hundred ms of independent slop, not a frame-granularity effect. Asserting
-// tight agreement would be asserting something that is not true of the system.
+// The slop is absolute, not proportional, so a ratio is the wrong shape for it:
+// the same few hundred ms that is nothing across a minute is a third of a two
+// second clip. Worse, on a quiet desktop there is nothing to take a ratio of.
+// Windows delivers a frame only when the screen changes, so a static desktop
+// hands the encoder a single frame and the file is legitimately 33ms long for
+// a two second capture -- which is the whole reason `duration_ms` is measured
+// on the wall clock instead of read out of the stream.
 //
-// What is worth checking is that they describe the same recording at all: same
-// order of magnitude, no factor-of-two error from a units or timebase mistake.
-const durationDeltaMs = screen.durationMs - info.duration;
-const durationRatio = info.duration > 0 ? screen.durationMs / info.duration : 0;
+// So the container being shorter than the capture is not a defect, and the two
+// things that would be are checked instead: a container claiming time that was
+// never captured, and frames that do not fit the timeline holding them.
+// Positive means the container claims time the capture never ran for, which is
+// the direction that indicates a bug. Negative is just a screen that sat still.
+const overshootMs = info.duration - screen.durationMs;
+
+// One tail sample at the rate capture actually ran, capped so a near-static
+// screen does not buy an unlimited budget.
+const tailMs = screen.fps > 0 ? Math.min(1000, 1000 / screen.fps) : 0;
+const slopMs = 900 + tailMs;
 
 check('both durations are real', info.duration > 0 && screen.durationMs > 0);
 check(
-  'durations describe the same recording',
-  durationRatio > 0.75 && durationRatio < 1.35,
-  `capture ${screen.durationMs.toFixed(0)}ms vs container ${info.duration.toFixed(0)}ms ` +
-    `(delta ${durationDeltaMs.toFixed(0)}ms, ratio ${durationRatio.toFixed(2)})`,
+  'the container claims no more time than was captured',
+  overshootMs <= slopMs,
+  `container ${info.duration.toFixed(0)}ms vs capture ${screen.durationMs.toFixed(0)}ms ` +
+    `(over by ${overshootMs.toFixed(0)}ms of ${slopMs.toFixed(0)}ms allowed)`,
+);
+
+// The other half of the old ratio check, and the half a static screen cannot
+// fake: however few frames capture produced, they have to fit the container's
+// timeline at a rate capture could have produced them at. A seconds/ms mix-up
+// on the timebase makes the container 1000x too short, which shows up here as
+// an impossible frame rate rather than as a plausibly quiet desktop.
+const containerFps = info.duration > 0 ? screen.frames / (info.duration / 1000) : Infinity;
+check(
+  'the frames fit the container timeline',
+  containerFps <= screen.configuredFps * 1.5 + 1,
+  `${screen.frames} frame(s) over ${info.duration.toFixed(0)}ms is ${containerFps.toFixed(1)}fps, ` +
+    `captured at up to ${screen.configuredFps}`,
 );
 
 console.log(
@@ -151,14 +174,28 @@ const first = await waitFrame();
 check('first frame decodes', first !== null, first ? `pts ${first.pts.toFixed(1)}ms` : '');
 check('frame is presentable', first?.texture?.pixelFormat === 'bgra', first?.texture?.pixelFormat);
 
-// Seek using the recorder's duration rather than the container's.
+// Seek using the recorder's duration rather than the container's, because that
+// is the number the editor puts on its timeline.
+//
+// A seek lands on the frame covering the target, and on a variable-rate capture
+// that frame can have started a long way before it -- half a second on a quiet
+// desktop, and the whole recording when the screen never changed and there is
+// a single frame to land on. So the target is clamped to what the file actually
+// holds, and the tolerance carries one frame at the rate capture really ran
+// rather than at the container's nominal one.
 const target = screen.durationMs * 0.5;
+const reachable = Math.min(target, info.duration);
+const captureFrameMs = screen.fps > 0 ? 1000 / screen.fps : 0;
+
 player.seek(target, true);
 const seeked = await waitFrame();
 check(
   'seek to the recorder-reported midpoint lands',
-  seeked !== null && Math.abs(target - seeked.pts) < 250,
-  seeked ? `target ${target.toFixed(0)}ms -> ${seeked.pts.toFixed(0)}ms` : 'no frame',
+  seeked !== null && Math.abs(reachable - seeked.pts) < 250 + captureFrameMs,
+  seeked
+    ? `target ${target.toFixed(0)}ms -> ${seeked.pts.toFixed(0)}ms` +
+        (reachable < target ? ` (clamped to the ${info.duration.toFixed(0)}ms the file holds)` : '')
+    : 'no frame',
 );
 
 player.close();
