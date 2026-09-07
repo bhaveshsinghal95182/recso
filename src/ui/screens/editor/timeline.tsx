@@ -10,8 +10,10 @@ import { MousePointer2, Scissors, Video, ZoomIn } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { useSpritesheets } from '@/hooks/useSpritesheets';
 import { cn } from '@/lib/utils';
 import { deriveCursorTimelineRegions } from '@/screens/editor/cursor-timeline-regions';
+import { TimelineFilmstrip } from '@/screens/editor/timeline-filmstrip';
 import {
   regionAccentText,
   type RegionVariant,
@@ -28,7 +30,7 @@ import {
   useTimelineStore,
 } from '@/store/timeline-store';
 import { useUIStore } from '@/store/ui-store';
-import type { CutRegion, ZoomSource } from '@/types';
+import type { CutRegion, SpritesheetMeta, ZoomSource } from '@/types';
 
 /** Width of the fixed label column that fronts the ruler and every lane. */
 const LANE_GUTTER_PX = 112;
@@ -89,6 +91,8 @@ interface LaneConfig {
   label: string;
   kind: RegionVariant;
   videoPath: string | null;
+  /** The lane's thumbnail sheet, absent until one has been generated. */
+  sheet?: SpritesheetMeta;
   regionCount: number;
   regions: ReactNode;
   emptyHint: string;
@@ -207,6 +211,9 @@ export function Timeline() {
     project?.webcamOverlay?.enabled && project?.webcamOverlay?.sourcePath,
   );
   const webcamVideoPath = project?.webcamOverlay?.sourcePath ?? null;
+  // Arrives after the editor does -- a fresh recording's sheets are still
+  // decoding while the timeline is already interactive.
+  const spritesheets = useSpritesheets();
   const screenVideoPath = project?.rawVideoPath ?? null;
   const screenCuts = useMemo(() => cuts.filter((cut) => hasCutOnLane(cut, 'screen')), [cuts]);
   const webcamCuts = useMemo(() => cuts.filter((cut) => hasCutOnLane(cut, 'webcam')), [cuts]);
@@ -656,6 +663,7 @@ export function Timeline() {
       label: lane === 'screen' ? 'Screen' : 'Webcam',
       kind: 'cut',
       videoPath: lane === 'screen' ? screenVideoPath : webcamVideoPath,
+      sheet: spritesheets[lane],
       regionCount: laneCuts.length,
       emptyHint: 'Double-click to add a cut',
       onDoubleClick: (event) => handleAddCutAtTime(clientXToTime(event.clientX), lane),
@@ -906,6 +914,8 @@ export function Timeline() {
                       style={{ height: LANE_HEIGHT_PX }}
                       onDoubleClick={lane.onDoubleClick}
                     >
+                      <TimelineFilmstrip sheet={lane.sheet} durationMs={duration} />
+
                       {lane.videoPath ? <TimelineWaveform videoPath={lane.videoPath} /> : null}
 
                       {lane.regionCount === 0 ? (

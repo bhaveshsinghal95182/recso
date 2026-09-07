@@ -32,6 +32,7 @@ import type {
   ZoomSource,
 } from '../types/project.types.js';
 import { DEFAULT_CURSOR_CONFIG, DEFAULT_ZOOM_CONFIG } from '../types/project.types.js';
+import type { SpritesheetsBySource } from '../types/spritesheet.types.js';
 import type { ZoomRegion } from '../types/zoom.types.js';
 import { findClosestEventInWindow } from '../util.js';
 import * as CompositorService from './compositor.service.js';
@@ -41,6 +42,7 @@ import { type MouseEvent, mouseTrackerService } from './mouse-tracker.service.js
 import * as projectStorage from './project-storage.service.js';
 import { upsertRecentProject } from './recent-projects.service.js';
 import { whenFinalized } from './recorder.service.js';
+import { ensureSpritesheets } from './spritesheet.service.js';
 
 // Active project (only one at a time)
 let activeProject: Project | null = null;
@@ -299,6 +301,8 @@ function normalizeProjectData(project: Project): Project {
   project.zoomRegionsBySource = zoomRegionsBySource;
   project.zoomRegions = zoomRegionsBySource.screen;
   project.timelineLayers = normalizeTimelineLayers(project.timelineLayers);
+  // Written before sheets were kept by source, or before they existed at all.
+  project.spritesheets = project.spritesheets ?? {};
 
   return project;
 }
@@ -420,8 +424,9 @@ export async function createProject(recordingId: string): Promise<Project | null
   // Get the recording directory and init .recso folder
   const projectFolderPath = projectStorage.initProjectFolder(recordingDir);
 
-  // Try to load existing spritesheet metadata
-  const spritesheetMeta = projectStorage.loadSpritesheetMeta(projectFolderPath);
+  // Whatever sheets a previous session left behind. Anything stale or missing
+  // is rebuilt by the kickoff below, after the project is already open.
+  const spritesheets = projectStorage.loadSpritesheets(projectFolderPath);
 
   const project: Project = normalizeProjectData({
     id: randomUUID(),
@@ -434,7 +439,7 @@ export async function createProject(recordingId: string): Promise<Project | null
     cursorConfig: { ...DEFAULT_CURSOR_CONFIG },
     cursorRegionOverrides: [],
     zoomConfig: { ...DEFAULT_ZOOM_CONFIG },
-    spritesheetMeta,
+    spritesheets,
     backgroundColor: '#000000',
     backgroundPattern: null,
     backgroundMode: 'color',
@@ -468,7 +473,68 @@ export async function createProject(recordingId: string): Promise<Project | null
     recordingId,
   });
 
+  kickOffSpritesheets(project);
+
   return project;
+}
+
+type SpritesheetListener = (sheets: SpritesheetsBySource) => void;
+
+const spritesheetListeners = new Set<SpritesheetListener>();
+
+/**
+ * Subscribe to sheets finishing.
+ *
+ * The service raises the event rather than pushing to a window itself: it has
+ * no business knowing there is a renderer. `editor.ipc.ts` holds the window
+ * and forwards.
+ */
+export function onSpritesheetsUpdated(listener: SpritesheetListener): () => void {
+  spritesheetListeners.add(listener);
+  return () => {
+    spritesheetListeners.delete(listener);
+  };
+}
+
+/** The active project's sheets, or nothing if there is no project open. */
+export function getSpritesheets(): SpritesheetsBySource {
+  return activeProject?.spritesheets ?? {};
+}
+
+/**
+ * Start building this project's thumbnail sheets, and do not wait for them.
+ *
+ * Deliberately not awaited by either caller. A sheet takes a full decode pass
+ * of the recording -- seconds on a short take, longer on a long one -- and
+ * blocking project open on that would trade a working editor for a prettier
+ * timeline. The lanes draw empty until the event lands.
+ */
+function kickOffSpritesheets(project: Project): void {
+  void ensureSpritesheets(project)
+    .then((sheets) => {
+      // The user can close this project, or open another, while the decode
+      // runs. Writing the result onto whatever is active now would put one
+      // recording's thumbnails on another's timeline.
+      if (!activeProject || activeProject.id !== project.id) {
+        return;
+      }
+
+      activeProject.spritesheets = sheets;
+      projectStorage.saveProjectMetadata(activeProject);
+
+      for (const listener of spritesheetListeners) {
+        try {
+          listener(sheets);
+        } catch (error) {
+          console.warn('[EditorService] Spritesheet listener threw:', error);
+        }
+      }
+    })
+    .catch((error) => {
+      // ensureSpritesheets already swallows per-source failures, so reaching
+      // here means something outside the loop broke. Still not fatal.
+      console.error('[EditorService] Spritesheet generation failed:', error);
+    });
 }
 
 /**
@@ -537,6 +603,8 @@ export function loadProject(recordingDir: string): Project | null {
       path: recordingDir,
       recordingId: project.recordingId,
     });
+
+    kickOffSpritesheets(project);
 
     console.log('[EditorService] Loaded project:', project.id);
     return project;

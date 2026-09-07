@@ -44,6 +44,8 @@ mod player;
 #[cfg(windows)]
 mod render;
 #[cfg(windows)]
+mod spritesheet;
+#[cfg(windows)]
 pub mod zoom;
 
 /// Cross-module scenarios: the tracks composed the way the render chain

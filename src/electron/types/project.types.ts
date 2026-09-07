@@ -9,7 +9,7 @@
  */
 import type { BackgroundMode, BackgroundPatternConfig } from './background.types.js';
 import type { CutRegion } from './cut.types.js';
-import type { SpritesheetMeta } from './spritesheet.types.js';
+import type { SpritesheetsBySource } from './spritesheet.types.js';
 import type { ZoomRegion } from './zoom.types.js';
 
 export type CursorStyle = 'default' | 'pointer' | 'crosshair' | 'custom';
@@ -186,8 +186,8 @@ export interface Project {
   cursorRegionOverrides?: CursorRegionOverride[];
   /** Zoom configuration */
   zoomConfig: ZoomConfig;
-  /** Spritesheet metadata for timeline thumbnails (null if not generated) */
-  spritesheetMeta: SpritesheetMeta | null;
+  /** Timeline thumbnail sheets, keyed by source. Empty until generated. */
+  spritesheets: SpritesheetsBySource;
   /** Optional background image path */
   backgroundPath?: string;
   /** Background color (hex) */

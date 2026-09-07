@@ -328,13 +328,12 @@ electron.contextBridge.exposeInMainWorld('electron', {
     projectExists: (recordingDir: string): Promise<boolean> =>
       electron.ipcRenderer.invoke('editor:project-exists', recordingDir),
 
-    getSpritesheetMeta: () => electron.ipcRenderer.invoke('editor:get-spritesheet-meta'),
+    /** Timeline thumbnail sheets by source. Usually empty right after open. */
+    getSpritesheets: () => electron.ipcRenderer.invoke('editor:get-spritesheets'),
 
-    getSpritesheetPath: (): Promise<string | null> =>
-      electron.ipcRenderer.invoke('editor:get-spritesheet-path'),
-
-    generateSpritesheet: (intervalMs?: number) =>
-      electron.ipcRenderer.invoke('editor:generate-spritesheet', intervalMs),
+    /** Fires when a sheet finishes generating. Returns an unsubscribe. */
+    onSpritesheetsUpdated: (callback: (sheets: unknown) => void) =>
+      createSubscription('editor:spritesheets-updated', callback),
 
     /** Get all cut regions */
     getCuts: () => electron.ipcRenderer.invoke('editor:get-cuts'),

@@ -98,6 +98,15 @@ const checks = [
       return { args: [clip, '--export', path.join(workDir, 'engine-export.mp4')], note };
     },
   },
+  {
+    name: 'spritesheet',
+    script: 'spritesheet-check.mjs',
+    args: [String(recordSeconds)],
+    // Records its own source rather than reading `sourceClip`: the sheet's
+    // geometry comes from the file's duration, and it falls back to a synthetic
+    // clip on its own when the desktop sat still.
+    note: 'builds a timeline filmstrip and reads its pixels back',
+  },
   { name: 'composition', script: 'composition-check.mjs', args: [], note: 'needs a camera' },
   {
     name: 'export-composition',

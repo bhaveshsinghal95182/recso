@@ -713,6 +713,7 @@ module.exports.captureCursorSamplesJson = nativeBinding.captureCursorSamplesJson
 module.exports.captureCursorSnapshotJson = nativeBinding.captureCursorSnapshotJson
 module.exports.engineVersion = nativeBinding.engineVersion
 module.exports.generateSelfSignedCertificate = nativeBinding.generateSelfSignedCertificate
+module.exports.generateSpritesheet = nativeBinding.generateSpritesheet
 module.exports.gpuDecoderProfiles = nativeBinding.gpuDecoderProfiles
 module.exports.gpuMemory = nativeBinding.gpuMemory
 module.exports.isCursorSettingsSupported = nativeBinding.isCursorSettingsSupported

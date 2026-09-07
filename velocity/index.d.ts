@@ -563,6 +563,23 @@ export interface FrameResult {
  */
 export declare function generateSelfSignedCertificate(hosts: Array<string>): SelfSignedCertificate
 
+/**
+ * Build the timeline filmstrip for a recording and write it to `output` as a
+ * PNG.
+ *
+ * Returns a promise because this is called from the Electron main process and
+ * takes seconds to tens of seconds -- it decodes the whole file once. Blocking
+ * would freeze every window in the app for the duration.
+ *
+ * Rejects rather than throws synchronously if the input is missing, is in a
+ * codec Media Foundation cannot open, or if the PNG cannot be written.
+ */
+export declare function generateSpritesheet(
+  input: string,
+  output: string,
+  options?: SpritesheetOptions | undefined | null,
+): Promise<SpritesheetInfo>
+
 /** Diagnostic: what can the GPU itself decode, independent of Media Foundation? */
 export declare function gpuDecoderProfiles(): Array<string>
 
@@ -883,6 +900,43 @@ export interface SourceCropSpec {
   left: number
   bottom: number
   right: number
+}
+
+/**
+ * The geometry of the sheet that was written, and where it went.
+ *
+ * `frameWidth`/`frameHeight` are one cell, not the whole PNG -- the PNG is
+ * `columns * frameWidth` by `rows * frameHeight`. The caller needs the cell
+ * size to position a background-image, and the grid to work out which cell a
+ * timeline instant lands in.
+ */
+export interface SpritesheetInfo {
+  frameCount: number
+  intervalMs: number
+  frameWidth: number
+  frameHeight: number
+  columns: number
+  rows: number
+  /**
+   * The *source's* duration, not the sheet's span. The last cell's boundary
+   * is at `(frameCount - 1) * intervalMs`, which is at or before this.
+   */
+  totalDurationMs: number
+  /**
+   * Echoes the `output` argument, so a caller holding only the promise still
+   * knows what to load.
+   */
+  imagePath: string
+}
+
+/**
+ * How much timeline filmstrip to build. Every field falls back to the engine's
+ * own default, which is 300 frames of 160px cells, ten to a row.
+ */
+export interface SpritesheetOptions {
+  maxFrames?: number
+  cellWidth?: number
+  maxColumns?: number
 }
 
 export declare function startMonitorRecordingV2(options: NativeRecordingOptions): Stopper

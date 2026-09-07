@@ -25,6 +25,7 @@
     "engine:cuts": "node velocity/scripts/cuts-check.mjs",
     "engine:pipeline": "node velocity/scripts/pipeline-check.mjs",
     "engine:check": "node velocity/scripts/engine-check.mjs",
+    "engine:spritesheet": "node velocity/scripts/spritesheet-check.mjs",
     "engine:composition": "node velocity/scripts/composition-check.mjs",
     "engine:export-composition": "node velocity/scripts/export-composition-check.mjs",
     "engine:audio": "node velocity/scripts/audio-check.mjs",

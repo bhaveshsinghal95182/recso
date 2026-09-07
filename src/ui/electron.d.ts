@@ -11,7 +11,7 @@ import type {
   Project,
   RecordedMouseEvent,
   RecordingConfig,
-  SpritesheetMeta,
+  SpritesheetsBySource,
   StartRecordingResult,
   StopRecordingResult,
   TimelineLayer,
@@ -764,14 +764,17 @@ interface ElectronAPI {
     /** Check if a project exists for recording directory */
     projectExists: (recordingDir: string) => Promise<boolean>;
 
-    /** Get spritesheet metadata */
-    getSpritesheetMeta: () => Promise<SpritesheetMeta | null>;
+    /**
+     * Timeline thumbnail sheets by source.
+     *
+     * Usually empty right after a project opens: generation is a full decode
+     * pass that runs behind the editor. Pair this with `onSpritesheetsUpdated`
+     * rather than treating an empty result as "this project has none".
+     */
+    getSpritesheets: () => Promise<SpritesheetsBySource>;
 
-    /** Get spritesheet image path */
-    getSpritesheetPath: () => Promise<string | null>;
-
-    /** Generate spritesheet for timeline thumbnails */
-    generateSpritesheet: (intervalMs?: number) => Promise<SpritesheetMeta | null>;
+    /** Fires when a sheet finishes generating. Returns an unsubscribe. */
+    onSpritesheetsUpdated: (callback: (sheets: SpritesheetsBySource) => void) => () => void;
 
     /** Get all cut regions */
     getCuts: () => Promise<CutRegion[]>;

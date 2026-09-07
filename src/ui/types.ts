@@ -214,7 +214,14 @@ export interface Timeline {
   tracks: TimelineTrack[];
 }
 
+/** Which of a recording's two video files a sheet was built from. */
+export type SpritesheetSource = 'screen' | 'webcam';
+
 export interface SpritesheetMeta {
+  source: SpritesheetSource;
+  /** Size and mtime of the source video when the sheet was built. */
+  sourceSizeBytes: number;
+  sourceModifiedMs: number;
   frameCount: number;
   intervalMs: number;
   frameWidth: number;
@@ -224,6 +231,12 @@ export interface SpritesheetMeta {
   totalDurationMs: number;
   imagePath: string;
 }
+
+/**
+ * The sheets a project has, by source. A source is absent until its sheet has
+ * finished generating, which is why every reader has to cope with a missing one.
+ */
+export type SpritesheetsBySource = Partial<Record<SpritesheetSource, SpritesheetMeta>>;
 
 /** A region of the video to be cut (excluded) from export */
 export interface CutRegion {
@@ -346,7 +359,8 @@ export interface Project {
   cursorConfig: CursorConfig;
   cursorRegionOverrides?: CursorRegionOverride[];
   zoomConfig: ZoomConfig;
-  spritesheetMeta: SpritesheetMeta | null;
+  /** Timeline thumbnail sheets, keyed by source. Empty until generated. */
+  spritesheets: SpritesheetsBySource;
   backgroundPath?: string;
   backgroundColor: string;
   backgroundPattern?: BackgroundPatternConfig | null;

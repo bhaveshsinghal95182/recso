@@ -5,7 +5,9 @@
 //! the class wrappers thin enough to read in one pass.
 
 use super::composite::{CursorSample, FitMode, OverlayShape, Rect, WebcamLayout, WebcamShadow};
-use super::{audio, cuts, d3d, decode, encode, exporter, pattern, player, render, zoom};
+use super::{
+  audio, cuts, d3d, decode, encode, exporter, pattern, player, render, spritesheet, zoom,
+};
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
@@ -1670,6 +1672,240 @@ impl VideoExporter {
   #[napi]
   pub fn cancel(&self) {
     self.inner.cancel();
+  }
+}
+
+/// How much timeline filmstrip to build. Every field falls back to the engine's
+/// own default, which is 300 frames of 160px cells, ten to a row.
+#[napi(object)]
+pub struct SpritesheetOptions {
+  pub max_frames: Option<u32>,
+  pub cell_width: Option<u32>,
+  pub max_columns: Option<u32>,
+}
+
+/// The geometry of the sheet that was written, and where it went.
+///
+/// `frameWidth`/`frameHeight` are one cell, not the whole PNG -- the PNG is
+/// `columns * frameWidth` by `rows * frameHeight`. The caller needs the cell
+/// size to position a background-image, and the grid to work out which cell a
+/// timeline instant lands in.
+#[napi(object)]
+pub struct SpritesheetInfo {
+  pub frame_count: u32,
+  pub interval_ms: f64,
+  pub frame_width: u32,
+  pub frame_height: u32,
+  pub columns: u32,
+  pub rows: u32,
+  /// The *source's* duration, not the sheet's span. The last cell's boundary
+  /// is at `(frameCount - 1) * intervalMs`, which is at or before this.
+  pub total_duration_ms: f64,
+  /// Echoes the `output` argument, so a caller holding only the promise still
+  /// knows what to load.
+  pub image_path: String,
+}
+
+/// Turn the JS options into a budget the planner will not divide by zero on.
+///
+/// `SheetPlan::for_source` clamps `cell_width` itself but takes `max_columns`
+/// at face value, and a zero there underflows the row count. Nothing in the
+/// app passes zero -- this is here because the surface is reachable from JS,
+/// where every number is a suggestion.
+fn sheet_budget(options: Option<SpritesheetOptions>) -> spritesheet::SheetBudget {
+  let defaults = spritesheet::SheetBudget::default();
+  let Some(options) = options else {
+    return defaults;
+  };
+  spritesheet::SheetBudget {
+    max_frames: options
+      .max_frames
+      .map(|value| value.max(1) as usize)
+      .unwrap_or(defaults.max_frames),
+    cell_width: options
+      .cell_width
+      .map(|value| value.max(1))
+      .unwrap_or(defaults.cell_width),
+    max_columns: options
+      .max_columns
+      .map(|value| value.max(1))
+      .unwrap_or(defaults.max_columns),
+  }
+}
+
+#[cfg(windows)]
+pub struct BuildSpritesheet {
+  input: String,
+  output: String,
+  budget: spritesheet::SheetBudget,
+}
+
+#[cfg(windows)]
+impl Task for BuildSpritesheet {
+  /// The plan the sheet was written at, plus the source duration -- which the
+  /// plan deliberately does not carry, since it is geometry and not timing.
+  type Output = (spritesheet::SheetPlan, f64);
+  type JsValue = SpritesheetInfo;
+
+  fn compute(&mut self) -> Result<Self::Output> {
+    // This runs on a libuv worker, which has never called `CoInitializeEx`.
+    // COM is per-thread and `mf::ensure_mf` initialises it exactly once for
+    // the whole process via a `Once`, so by the time a second thread gets
+    // here the flag is already tripped and nothing initialises *this* one --
+    // every Media Foundation call would come back `CO_E_NOTINITIALIZED`.
+    // Repeat calls with the same concurrency flag are documented to be fine
+    // and return S_FALSE, so this is unconditional.
+    unsafe {
+      use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+      let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+    }
+
+    // Opened twice on purpose. The duration has to come out of the file and
+    // `generate` returns geometry, not timing -- and doing it first means a
+    // missing or unreadable input rejects before any GPU work starts, which is
+    // the difference between a fast rejection and a slow one.
+    let duration_ms = {
+      let decoder = decode::Decoder::open(&self.input).map_err(win_err)?;
+      decoder.duration_100ns as f64 / 10_000.0
+    };
+
+    let plan =
+      spritesheet::generate(&self.input, &self.output, self.budget).map_err(win_err)?;
+
+    Ok((plan, duration_ms))
+  }
+
+  fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
+    let (plan, duration_ms) = output;
+    Ok(SpritesheetInfo {
+      frame_count: plan.frame_count as u32,
+      interval_ms: plan.interval_ms,
+      frame_width: plan.cell_width,
+      frame_height: plan.cell_height,
+      columns: plan.columns,
+      rows: plan.rows,
+      total_duration_ms: duration_ms,
+      image_path: std::mem::take(&mut self.output),
+    })
+  }
+}
+
+/// Build the timeline filmstrip for a recording and write it to `output` as a
+/// PNG.
+///
+/// Returns a promise because this is called from the Electron main process and
+/// takes seconds to tens of seconds -- it decodes the whole file once. Blocking
+/// would freeze every window in the app for the duration.
+///
+/// Rejects rather than throws synchronously if the input is missing, is in a
+/// codec Media Foundation cannot open, or if the PNG cannot be written.
+#[cfg(windows)]
+#[napi(ts_return_type = "Promise<SpritesheetInfo>")]
+pub fn generate_spritesheet(
+  input: String,
+  output: String,
+  options: Option<SpritesheetOptions>,
+) -> AsyncTask<BuildSpritesheet> {
+  AsyncTask::new(BuildSpritesheet {
+    budget: sheet_budget(options),
+    input,
+    output,
+  })
+}
+
+#[cfg(test)]
+mod sheet_budget_scenarios {
+  use super::*;
+
+  #[test]
+  fn no_options_at_all_is_the_engine_default() {
+    assert_eq!(sheet_budget(None), spritesheet::SheetBudget::default());
+  }
+
+  #[test]
+  fn an_empty_options_object_is_also_the_default() {
+    // `{}` from JS is not the same value as `undefined`, and both have to mean
+    // "whatever the engine thinks".
+    let budget = sheet_budget(Some(SpritesheetOptions {
+      max_frames: None,
+      cell_width: None,
+      max_columns: None,
+    }));
+    assert_eq!(budget, spritesheet::SheetBudget::default());
+  }
+
+  #[test]
+  fn each_field_is_carried_across_on_its_own() {
+    let budget = sheet_budget(Some(SpritesheetOptions {
+      max_frames: Some(50),
+      cell_width: Some(320),
+      max_columns: Some(4),
+    }));
+    assert_eq!(budget.max_frames, 50);
+    assert_eq!(budget.cell_width, 320);
+    assert_eq!(budget.max_columns, 4);
+  }
+
+  #[test]
+  fn one_supplied_field_does_not_reset_the_others() {
+    let defaults = spritesheet::SheetBudget::default();
+    let budget = sheet_budget(Some(SpritesheetOptions {
+      max_frames: None,
+      cell_width: Some(320),
+      max_columns: None,
+    }));
+    assert_eq!(budget.max_frames, defaults.max_frames);
+    assert_eq!(budget.max_columns, defaults.max_columns);
+    assert_eq!(budget.cell_width, 320);
+  }
+
+  #[test]
+  fn a_zero_column_limit_is_raised_to_one() {
+    // `rows` is `(frames + columns - 1) / columns`. At zero that underflows and
+    // then divides by zero, which is a panic across the napi boundary rather
+    // than a rejected promise.
+    let budget = sheet_budget(Some(SpritesheetOptions {
+      max_frames: None,
+      cell_width: None,
+      max_columns: Some(0),
+    }));
+    assert_eq!(budget.max_columns, 1);
+  }
+
+  #[test]
+  fn every_zero_is_raised_to_one() {
+    let budget = sheet_budget(Some(SpritesheetOptions {
+      max_frames: Some(0),
+      cell_width: Some(0),
+      max_columns: Some(0),
+    }));
+    assert_eq!(budget.max_frames, 1);
+    assert_eq!(budget.cell_width, 1);
+    assert_eq!(budget.max_columns, 1);
+  }
+
+  #[test]
+  fn a_clamped_budget_still_produces_a_plan_that_can_be_allocated() {
+    // The point of the clamp: whatever JS sends, the planner has to come back
+    // with a grid big enough for its own frames.
+    for max_columns in [0u32, 1, 3, 10] {
+      for max_frames in [0u32, 1, 300] {
+        let budget = sheet_budget(Some(SpritesheetOptions {
+          max_frames: Some(max_frames),
+          cell_width: Some(0),
+          max_columns: Some(max_columns),
+        }));
+        let plan = spritesheet::SheetPlan::for_source(60_000.0, 1920, 1080, budget);
+        assert!(plan.cell_width >= 1 && plan.cell_height >= 1);
+        assert!(
+          (plan.rows * plan.columns) as usize >= plan.frame_count,
+          "{max_frames}/{max_columns}: {}x{} cannot hold {}",
+          plan.columns,
+          plan.rows,
+          plan.frame_count
+        );
+      }
+    }
   }
 }
 
