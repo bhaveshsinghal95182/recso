@@ -61,6 +61,42 @@ export interface UseGpuPreviewOptions {
   webcamPath?: string;
 }
 
+function logBlankPreviewFrame(canvas: HTMLCanvasElement, currentTimeMs: number): void {
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context || canvas.width === 0 || canvas.height === 0) {
+    return;
+  }
+
+  const sampleWidth = Math.min(32, canvas.width);
+  const sampleHeight = Math.min(32, canvas.height);
+  const pixels = context.getImageData(0, 0, sampleWidth, sampleHeight).data;
+  let min = 255;
+  let max = 0;
+  let opaque = 0;
+  let black = 0;
+
+  for (let index = 0; index < pixels.length; index += 4) {
+    const brightness = Math.max(pixels[index], pixels[index + 1], pixels[index + 2]);
+    min = Math.min(min, brightness);
+    max = Math.max(max, brightness);
+    if (pixels[index + 3] > 8) opaque += 1;
+    if (brightness < 8) black += 1;
+  }
+
+  const pixelCount = pixels.length / 4;
+  if (opaque === 0 || black === pixelCount || max - min <= 1) {
+    console.warn('[blank-frame-trace][gpu-preview]', {
+      currentTimeMs,
+      canvasWidth: canvas.width,
+      canvasHeight: canvas.height,
+      minBrightness: min,
+      maxBrightness: max,
+      opaquePixels: opaque,
+      sampledPixels: pixelCount,
+    });
+  }
+}
+
 export function useGpuPreview({
   enabled,
   canvasRef,
@@ -220,6 +256,9 @@ export function useGpuPreview({
       .tick()
       .then((result) => {
         if (result) {
+          if (result.presented && canvasRef.current) {
+            logBlankPreviewFrame(canvasRef.current, result.currentTime);
+          }
           setState((previous) =>
             previous.currentTimeMs === result.currentTime &&
             previous.playing === result.playing &&

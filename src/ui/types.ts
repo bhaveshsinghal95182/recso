@@ -411,9 +411,6 @@ export type ExportFormat = 'mp4';
 /** Quality presets */
 export type ExportQuality = 'low' | 'medium' | 'high' | 'lossless';
 
-/** Supported frame rates */
-export type ExportFPS = 24 | 30 | 60;
-
 /** GL renderer backends for GPU acceleration */
 export type GLRenderer =
   | null
@@ -436,8 +433,6 @@ export interface ExportConfig {
   format: ExportFormat;
   /** Quality preset */
   quality: ExportQuality;
-  /** Target frame rate */
-  fps: ExportFPS;
   /** Background color from editor (hex) */
   backgroundColor: string;
   /** Optional explicit output folder path */

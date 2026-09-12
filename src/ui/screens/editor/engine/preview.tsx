@@ -1,4 +1,4 @@
-import { Cpu, Crop, Maximize2, Minimize2, Pause, Play, Zap } from 'lucide-react';
+import { Crop, Maximize2, Minimize2, Pause, Play, Zap } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { usePlaybackStore } from '@/store/playback-store';
@@ -9,28 +9,13 @@ import { resolveProjectWebcamSourcePath } from './export-pipeline/source-paths';
 import { useGpuPreview } from './gpu-preview/session';
 import { unsupportedFeatures } from './gpu-preview/unsupported';
 import { resolveOverlayVideoLayout, resolvePreviewDisplaySize } from './preview-runtime/display';
-import {
-  syncPausedPreviewPosition,
-  syncPreviewTransportOnPlayState,
-} from './preview-runtime/playback';
-import { renderEngineFrameSafely } from './preview-runtime/rendering';
-import { attachPreviewSession } from './preview-runtime/session';
 import { usePreviewViewportSize } from './preview-runtime/viewport';
 import { CropDialog } from '../crop-dialog';
 import { FocalPointOverlay } from '../focal-point-overlay';
 import { VerticalTabs } from '../vertical-tabs';
 import { WebcamResizeOverlay } from '../webcam-resize-overlay';
-import { type CanvasFrameContext } from './adapters';
-import { CompositionEngine } from './engine';
-import {
-  defaultConfig,
-  getCutAdjustedDurationMs,
-  mapCompositionToSourceTimeMs,
-  mapSourceCutRangesToCompositionCutRanges,
-  mapSourceTimeToCompositionTimeMs,
-} from './functions';
+import { mapCompositionToSourceTimeMs, mapSourceTimeToCompositionTimeMs } from './functions';
 import { useEnginePreviewConfigMapper } from './preview-config-mapper.ts';
-import type { CompositionConfig } from './types';
 
 /**
  * The canvas the main process pushes engine textures into.
@@ -43,24 +28,15 @@ const GPU_CANVAS_SELECTOR = '#gpu-preview-canvas';
 export function EnginePreview() {
   const { project, mouseEvents, updateWebcamOverlay } = useProjectStore();
   const { zoomRegions, zoomRegionsBySource, cuts, focus, updateZoom } = useTimelineStore();
-  const { isPlaying, currentTime, play, pause, finish, setDuration } = usePlaybackStore();
+  const { isPlaying, currentTime, play, pause, finish } = usePlaybackStore();
   const screenZoomRegions = zoomRegionsBySource.screen;
   const webcamZoomRegions = zoomRegionsBySource.webcam;
 
   const previewViewportRef = useRef<HTMLDivElement>(null);
   const fullscreenContainerRef = useRef<HTMLDivElement>(null);
-  const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const gpuCanvasRef = useRef<HTMLCanvasElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const webcamVideoRef = useRef<HTMLVideoElement>(null);
-  const previewContextRef = useRef<CanvasFrameContext | null>(null);
-  const rafRef = useRef<number | null>(null);
-  const lastRenderMsRef = useRef(0);
-  const previewErrorLoggedRef = useRef(false);
   const availableSize = usePreviewViewportSize(previewViewportRef);
   const audioRef = useRef<HTMLAudioElement>(null);
-  const engineRef = useRef<CompositionEngine>(new CompositionEngine(defaultConfig));
-  const compositionConfigRef = useRef<CompositionConfig>(defaultConfig);
   const [isExportPreviewFullscreen, setIsExportPreviewFullscreen] = useState(false);
   /**
    * Which compositor is driving the preview.
@@ -74,16 +50,13 @@ export function EnginePreview() {
    * names what a given project would lose, and being able to flip back and
    * compare is how you tell an engine bug from an editing mistake.
    */
-  const [preferGpuEngine, setPreferGpuEngine] = useState(true);
   const [isCropDialogOpen, setIsCropDialogOpen] = useState(false);
   const {
     canvasSize,
     layout,
     webcamLayout,
-    durationMs,
     compositionConfig,
     videoSrc,
-    webcamSrc,
     backgroundImageSrc,
     backgroundContainerStyle,
     selectedPattern,
@@ -97,23 +70,6 @@ export function EnginePreview() {
     webcamZoomRegions,
   );
   const screenCuts = useMemo(() => cuts.filter((cut) => cut.targets?.screen ?? true), [cuts]);
-  const webcamCuts = useMemo(() => cuts.filter((cut) => cut.targets?.webcam ?? true), [cuts]);
-  const fullscreenDurationMs = useMemo(
-    () => getCutAdjustedDurationMs(durationMs, screenCuts),
-    [durationMs, screenCuts],
-  );
-  const playbackDurationMs = isExportPreviewFullscreen ? fullscreenDurationMs : durationMs;
-  const playbackCompositionConfig = useMemo<CompositionConfig>(() => {
-    if (!isExportPreviewFullscreen) {
-      return compositionConfig;
-    }
-
-    return {
-      ...compositionConfig,
-      webcamCuts: mapSourceCutRangesToCompositionCutRanges(webcamCuts, screenCuts),
-    };
-  }, [compositionConfig, isExportPreviewFullscreen, screenCuts, webcamCuts]);
-
   const selectedZoomId = focusedZoomId(focus);
   const editingFocalPoint = isEditingFocalPoint(focus);
   const selectedZoom = useMemo(
@@ -131,15 +87,10 @@ export function EnginePreview() {
   // Against the preference rather than what is driving, because the value feeds
   // the hook that produces the error the driving flag is derived from. Seeking a
   // player that failed to open costs nothing.
-  const gpuSeekMs = preferGpuEngine && !isPlaying ? currentTime : null;
+  const gpuSeekMs = !isPlaying ? currentTime : null;
 
   const gpu = useGpuPreview({
-    // Kept on the *preference*, not on what is currently driving. If the engine
-    // failed to open, disabling the hook would clear the error, which would
-    // re-enable it, which would fail again -- a loop with a flickering preview
-    // in the middle of it. It stays enabled and keeps its error, and a config
-    // change gets a genuine retry.
-    enabled: preferGpuEngine,
+    enabled: true,
     canvasRef: gpuCanvasRef,
     canvasSelector: GPU_CANVAS_SELECTOR,
     project,
@@ -162,7 +113,7 @@ export function EnginePreview() {
    * canvas when there is a working compositor sitting right there. The banner
    * says what happened.
    */
-  const useGpuEngine = preferGpuEngine && !gpu.error;
+  const useGpuEngine = !gpu.error;
 
   const gpuGaps = useMemo(
     () => (useGpuEngine ? unsupportedFeatures(compositionConfig) : []),
@@ -246,112 +197,6 @@ export function EnginePreview() {
     [layout.height, layout.width, layout.x, layout.y, previewDisplaySize.scale],
   );
 
-  const renderCurrentFrame = useCallback(() => {
-    renderEngineFrameSafely({
-      previewContext: previewContextRef.current,
-      engine: engineRef.current,
-      previewErrorLoggedRef,
-      errorScope: 'renderCurrentFrame',
-    });
-  }, []);
-
-  useEffect(() => {
-    if (playbackDurationMs > 0) {
-      setDuration(playbackDurationMs);
-      engineRef.current.setDuration(playbackDurationMs / 1000);
-    }
-  }, [playbackDurationMs, setDuration]);
-
-  useEffect(() => {
-    compositionConfigRef.current = playbackCompositionConfig;
-    engineRef.current.setComposition(playbackCompositionConfig);
-    renderCurrentFrame();
-  }, [playbackCompositionConfig, renderCurrentFrame]);
-
-  useEffect(() => {
-    if (useGpuEngine) {
-      return;
-    }
-
-    syncPreviewTransportOnPlayState({
-      isPlaying,
-      pausePlayback: pause,
-      webcamSrc,
-      playbackMode: isExportPreviewFullscreen ? 'export' : 'source',
-      cuts: screenCuts,
-      videoRef,
-      webcamVideoRef,
-      engineRef,
-    });
-  }, [isPlaying, pause, webcamSrc, isExportPreviewFullscreen, screenCuts, useGpuEngine]);
-
-  useEffect(() => {
-    if (useGpuEngine) {
-      return;
-    }
-
-    syncPausedPreviewPosition({
-      isPlaying,
-      currentTimeMs: currentTime,
-      webcamSrc,
-      renderCurrentFrame,
-      playbackMode: isExportPreviewFullscreen ? 'export' : 'source',
-      cuts: screenCuts,
-      videoRef,
-      webcamVideoRef,
-      engineRef,
-    });
-  }, [
-    currentTime,
-    isPlaying,
-    renderCurrentFrame,
-    webcamSrc,
-    isExportPreviewFullscreen,
-    screenCuts,
-    useGpuEngine,
-  ]);
-
-  useEffect(() => {
-    // The engine owns the clock while it is driving. Leaving this attached is
-    // not merely wasteful -- its render loop writes the playhead from the
-    // `<video>` element every frame, and the engine writes the same store from
-    // its own clock, so the two fight and the playhead jitters.
-    if (useGpuEngine) {
-      return;
-    }
-
-    return attachPreviewSession({
-      project,
-      videoSrc,
-      webcamSrc,
-      canvasSize,
-      durationMs,
-      playbackMode: isExportPreviewFullscreen ? 'export' : 'source',
-      cuts: screenCuts,
-      previewCanvasRef,
-      videoRef,
-      webcamVideoRef,
-      previewContextRef,
-      rafRef,
-      lastRenderMsRef,
-      previewErrorLoggedRef,
-      engineRef,
-      compositionConfigRef,
-      renderCurrentFrame,
-    });
-  }, [
-    canvasSize.height,
-    canvasSize.width,
-    durationMs,
-    isExportPreviewFullscreen,
-    project,
-    renderCurrentFrame,
-    screenCuts,
-    useGpuEngine,
-    videoSrc,
-    webcamSrc,
-  ]);
-
   useEffect(() => {
     const handleFullscreenChange = () => {
       const isPreviewFullscreen = document.fullscreenElement === fullscreenContainerRef.current;
@@ -374,16 +219,6 @@ export function EnginePreview() {
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
     };
   }, [screenCuts]);
-
-  useEffect(() => {
-    return () => {
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-      }
-
-      engineRef.current.dispose();
-    };
-  }, []);
 
   const handlePlayPause = useCallback(() => {
     if (isPlaying) {
@@ -463,25 +298,13 @@ export function EnginePreview() {
           )}
 
           <canvas
-            ref={previewCanvasRef}
-            className={`absolute inset-0 w-full h-full ${useGpuEngine ? 'hidden' : ''}`}
-          />
-          <canvas
             id="gpu-preview-canvas"
             ref={gpuCanvasRef}
             className={`absolute inset-0 w-full h-full ${useGpuEngine ? '' : 'hidden'}`}
           />
 
-          <video ref={videoRef} src={videoSrc} className="hidden" playsInline preload="auto" />
           {/* Audio only, for when the engine is drawing the picture. */}
           <audio ref={audioRef} src={videoSrc} preload="auto" />
-          <video
-            ref={webcamVideoRef}
-            src={webcamSrc || undefined}
-            className="hidden"
-            playsInline
-            preload="auto"
-          />
 
           {!isExportPreviewFullscreen &&
             !editingFocalPoint &&
@@ -526,19 +349,12 @@ export function EnginePreview() {
 
       <div className="bottom-toolbar absolute bottom-6 right-6 flex items-center text-white bg-black/60 backdrop-blur overflow-hidden">
         <button
-          onClick={() => setPreferGpuEngine((on) => !on)}
-          className={`px-3 py-3 border-0 cursor-pointer transition-colors flex items-center justify-center ${
-            useGpuEngine ? 'bg-emerald-500/80 hover:bg-emerald-500' : 'hover:bg-black/70'
-          }`}
-          title={
-            useGpuEngine
-              ? 'Previewing through the GPU engine. Click for the canvas compositor.'
-              : 'Previewing through the canvas compositor. Click for the GPU engine.'
-          }
+          className="px-3 py-3 border-0 bg-emerald-500/80 hover:bg-emerald-500 cursor-default transition-colors flex items-center justify-center"
+          title="Previewing through the native GPU engine"
           aria-label="Toggle the GPU engine preview"
-          aria-pressed={useGpuEngine}
+          aria-pressed="true"
         >
-          {useGpuEngine ? <Zap className="w-5 h-5" /> : <Cpu className="w-5 h-5" />}
+          <Zap className="w-5 h-5" />
         </button>
 
         <button
@@ -572,14 +388,14 @@ export function EnginePreview() {
         </button>
       </div>
 
-      {preferGpuEngine && (gpu.error || gpuGaps.length > 0) && (
+      {(gpu.error || gpuGaps.length > 0) && (
         <div className="absolute top-6 left-6 max-w-sm rounded-lg bg-black/70 backdrop-blur px-4 py-3 text-white text-xs leading-relaxed">
           {gpu.error ? (
             <>
               <p className="font-semibold text-red-300">The GPU engine could not start</p>
               <p className="mt-1 opacity-80">{gpu.error}</p>
               <p className="mt-1 opacity-60">
-                Showing the canvas compositor instead. Large recordings may be slow through it.
+                The native preview is unavailable until this issue is resolved.
               </p>
             </>
           ) : (

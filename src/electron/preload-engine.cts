@@ -21,6 +21,8 @@
 
 const electron = require('electron');
 
+console.info('[engine-debug] preload-engine loaded');
+
 interface FrameInfo {
   format: string;
   codedWidth: number;
@@ -84,7 +86,16 @@ let receiverError: string | null = null;
  * everything else depends on.
  */
 function installReceiver(): void {
+  console.info('[engine-debug] installing shared-texture receiver', {
+    hasSharedTexture: Boolean(electron.sharedTexture),
+    receiverType: typeof electron.sharedTexture?.setSharedTextureReceiver,
+  });
+
   if (receiverInstalled || receiverError) {
+    console.warn('[engine-debug] receiver installation skipped', {
+      receiverInstalled,
+      receiverError,
+    });
     return;
   }
 
@@ -139,12 +150,15 @@ function installReceiver(): void {
       }
     },
   );
+
+  console.info('[engine-debug] shared-texture receiver registered');
 }
 
 try {
   installReceiver();
 } catch (error) {
   receiverError = 'setSharedTextureReceiver failed: ' + (error as Error).message;
+  console.error('[engine-debug] shared-texture receiver registration failed', error);
 }
 
 // Report through IPC rather than console: this runs before the main preload

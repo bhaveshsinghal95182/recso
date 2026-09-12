@@ -14,9 +14,12 @@ import type { engineBridge as EngineBridge } from './preload-engine.cjs';
 function loadEngineBridge(): typeof EngineBridge {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    return require('./preload-engine.cjs').engineBridge as typeof EngineBridge;
+    const bridge = require('./preload-engine.cjs').engineBridge as typeof EngineBridge;
+    console.info('[engine-debug] engine bridge loaded');
+    return bridge;
   } catch (error) {
     const message = 'engine bridge failed to load: ' + (error as Error).message;
+    console.error('[engine-debug] engine bridge failed to load', error);
     const unavailable = () => Promise.reject(new Error(message));
     const invoke = electron.ipcRenderer.invoke.bind(electron.ipcRenderer);
 

@@ -12,9 +12,6 @@ export type ExportFormat = 'mp4';
 /** Quality presets */
 export type ExportQuality = 'low' | 'medium' | 'high' | 'lossless';
 
-/** Supported frame rates */
-export type ExportFPS = 24 | 30 | 60;
-
 /**
  * GL renderer backends for Chromium/Remotion video rendering.
  *
@@ -66,8 +63,6 @@ export interface ExportConfig {
   format: ExportFormat;
   /** Quality preset */
   quality: ExportQuality;
-  /** Target frame rate */
-  fps: ExportFPS;
   /** Background color from editor (hex) */
   backgroundColor: string;
   /** Optional explicit output folder path */
@@ -162,7 +157,6 @@ export const DEFAULT_EXPORT_CONFIG: ExportConfig = {
   resolution: '1080p',
   format: 'mp4',
   quality: 'high',
-  fps: 30,
   backgroundColor: '#000000',
   glRenderer: 'angle', // Use GPU acceleration (ANGLE backend for best performance with NVIDIA)
 };

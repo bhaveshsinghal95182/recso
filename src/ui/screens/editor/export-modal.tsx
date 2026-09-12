@@ -5,7 +5,7 @@
  * - Resolution selection (720p, 1080p, 4K, Custom)
  * - Format selection (MP4)
  * - Quality presets (Low, Medium, High, Lossless)
- * - FPS selection (24, 30, 60)
+ * - Source-matched frame rate export
  * - Real-time progress tracking
  */
 
@@ -31,7 +31,6 @@ import { useTimelineStore } from '@/store/timeline-store';
 import type {
   ExportConfig,
   ExportFormat,
-  ExportFPS,
   ExportProgress,
   ExportQuality,
   ExportResolution,
@@ -58,12 +57,6 @@ const QUALITY_OPTIONS: { value: ExportQuality; label: string }[] = [
   { value: 'medium', label: 'Medium' },
   { value: 'high', label: 'High (recommended)' },
   { value: 'lossless', label: 'Lossless (largest file)' },
-];
-
-const FPS_OPTIONS: { value: ExportFPS; label: string }[] = [
-  { value: 24, label: '24 fps (cinematic)' },
-  { value: 30, label: '30 fps (standard)' },
-  { value: 60, label: '60 fps (smooth)' },
 ];
 
 /**
@@ -128,7 +121,6 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
   const [customHeight, setCustomHeight] = useState(1080);
   const format: ExportFormat = 'mp4'; // Only MP4 is currently supported
   const [quality, setQuality] = useState<ExportQuality>('high');
-  const [fps, setFps] = useState<ExportFPS>(30);
   const [fileName, setFileName] = useState<string>('');
   const [outputFolder, setOutputFolder] = useState<string>('');
   const exportCancelRef = useRef<(() => void) | null>(null);
@@ -171,7 +163,6 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
       customHeight: resolution === 'custom' ? customHeight : undefined,
       format,
       quality,
-      fps,
       backgroundColor: project.backgroundColor || '#000000',
       outputFolder: outputFolder || undefined,
       outputFilename: fileName || undefined,
@@ -238,7 +229,6 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
     customHeight,
     format,
     quality,
-    fps,
     fileName,
     outputFolder,
     zoomRegionsBySource,
@@ -393,21 +383,9 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
               {/* Frame Rate */}
               <div className="space-y-2">
                 <Label>Frame Rate</Label>
-                <Select
-                  value={fps.toString()}
-                  onValueChange={(val) => val && setFps(parseInt(val) as ExportFPS)}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {FPS_OPTIONS.map((opt) => (
-                      <SelectItem key={opt.value} value={opt.value.toString()}>
-                        {opt.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <p className="text-sm text-muted-foreground">
+                  Matches the recorded video frame rate.
+                </p>
               </div>
 
               {/* Output Folder and Filename */}
