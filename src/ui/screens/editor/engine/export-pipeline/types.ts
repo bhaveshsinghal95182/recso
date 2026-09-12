@@ -6,15 +6,7 @@ import type {
   ZoomRegion,
 } from '@/types';
 
-import type { CanvasCoverFrameSource } from '../adapters';
-
-export interface EngineCanvasExportResult {
-  buffer: ArrayBuffer;
-  durationSeconds: number;
-  fileSize: number;
-}
-
-export interface EngineCanvasExportOptions {
+export interface ExportRequestOptions {
   project: Project;
   config: ExportConfig;
   screenZoomRegions?: ZoomRegion[];
@@ -27,12 +19,4 @@ export interface EngineCanvasExportOptions {
 export interface OutputDimensions {
   width: number;
   height: number;
-}
-
-export type BackgroundLayerCanvas = HTMLCanvasElement | OffscreenCanvas;
-
-export interface PreparedWebcamSource {
-  frameSource: CanvasCoverFrameSource;
-  syncToSeconds: (targetSeconds: number) => Promise<void>;
-  dispose: () => void;
 }

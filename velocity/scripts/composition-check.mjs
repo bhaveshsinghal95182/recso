@@ -928,6 +928,144 @@ try {
     )
   }
 
+  // ---- background image ---------------------------------------------------
+  //
+  // The editor's backgrounds are not colours. A pattern is a stack of CSS
+  // gradients and a custom background is a file on disk; both reach the engine
+  // as one canvas-sized RGBA buffer, because reimplementing `conic-gradient` in
+  // HLSL would be a second thing that has to match the picker forever.
+  //
+  // Two halves rather than one flat image, so this also says the buffer is not
+  // mirrored or transposed on the way in -- a stretched full-canvas quad hides
+  // that, and a background that comes out flipped looks fine until the day
+  // someone uses a photograph.
+
+  canvasPlayer.setLayout(inset)
+
+  const halves = Buffer.alloc(CANVAS.width * CANVAS.height * 4)
+  for (let y = 0; y < CANVAS.height; y += 1) {
+    for (let x = 0; x < CANVAS.width; x += 1) {
+      const i = (y * CANVAS.width + x) * 4
+      const left = x < CANVAS.width / 2
+      halves[i] = 255
+      halves[i + 1] = left ? 0 : 255
+      halves[i + 2] = left ? 255 : 0
+      halves[i + 3] = 255
+    }
+  }
+
+  canvasPlayer.setBackground({
+    // Green still, and nothing should be green any more: the image covers the
+    // whole canvas, so a corner reading green means it never got uploaded.
+    colour: { r: 0, g: 1, b: 0 },
+    image: { width: CANVAS.width, height: CANVAS.height, pixels: halves },
+  })
+
+  const withImage = await canvasFrame()
+  if (withImage) {
+    const topLeft = averageBgra(withImage, canvasStride, 4, 4, 16, 16)
+    const topRight = averageBgra(withImage, canvasStride, CANVAS.width - 24, 4, 16, 16)
+
+    check(
+      'a background image replaces the flat colour',
+      !isGreen(topLeft) && !isGreen(topRight),
+      `left rgb ${topLeft.map((v) => v.toFixed(0)).join(',')}, right ${topRight.map((v) => v.toFixed(0)).join(',')}`,
+    )
+    check(
+      'the background image is drawn the way round it was given',
+      topLeft[2] > 200 && topLeft[1] < 60 && topRight[1] > 200 && topRight[2] < 60,
+      `left b ${topLeft[2].toFixed(0)} g ${topLeft[1].toFixed(0)}, right b ${topRight[2].toFixed(0)} g ${topRight[1].toFixed(0)}`,
+    )
+
+    // And the recording still sits on top of it.
+    const overImage = averageBgra(withImage, canvasStride, CANVAS.width / 2 - 20, CANVAS.height / 2 - 20, 40, 40)
+    check(
+      'the video draws over the background image',
+      !(overImage[2] > 200 && overImage[1] < 60) && !(overImage[1] > 200 && overImage[2] < 60),
+      `centre rgb ${overImage.map((v) => v.toFixed(0)).join(',')}`,
+    )
+  } else {
+    check('a background image replaces the flat colour', false, 'no snapshot')
+  }
+
+  // Back to a flat colour for the checks that follow.
+  canvasPlayer.setBackground({ colour: { r: 0, g: 1, b: 0 } })
+  await canvasFrame()
+
+  // ---- shadow -------------------------------------------------------------
+  //
+  // What lifts the recording off the canvas now that the default border is
+  // gone. Measured against the background rather than by eye: a shadow that
+  // uploads, sizes its quad and draws nothing visible looks identical to a
+  // working one from every other vantage point.
+
+  console.log('')
+  // Two bands the same distance out from the video's edge, one above and one
+  // below, so the offset's direction is measurable rather than assumed.
+  const bandBelow = (frame) => averageBgra(frame, canvasStride, 600, 645, 80, 20)
+  const bandAbove = (frame) => averageBgra(frame, canvasStride, 600, 55, 80, 20)
+
+  canvasPlayer.setLayout(inset)
+  const noShadow = await canvasFrame()
+  const cleanBelow = bandBelow(noShadow)
+  const cleanCentre = averageBgra(noShadow, canvasStride, CANVAS.width / 2 - 20, CANVAS.height / 2 - 20, 40, 40)
+  check(
+    'without a shadow the background below the video is untouched',
+    isGreen(cleanBelow),
+    `rgb ${cleanBelow.map((v) => v.toFixed(0)).join(',')}`,
+  )
+
+  // Straight down and hard to miss: half-opacity black, offset well clear of
+  // the edge, blurred wider than the offset so there is a falloff to find.
+  canvasPlayer.setLayout({
+    ...inset,
+    shadows: [{ offsetX: 0, offsetY: 18, blur: 45, colour: { r: 0, g: 0, b: 0, a: 0.5 } }],
+  })
+  const withShadow = await canvasFrame()
+
+  if (withShadow) {
+    const below = bandBelow(withShadow)
+    const above = bandAbove(withShadow)
+
+    check(
+      'a shadow darkens the background under the video',
+      below[1] < cleanBelow[1] - 20,
+      `green ${cleanBelow[1].toFixed(0)} -> ${below[1].toFixed(0)}`,
+    )
+    // The offset is downward, so the same distance above the video should be
+    // far less darkened. Without this the check passes on a shadow drawn as an
+    // even ring, which is what a dropped offset looks like.
+    check(
+      'the shadow falls the way its offset points',
+      above[1] > below[1] + 20,
+      `above ${above[1].toFixed(0)} vs below ${below[1].toFixed(0)}`,
+    )
+    // And it stays behind the recording rather than tinting it. Against the
+    // same frame without the shadow rather than an expected colour: the source
+    // is a live screen recording, so whatever is at the centre is whatever the
+    // desktop was showing.
+    const centre = averageBgra(withShadow, canvasStride, CANVAS.width / 2 - 20, CANVAS.height / 2 - 20, 40, 40)
+    check(
+      'the shadow does not darken the video itself',
+      difference(centre, cleanCentre) < 12,
+      `centre rgb ${centre.map((v) => v.toFixed(0)).join(',')} vs ${cleanCentre.map((v) => v.toFixed(0)).join(',')}`,
+    )
+
+    // Far enough out and it is gone: a smoothstep falloff actually reaches
+    // zero, so nothing should be tinted at the canvas edge.
+    const farBelow = averageBgra(withShadow, canvasStride, 600, CANVAS.height - 8, 80, 6)
+    check(
+      'the shadow reaches zero rather than tinting the whole canvas',
+      isGreen(farBelow),
+      `rgb ${farBelow.map((v) => v.toFixed(0)).join(',')}`,
+    )
+  } else {
+    check('a shadow darkens the background under the video', false, 'no snapshot')
+  }
+
+  canvasPlayer.setLayout(inset)
+  await canvasFrame()
+
   // ---- border -------------------------------------------------------------
   //
   // Blue, and thick enough that a 16px sample sits well inside it rather than

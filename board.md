@@ -20,6 +20,36 @@ _Anything filed in a hurry lands here. Sort it into Backlog when you next look._
 
 ## Backlog
 
+### pause button not working
+
+`bug`
+
+Pause button is not working incidentally if pause button doesnt work then that means there is no video recovery either or no way to start the video from where it was being recorded
+
+### Recording FPS and compression settings are not reflected in the output
+
+`recorder` `bug` `quality`
+
+A 1080p high-quality recording configured for 30fps was written as 60fps at
+about 5Mbps. A 4K60 lossless recording was only about 10Mbps, even though 4K
+contains four times as many pixels as 1080p and the lossless preset should
+increase the bitrate substantially rather than merely doubling it.
+
+Audit how the requested frame rate and quality preset reach the native encoder,
+then make the resulting file metadata and bitrate scale with those settings.
+Add coverage for at least 1080p30 high quality and 4K60 lossless, including
+assertions for the output frame rate and a sensible bitrate/quality relationship.
+
+### Audio in playback, and the clock inversion it forces
+
+`engine` `feature` `big`
+
+Export has sound — decode, mix, cut-aware placement, an AAC stream, covered by
+`pnpm engine:audio`. Playback does not, and it is the harder half: audio has to
+become the master clock, and `Clock` currently free-runs on the wall clock with
+the picture following it. Inverting that is a rework of the thing the whole
+player is built around.
+
 ### GOP length is not controllable, so exact seek costs 170–280ms
 
 `engine` `perf` `big`
@@ -32,16 +62,6 @@ that bypasses the crate for the video leg.
 
 See: docs/ENGINE-BACKLOG.md, "Missing: engine-wide"
 
-### Audio in playback, and the clock inversion it forces
-
-`engine` `feature` `big`
-
-Export has sound — decode, mix, cut-aware placement, an AAC stream, covered by
-`pnpm engine:audio`. Playback does not, and it is the harder half: audio has to
-become the master clock, and `Clock` currently free-runs on the wall clock with
-the picture following it. Inverting that is a rework of the thing the whole
-player is built around.
-
 ### Multiple clips
 
 `engine` `feature` `big`
@@ -49,32 +69,29 @@ player is built around.
 The model is one source plus one overlay. Cuts and ordering exist, but a second
 clip has nowhere to live. Not parity work — neither renderer has ever done this.
 
-### A real test suite before mediabunny goes
+### Draw on the screen while recording
 
-`engine` `chore`
+`recorder` `feature` `big`
 
-The feature map calls this the gate on the cutover: parity is done, so what is
-left is proving it stays done. Blocks removing the Canvas2D export path.
+A floating toolbar with markers and highlighters, so a recording can be
+annotated as it happens instead of in the edit.
 
-See: docs/ENGINE-FEATURE-MAP.md, "Before the cutover: a real test suite"
+Two windows, not one, and that is the whole design. The strokes go on a
+transparent click-through overlay that the capture _does_ pick up -- they have
+to end up in the file. The toolbar that draws them must not, or every recording
+opens with a picture of its own controls.
 
-### Delete the mediabunny export path
+Windows can do exactly that: `SetWindowDisplayAffinity(hwnd,
+WDA_EXCLUDEFROMCAPTURE)` hides a window from screen capture while leaving it on
+screen, and it holds for Windows.Graphics.Capture, which is what the recorder
+uses. Electron exposes it as `win.setContentProtection(true)`, so neither half
+needs native code.
 
-`editor` `chore`
-
-Nothing routes an export back to Canvas2D any more and `unsupportedFeatures`
-returns empty. Blocked on the test suite above — deleting the fallback before
-there is coverage means the engine is the only path and nothing checks it.
-
-### `sandbox: false` on the main window
-
-`app` `security` `bug`
-
-`src/electron/main.ts:63`. A sandboxed preload gets a polyfilled subset of the
-electron module with no `sharedTexture`, and cannot `require` a relative file,
-so the engine bridge cannot load under the default. `contextIsolation` stays on
-and the `VideoFrame` never leaves the isolated world, so this is far weaker than
-`nodeIntegration: true` — but it is still a real loosening of the app's posture.
+Open questions: whether strokes persist, fade, or are undoable; whether they are
+burnt into the capture or recorded as timed vector data the editor could
+re-render (much better, considerably more work); and what happens to them when
+the editor zooms, since a burnt-in stroke zooms with the pixels and a vector one
+would have to be told not to.
 
 ### `stop()` does not describe the camera sidecar
 
@@ -93,13 +110,6 @@ is involved still pays for it.
 Geometry, duration and frame count are described at capture time; these two are
 not. Dropped frames in particular are only visible in the recorder's own logs,
 which is the one place nobody looks.
-
-### `probeVideoMetadata` reads the whole file into memory
-
-`recorder` `perf`
-
-On the fallback path only — pre-metadata recordings and crash recovery. Bounded
-by how big a recording someone crashed out of, which is not a small bound.
 
 ### Interleave audio instead of writing sidecars
 
@@ -181,6 +191,12 @@ backlog.
 
 _Move a card here when you start it. Nothing is claimed right now._
 
+### Solve the preview flickering issue
+
+`bug`
+
+when playing a video the editor isnt actually optimised such that the preview starts flickering back and forth. I dont know the exact amount but roughly it moves 1 frame forward and 2 frames backward which needs to be solved
+
 ## Parked
 
 ### Webcam overlay can lead by up to one camera frame
@@ -207,6 +223,43 @@ is recognisable, not because it is fixable. Those recordings still play through
 the editor's `<video>` path, which goes via Chromium.
 
 ## Done
+
+### Harden the shared-texture application renderer
+
+`app` `security` `bug`
+
+Electron does not expose `sharedTexture` to sandboxed preloads, so the editor
+window keeps `sandbox: false` to preserve the native shader → shared D3D11
+texture → preview path. The page still has context isolation on, Node integration
+off, webviews off, a narrow bridge, and web security on in production. Windows
+that do not own a shared-texture receiver should remain sandboxed.
+
+### Native metadata probing without a whole-file read
+
+`recorder` `perf`
+
+Crash recovery and old recordings now open `velocity.VideoDecoder` and read its
+container metadata. No recording-sized Buffer or Blob is created in JavaScript.
+The finalize readability check uses the same native decoder.
+
+### Retire the Mediabunny export path
+
+`editor` `chore`
+
+The Canvas2D/Mediabunny exporter, its adapters, and the package dependency are
+gone. Export planning now either hands a complete composition to the native
+engine or names an unsupported feature; it never silently falls back to a
+renderer-memory path.
+
+### Guard the native export cutover with real seams
+
+`engine` `chore`
+
+Vitest covers window security, export planning helpers, native audio-sidecar
+alignment, and the renderer-to-engine call. A deterministic Electron check now
+drives the actual main-process export service through the native addon, writes
+an MP4, reopens it, and verifies range and geometry. It joins the existing
+1,650 Rust tests and native cut/export checks in `pnpm check:engine-cutover`.
 
 ### Webcam shadows — the last thing the engine could not draw
 

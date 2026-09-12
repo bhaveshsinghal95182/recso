@@ -10,7 +10,7 @@
 
 use crate::engine::composite::{
   fit_source, smear_geometry, CursorSample, CursorTrack, FitMode, HiddenSpans, OverlayShape, Rect,
-  WebcamLayout, WebcamShadow,
+  Shadow, WebcamLayout,
 };
 use crate::engine::cuts::{Cut, CutTrack};
 use crate::engine::render::{parse_layer_order, Layer, SourceCrop, VideoLayout};
@@ -234,7 +234,7 @@ fn generate(seed: u64) -> Project {
   let webcam_hidden = HiddenSpans::new(hidden);
 
   let shadows = (0..rng.below(4))
-    .map(|_| WebcamShadow {
+    .map(|_| Shadow {
       offset: [rng.range(-20.0, 20.0) as f32, rng.range(-20.0, 20.0) as f32],
       blur: rng.range(-5.0, 60.0) as f32,
       colour: [0.0, 0.0, 0.0, rng.range(0.0, 1.0) as f32],
@@ -348,15 +348,25 @@ mod invariants {
     // being approximate. On the whole milliseconds a real project uses, it is
     // exact.
     let track = CutTrack::new(vec![
-      Cut { start_ms: 5_000.0, end_ms: 8_000.0 },
-      Cut { start_ms: 20_000.0, end_ms: 22_500.0 },
+      Cut {
+        start_ms: 5_000.0,
+        end_ms: 8_000.0,
+      },
+      Cut {
+        start_ms: 20_000.0,
+        end_ms: 22_500.0,
+      },
     ]);
     for step in 0..600 {
       let source = step as f64 * 50.0;
       if track.contains(source) {
         continue;
       }
-      assert_eq!(track.to_source(track.to_composition(source)), source, "{source}");
+      assert_eq!(
+        track.to_source(track.to_composition(source)),
+        source,
+        "{source}"
+      );
     }
   }
 
@@ -393,7 +403,10 @@ mod invariants {
         let label = format!("seed {} at {at}", p.seed);
         assert!(state.scale.is_finite(), "{label}");
         assert!(state.scale > 0.0, "{label}: {}", state.scale);
-        assert!(state.pivot_x.is_finite() && state.pivot_y.is_finite(), "{label}");
+        assert!(
+          state.pivot_x.is_finite() && state.pivot_y.is_finite(),
+          "{label}"
+        );
       }
     }
   }
@@ -411,7 +424,10 @@ mod invariants {
         assert!(state.pivot_x >= p.video.x - 1e-2, "{label}");
         assert!(state.pivot_x <= p.video.x + p.video.width + 1e-2, "{label}");
         assert!(state.pivot_y >= p.video.y - 1e-2, "{label}");
-        assert!(state.pivot_y <= p.video.y + p.video.height + 1e-2, "{label}");
+        assert!(
+          state.pivot_y <= p.video.y + p.video.height + 1e-2,
+          "{label}"
+        );
       }
     }
   }
@@ -471,7 +487,10 @@ mod invariants {
         let label = format!("seed {} at {at}", p.seed);
         assert!(state.rect.width.is_finite(), "{label}");
         assert!(state.rect.height.is_finite(), "{label}");
-        assert!(state.rect.x.is_finite() && state.rect.y.is_finite(), "{label}");
+        assert!(
+          state.rect.x.is_finite() && state.rect.y.is_finite(),
+          "{label}"
+        );
         assert!((0.0..=1.0).contains(&state.full_screen), "{label}");
       }
     }
@@ -586,7 +605,10 @@ mod invariants {
       assert!(l.corner_radius >= 0.0, "{label}");
       assert!(l.border_width >= 0.0, "{label}");
       assert!(l.rect.x.is_finite() && l.rect.y.is_finite(), "{label}");
-      assert!(l.rect.width.is_finite() && l.rect.height.is_finite(), "{label}");
+      assert!(
+        l.rect.width.is_finite() && l.rect.height.is_finite(),
+        "{label}"
+      );
       for s in &l.shadows {
         assert!(s.is_visible(), "{label}");
         assert!(s.blur.is_finite(), "{label}");
@@ -676,7 +698,12 @@ mod invariants {
   fn the_video_layout_covering_the_canvas_matches_the_canvas_for_every_project() {
     for p in projects() {
       let full = VideoLayout::covering(p.canvas.0, p.canvas.1);
-      assert_eq!(full.rect, Rect::covering(p.canvas.0, p.canvas.1), "seed {}", p.seed);
+      assert_eq!(
+        full.rect,
+        Rect::covering(p.canvas.0, p.canvas.1),
+        "seed {}",
+        p.seed
+      );
     }
   }
 
@@ -782,7 +809,9 @@ mod corpus {
   #[test]
   fn the_corpus_covers_both_overlay_shapes() {
     for shape in [OverlayShape::Rect, OverlayShape::Ellipse] {
-      let count = projects().filter(|p| p.webcam_layout.shape == shape).count();
+      let count = projects()
+        .filter(|p| p.webcam_layout.shape == shape)
+        .count();
       assert!(count > 20, "only {count} projects used {shape:?}");
     }
   }
@@ -821,8 +850,13 @@ mod corpus {
 
   #[test]
   fn the_corpus_covers_shadow_stacks_of_more_than_one_layer() {
-    let stacked = projects().filter(|p| p.webcam_layout.shadows.len() > 1).count();
-    assert!(stacked > 5, "only {stacked} projects had a real shadow stack");
+    let stacked = projects()
+      .filter(|p| p.webcam_layout.shadows.len() > 1)
+      .count();
+    assert!(
+      stacked > 5,
+      "only {stacked} projects had a real shadow stack"
+    );
   }
 
   #[test]
@@ -830,14 +864,21 @@ mod corpus {
     let clicky = projects()
       .filter(|p| p.cursor.click_scale_at(0.0, 1.5, 200.0) == 1.0 && p.cursor.len() > 0)
       .count();
-    assert!(clicky > 10, "only {clicky} projects had a usable cursor track");
+    assert!(
+      clicky > 10,
+      "only {clicky} projects had a usable cursor track"
+    );
   }
 
   #[test]
   fn every_generated_project_has_a_non_negative_duration() {
     for p in projects() {
       assert!(p.source_duration_ms > 0.0, "seed {}", p.seed);
-      assert!(p.video.width > 0.0 && p.video.height > 0.0, "seed {}", p.seed);
+      assert!(
+        p.video.width > 0.0 && p.video.height > 0.0,
+        "seed {}",
+        p.seed
+      );
     }
   }
 }

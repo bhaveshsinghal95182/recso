@@ -65,8 +65,8 @@ function scratchCanvas(): HTMLCanvasElement {
  *
  * The usual cause is a sandboxed renderer: a sandboxed preload only gets a
  * polyfilled subset of the electron module -- ipcRenderer, contextBridge,
- * webFrame -- and `sharedTexture` is not in it. See the `sandbox: false` note
- * in `main.ts`.
+ * webFrame -- and `sharedTexture` is not in it. The editor window therefore
+ * runs its isolated preload without Electron's renderer sandbox.
  */
 let receiverError: string | null = null;
 
@@ -91,7 +91,7 @@ function installReceiver(): void {
   if (typeof electron.sharedTexture?.setSharedTextureReceiver !== 'function') {
     receiverError =
       'electron.sharedTexture is unavailable in this preload. The renderer is ' +
-      'most likely sandboxed; the engine preview needs sandbox: false.';
+      'sandboxed; the native shared-texture preview requires sandbox: false.';
     return;
   }
 
@@ -179,6 +179,7 @@ export const engineBridge = {
   },
   diagnostics: () => invoke('engine:diagnostics'),
   probe: (path: string) => invoke('engine:probe', path),
+  probeAudio: (path: string) => invoke('engine:probe-audio', path),
   gpuMemory: () => invoke('engine:gpu-memory'),
 
   /**

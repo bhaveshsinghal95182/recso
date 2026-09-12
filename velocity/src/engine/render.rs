@@ -29,7 +29,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::engine::composite::{
   fit_source, smear_geometry, CursorImages, CursorTrack, Fill, Grade, HiddenSpans, OverlayShape,
-  Overlays, Quad, Rect, ShadowFill, SpriteTexture, UvRect, WebcamLayout,
+  Overlays, Quad, Rect, Shadow, ShadowFill, SpriteTexture, UvRect, WebcamLayout,
 };
 use crate::engine::d3d::{gpu, Gpu};
 use crate::engine::zoom::{lerp_rect, WebcamZoomState, WebcamZoomTrack, ZoomState, ZoomTrack};
@@ -311,30 +311,46 @@ impl SourceCrop {
 /// Pixel coordinates in the canvas, like `WebcamLayout` -- the padding
 /// fraction, the scale and the centring are all resolved by the caller, so
 /// there is one layout formula in the app rather than two that have to agree.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct VideoLayout {
   pub rect: Rect,
   pub corner_radius: f32,
   pub border_width: f32,
   pub border_colour: [f32; 4],
+  /// Drop shadows under the recording, drawn in the order given.
+  ///
+  /// The same stack the camera takes, and for the same reason: lifting the
+  /// recording off the background is a shadow, not a border, and a shadow is
+  /// authored as layers -- one wide and faint for the ambient light, one tight
+  /// and darker for the contact.
+  pub shadows: Vec<Shadow>,
 }
 
 impl VideoLayout {
-  /// The video filling the whole canvas, square corners, no border. What the
-  /// chain does before anyone sets a layout, and what a project with no
-  /// background enabled wants.
+  /// The video filling the whole canvas, square corners, no border, no shadow.
+  /// What the chain does before anyone sets a layout, and what a project with
+  /// no background enabled wants -- there is no canvas left to cast onto.
   pub fn covering(width: u32, height: u32) -> Self {
     Self {
       rect: Rect::covering(width, height),
       corner_radius: 0.0,
       border_width: 0.0,
       border_colour: [0.0, 0.0, 0.0, 1.0],
+      shadows: Vec::new(),
     }
   }
 
   fn sanitized(mut self) -> Self {
     self.corner_radius = self.corner_radius.max(0.0);
     self.border_width = self.border_width.max(0.0);
+    // Same rule as the camera's: a shadow nobody can see still costs a quad the
+    // size of the recording plus its blur, and two layers is the common case.
+    self.shadows.retain(|shadow| {
+      shadow.is_visible()
+        && shadow.blur.is_finite()
+        && shadow.offset[0].is_finite()
+        && shadow.offset[1].is_finite()
+    });
     if !self.rect.x.is_finite() || !self.rect.y.is_finite() {
       self.rect.x = 0.0;
       self.rect.y = 0.0;
@@ -1049,7 +1065,9 @@ impl RenderChain {
     self.slot_cursor[index] = self.resolve_cursor_rect(timestamp_ms);
     self.slot_zoom[index] = self.zoom_track.state_at(timestamp_ms, self.layout.rect);
     let webcam_index = slot % self.slot_webcam.len();
-    let webcam_zoom = self.webcam_zoom.state_at(timestamp_ms, self.webcam_layout.rect);
+    let webcam_zoom = self
+      .webcam_zoom
+      .state_at(timestamp_ms, self.webcam_layout.rect);
     self.slot_webcam[webcam_index] = StagedWebcam {
       visible: !self.webcam_hidden.contains(timestamp_ms),
       rect: webcam_zoom.rect,
@@ -1378,7 +1396,7 @@ impl RenderChain {
     dst_rtv: &ID3D11RenderTargetView,
     zoom: ZoomState,
   ) -> Result<()> {
-    let layout = self.layout;
+    let layout = &self.layout;
     if layout.rect.is_empty() {
       return Ok(());
     }
@@ -1391,6 +1409,43 @@ impl RenderChain {
     let border_width = layout.border_width * zoom.scale;
 
     unsafe {
+      // Shadows first, under everything, and cast by the recording's own
+      // rectangle rather than the bordered one -- the same choice the camera
+      // makes, and the same one the Canvas2D compositor makes, so a border
+      // drawn over a shadow's inner edge looks identical in both.
+      //
+      // Skipped once the recording covers the canvas, which a zoom of any real
+      // depth does. Nothing is lost: everything still on screen is inside the
+      // video rect and the video is drawn over it a moment later, so the whole
+      // pass would be a canvas-sized quad per layer that never shows a pixel.
+      if !rect.contains_canvas(self.canvas_width, self.canvas_height) {
+        for shadow in &layout.shadows {
+          let shadow = shadow.scaled(zoom.scale);
+          if !shadow.is_visible() {
+            continue;
+          }
+
+          self.draw_quad_locked(
+            ctx,
+            dst_rtv,
+            &self.video_bgra_srv,
+            Quad {
+              rect: shadow.quad_rect(rect),
+              shape: OverlayShape::Rect,
+              corner_radius,
+              opacity: 1.0,
+              uv: UvRect::default(),
+              grade: Grade::default(),
+              fill: Fill::Shadow(ShadowFill {
+                colour: shadow.colour,
+                half: [rect.width * 0.5, rect.height * 0.5],
+                softness: shadow.softness(),
+              }),
+            },
+          )?;
+        }
+      }
+
       // The border is the same rounded rect grown by its width and filled, drawn
       // first so the video lands on top of it. Its radius grows too, or the
       // corners of the border and the corners of the video would not be
@@ -1469,7 +1524,11 @@ impl RenderChain {
     let expansion = staged.full_screen.clamp(0.0, 1.0);
     let softened = 1.0 - expansion;
     let box_rect = if expansion > 0.0 {
-      lerp_rect(staged.rect, Rect::covering(self.canvas_width, self.canvas_height), expansion)
+      lerp_rect(
+        staged.rect,
+        Rect::covering(self.canvas_width, self.canvas_height),
+        expansion,
+      )
     } else {
       staged.rect
     };
@@ -1485,7 +1544,12 @@ impl RenderChain {
     // The camera almost never matches the box the caller asked for, and a
     // stretched face is more obviously wrong than a cropped one. Resolved here
     // because this is the only place that knows the camera's real resolution.
-    let (rect, uv) = fit_source(box_rect, webcam.width, webcam.height, self.webcam_layout.fit);
+    let (rect, uv) = fit_source(
+      box_rect,
+      webcam.width,
+      webcam.height,
+      self.webcam_layout.fit,
+    );
 
     unsafe {
       // Pass 1: NV12 -> BGRA, at the camera's resolution.
@@ -1835,7 +1899,10 @@ mod layer_order_tests {
     // The editor's own default, and the thing the engine used to get wrong: it
     // drew the pointer last unconditionally, so a cursor crossing the camera
     // box came out on top here and underneath there.
-    assert_eq!(DEFAULT_LAYER_ORDER, [Layer::Video, Layer::Cursor, Layer::Webcam]);
+    assert_eq!(
+      DEFAULT_LAYER_ORDER,
+      [Layer::Video, Layer::Cursor, Layer::Webcam]
+    );
     assert_eq!(parse_layer_order(&names(&[])), DEFAULT_LAYER_ORDER);
   }
 
@@ -1958,7 +2025,10 @@ mod layer_order_scenarios {
     // Matching the editor. The engine used to draw the pointer last no matter
     // what, so a cursor crossing the camera box came out on top here and
     // underneath there -- a difference nobody looks for until the export.
-    assert_eq!(DEFAULT_LAYER_ORDER, [Layer::Video, Layer::Cursor, Layer::Webcam]);
+    assert_eq!(
+      DEFAULT_LAYER_ORDER,
+      [Layer::Video, Layer::Cursor, Layer::Webcam]
+    );
   }
 
   #[test]
@@ -2218,10 +2288,7 @@ mod source_crop_scenarios {
 
   #[test]
   fn a_crop_that_is_entirely_nonsense_resolves_to_nothing() {
-    assert_eq!(
-      crop(f32::NAN, f32::NAN, f32::NAN, f32::NAN).resolve(),
-      None
-    );
+    assert_eq!(crop(f32::NAN, f32::NAN, f32::NAN, f32::NAN).resolve(), None);
   }
 
   #[test]
@@ -2255,8 +2322,14 @@ mod source_crop_scenarios {
     ];
     for (t, l, b, r) in cases {
       if let Some(resolved) = crop(t, l, b, r).resolve() {
-        assert!(resolved.width() >= MIN_VISIBLE_FRACTION - 1e-6, "{t} {l} {b} {r}");
-        assert!(resolved.height() >= MIN_VISIBLE_FRACTION - 1e-6, "{t} {l} {b} {r}");
+        assert!(
+          resolved.width() >= MIN_VISIBLE_FRACTION - 1e-6,
+          "{t} {l} {b} {r}"
+        );
+        assert!(
+          resolved.height() >= MIN_VISIBLE_FRACTION - 1e-6,
+          "{t} {l} {b} {r}"
+        );
       }
     }
   }
@@ -2362,6 +2435,11 @@ mod video_layout_scenarios {
       corner_radius: 16.0,
       border_width: 2.0,
       border_colour: [1.0, 1.0, 1.0, 1.0],
+      shadows: vec![Shadow {
+        offset: [0.0, 18.0],
+        blur: 45.0,
+        colour: [0.0, 0.0, 0.0, 0.22],
+      }],
     }
   }
 
@@ -2441,6 +2519,84 @@ mod video_layout_scenarios {
   }
 
   #[test]
+  fn sanitizing_drops_the_video_shadows_that_would_draw_nothing() {
+    // Same rule the camera's layout follows. A shadow with no blur, no offset
+    // and no alpha still costs a quad the size of the recording.
+    let l = VideoLayout {
+      shadows: vec![
+        Shadow {
+          offset: [0.0, 18.0],
+          blur: 45.0,
+          colour: [0.0, 0.0, 0.0, 0.22],
+        },
+        Shadow {
+          offset: [0.0, 0.0],
+          blur: 0.0,
+          colour: [0.0, 0.0, 0.0, 0.5],
+        },
+        Shadow {
+          offset: [0.0, 4.0],
+          blur: 10.0,
+          colour: [0.0, 0.0, 0.0, 0.0],
+        },
+        Shadow {
+          offset: [0.0, 4.0],
+          blur: f32::NAN,
+          colour: [0.0, 0.0, 0.0, 0.16],
+        },
+        Shadow {
+          offset: [f32::INFINITY, 4.0],
+          blur: 10.0,
+          colour: [0.0, 0.0, 0.0, 0.16],
+        },
+      ],
+      ..layout()
+    }
+    .sanitized();
+
+    assert_eq!(l.shadows.len(), 1);
+    assert_eq!(l.shadows[0].blur, 45.0);
+  }
+
+  #[test]
+  fn sanitizing_keeps_the_order_of_the_video_shadows_it_keeps() {
+    // The stack is painted in order, so reordering it changes the picture.
+    let l = VideoLayout {
+      shadows: vec![
+        Shadow {
+          offset: [0.0, 18.0],
+          blur: 45.0,
+          colour: [0.0, 0.0, 0.0, 0.22],
+        },
+        Shadow {
+          offset: [0.0, 0.0],
+          blur: 0.0,
+          colour: [0.0, 0.0, 0.0, 0.5],
+        },
+        Shadow {
+          offset: [0.0, 4.0],
+          blur: 10.0,
+          colour: [0.0, 0.0, 0.0, 0.16],
+        },
+      ],
+      ..layout()
+    }
+    .sanitized();
+
+    assert_eq!(
+      l.shadows.iter().map(|s| s.blur).collect::<Vec<_>>(),
+      vec![45.0, 10.0]
+    );
+  }
+
+  #[test]
+  fn a_covering_layout_casts_no_shadow() {
+    // Full-bleed: the recording is the canvas, so there is no background left
+    // for a shadow to land on.
+    assert!(VideoLayout::covering(1920, 1080).shadows.is_empty());
+  }
+
+  #[test]
   fn sanitizing_twice_is_the_same_as_once() {
     let messy = VideoLayout {
       corner_radius: -1.0,
@@ -2452,7 +2608,7 @@ mod video_layout_scenarios {
       ..layout()
     };
     let once = messy.sanitized();
-    assert_eq!(once.sanitized(), once);
+    assert_eq!(once.clone().sanitized(), once);
   }
 
   #[test]
@@ -2656,7 +2812,10 @@ mod layer_order_permutations {
       let mut seen_unnamed = false;
       for layer in order {
         if named_layers.contains(&layer) {
-          assert!(!seen_unnamed, "{named:?}: {layer:?} came after an unnamed layer");
+          assert!(
+            !seen_unnamed,
+            "{named:?}: {layer:?} came after an unnamed layer"
+          );
         } else {
           seen_unnamed = true;
         }
@@ -2698,7 +2857,11 @@ mod layer_order_permutations {
       &["background", "", "nonsense"],
     ];
     for list in junk {
-      assert_eq!(parse_layer_order(&names(list)), DEFAULT_LAYER_ORDER, "{list:?}");
+      assert_eq!(
+        parse_layer_order(&names(list)),
+        DEFAULT_LAYER_ORDER,
+        "{list:?}"
+      );
     }
   }
 
@@ -2754,7 +2917,10 @@ mod crop_matrix {
           let label = format!("{top}/{left}");
           for edge in [r.top, r.left, r.bottom, r.right] {
             assert!(edge.is_finite(), "{label}");
-            assert!((0.0..=1.0 - MIN_VISIBLE_FRACTION).contains(&edge), "{label}: {edge}");
+            assert!(
+              (0.0..=1.0 - MIN_VISIBLE_FRACTION).contains(&edge),
+              "{label}: {edge}"
+            );
           }
         }
       }
@@ -2914,12 +3080,23 @@ mod video_layout_matrix {
       corner_radius: 8.0,
       border_width: 2.0,
       border_colour: [1.0, 1.0, 1.0, 1.0],
+      shadows: vec![Shadow {
+        offset: [0.0, 18.0],
+        blur: 45.0,
+        colour: [0.0, 0.0, 0.0, 0.22],
+      }],
     }
   }
 
   #[test]
   fn covering_any_canvas_gives_the_whole_canvas_with_no_decoration() {
-    for (w, h) in [(1920u32, 1080u32), (1, 1), (0, 0), (3840, 2160), (100, 4000)] {
+    for (w, h) in [
+      (1920u32, 1080u32),
+      (1, 1),
+      (0, 0),
+      (3840, 2160),
+      (100, 4000),
+    ] {
       let l = VideoLayout::covering(w, h);
       assert_eq!(l.rect, Rect::covering(w, h), "{w}x{h}");
       assert_eq!(l.corner_radius, 0.0, "{w}x{h}");
@@ -2975,7 +3152,7 @@ mod video_layout_matrix {
           _ => rect.height = bad,
         }
         let once = VideoLayout { rect, ..layout() }.sanitized();
-        assert_eq!(once.sanitized(), once, "{bad} field {field}");
+        assert_eq!(once.clone().sanitized(), once, "{bad} field {field}");
       }
     }
   }
@@ -2989,7 +3166,7 @@ mod video_layout_matrix {
           border_width: border,
           ..layout()
         };
-        assert_eq!(l.sanitized(), l, "{radius}/{border}");
+        assert_eq!(l.clone().sanitized(), l, "{radius}/{border}");
       }
     }
   }
@@ -3043,7 +3220,11 @@ mod background_matrix {
       [1.0, 0.0, 0.0, 1.0],
     ];
     for colour in colours {
-      assert_eq!(Background::Solid(colour).clear_colour(), colour, "{colour:?}");
+      assert_eq!(
+        Background::Solid(colour).clear_colour(),
+        colour,
+        "{colour:?}"
+      );
     }
   }
 

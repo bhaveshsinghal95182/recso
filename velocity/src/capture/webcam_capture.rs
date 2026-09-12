@@ -1,14 +1,23 @@
 use super::desktop_capture::Stopper;
 use super::phone_camera;
 use crate::singular_clock::fps_to_period_100ns;
+use image::codecs::jpeg::JpegEncoder;
+use image::imageops::FilterType;
+use image::{DynamicImage, ExtendedColorType, RgbImage};
+use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
 use nokhwa::pixel_format::RgbFormat;
 use nokhwa::utils::{ApiBackend, CameraIndex, RequestedFormat, RequestedFormatType};
 use nokhwa::{query, Camera};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender, TryRecvError};
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
+use windows::Win32::System::Com::{
+  CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
+};
 use windows_capture::encoder::{
   AudioSettingsBuilder, ContainerSettingsBuilder, VideoEncoder, VideoSettingsBuilder,
   VideoSettingsSubType,
@@ -16,6 +25,11 @@ use windows_capture::encoder::{
 
 const WEBCAM_DEFAULT_BITRATE: u32 = 3_000_000;
 const WEBCAM_READY_FRAME_TIMEOUT: Duration = Duration::from_secs(5);
+const WEBCAM_PREVIEW_FPS: u32 = 30;
+const WEBCAM_PREVIEW_PERIOD: Duration = Duration::from_millis(80);
+const WEBCAM_PREVIEW_MAX_WIDTH: u32 = 480;
+const WEBCAM_PREVIEW_MAX_HEIGHT: u32 = 360;
+const WEBCAM_PREVIEW_JPEG_QUALITY: u8 = 76;
 
 /// What the phone capture page targets. Anything above it is duplicated frames.
 const PHONE_CAPTURE_FPS: u32 = 30;
@@ -25,6 +39,51 @@ pub struct WebcamDeviceInfo {
   pub id: String,
   pub label: String,
   pub is_default: bool,
+}
+
+/** A small JPEG copied from the native camera owner for the recorder UI. */
+#[napi(object)]
+pub struct WebcamPreviewFrame {
+  pub jpeg: Buffer,
+  pub width: u32,
+  pub height: u32,
+  /** Monotonic, so a polling renderer can skip a frame it has already drawn. */
+  pub sequence: u32,
+}
+
+struct StoredWebcamPreviewFrame {
+  jpeg: Vec<u8>,
+  width: u32,
+  height: u32,
+  sequence: u32,
+}
+
+static WEBCAM_PREVIEW_FRAME: OnceLock<Mutex<Option<StoredWebcamPreviewFrame>>> = OnceLock::new();
+static WEBCAM_PREVIEW_SEQUENCE: AtomicU32 = AtomicU32::new(0);
+static WEBCAM_PREVIEW_RUNNING: AtomicBool = AtomicBool::new(false);
+
+fn preview_frame_slot() -> &'static Mutex<Option<StoredWebcamPreviewFrame>> {
+  WEBCAM_PREVIEW_FRAME.get_or_init(|| Mutex::new(None))
+}
+
+#[napi]
+pub fn webcam_preview_frame() -> Option<WebcamPreviewFrame> {
+  let slot = preview_frame_slot().lock().ok()?;
+  let frame = slot.as_ref()?;
+
+  Some(WebcamPreviewFrame {
+    jpeg: frame.jpeg.clone().into(),
+    width: frame.width,
+    height: frame.height,
+    sequence: frame.sequence,
+  })
+}
+
+#[napi]
+pub fn clear_webcam_preview_frame() {
+  if let Ok(mut slot) = preview_frame_slot().lock() {
+    *slot = None;
+  }
 }
 
 #[napi]
@@ -108,35 +167,150 @@ fn select_camera_index(requested_device_id: Option<&str>) -> Result<CameraIndex,
   Ok(devices[0].index().clone())
 }
 
-fn create_camera(index: CameraIndex, target_fps: u32) -> Result<Camera, String> {
-  let request_high_fps = RequestedFormat::new::<RgbFormat>(RequestedFormatType::HighestFrameRate(target_fps));
+fn create_camera(index: CameraIndex, target_fps: u32) -> Result<LocalCamera, String> {
+  let request_high_fps =
+    RequestedFormat::new::<RgbFormat>(RequestedFormatType::HighestFrameRate(target_fps));
   let request_default = RequestedFormat::new::<RgbFormat>(RequestedFormatType::None);
 
-  Camera::with_backend(index.clone(), request_high_fps, ApiBackend::MediaFoundation)
-    .or_else(|_| Camera::with_backend(index, request_default, ApiBackend::MediaFoundation))
+  let open = |request| {
+    let mut camera = Camera::with_backend(index.clone(), request, ApiBackend::MediaFoundation)?;
+    // Keep the selected capability's rate. Nokhwa's Windows 0.4.5 backend
+    // truncates MF_MT_FRAME_RATE's packed ratio to its denominator when reading
+    // camera_format(), reporting 1 for a 30/1 camera and throttling us to 1fps.
+    let selected = camera.set_camera_requset(request)?;
+    Ok::<_, nokhwa::NokhwaError>(LocalCamera {
+      camera,
+      selected_fps: selected.frame_rate(),
+    })
+  };
+  open(request_high_fps)
+    .or_else(|_| open(request_default))
     .map_err(|error| format!("failed to initialize webcam: {error}"))
 }
 
 pub(crate) fn rgb_to_bgra_bottom_up(rgb: &[u8], width: usize, height: usize) -> Vec<u8> {
-    let mut output = vec![0u8; width * height * 4];
-    let row_bytes_rgb = width * 3;
-    let row_bytes_bgra = width * 4;
+  let mut output = vec![0u8; width * height * 4];
+  let row_bytes_rgb = width * 3;
+  let row_bytes_bgra = width * 4;
 
-    // Iterate over rows in reverse to flip the image bottom-up
-    for (y, rgb_row) in rgb.chunks_exact(row_bytes_rgb).enumerate() {
-        let dst_y = height - 1 - y;
-        let dst_row = &mut output[dst_y * row_bytes_bgra .. (dst_y + 1) * row_bytes_bgra];
+  // Iterate over rows in reverse to flip the image bottom-up
+  for (y, rgb_row) in rgb.chunks_exact(row_bytes_rgb).enumerate() {
+    let dst_y = height - 1 - y;
+    let dst_row = &mut output[dst_y * row_bytes_bgra..(dst_y + 1) * row_bytes_bgra];
 
-        // Zip the chunks together to eliminate bounds checking entirely
-        for (src_pixel, dst_pixel) in rgb_row.chunks_exact(3).zip(dst_row.chunks_exact_mut(4)) {
-            dst_pixel[0] = src_pixel[2]; // B
-            dst_pixel[1] = src_pixel[1]; // G
-            dst_pixel[2] = src_pixel[0]; // R
-            dst_pixel[3] = 255;          // A
-        }
+    // Zip the chunks together to eliminate bounds checking entirely
+    for (src_pixel, dst_pixel) in rgb_row.chunks_exact(3).zip(dst_row.chunks_exact_mut(4)) {
+      dst_pixel[0] = src_pixel[2]; // B
+      dst_pixel[1] = src_pixel[1]; // G
+      dst_pixel[2] = src_pixel[0]; // R
+      dst_pixel[3] = 255; // A
+    }
+  }
+
+  output
+}
+
+fn preview_jpeg_from_bgra_bottom_up(
+  bgra: &[u8],
+  width: usize,
+  height: usize,
+) -> Result<(Vec<u8>, u32, u32), String> {
+  let expected_len = width
+    .checked_mul(height)
+    .and_then(|pixels| pixels.checked_mul(4))
+    .ok_or_else(|| "webcam preview dimensions overflowed".to_string())?;
+  if width == 0 || height == 0 || bgra.len() < expected_len {
+    return Err(format!(
+      "webcam preview frame is invalid ({}x{}, have={}, need={})",
+      width,
+      height,
+      bgra.len(),
+      expected_len
+    ));
+  }
+
+  // The encoder wants bottom-up BGRA; image/JPEG wants top-down RGB. Convert
+  // while undoing the row flip, so the preview shows the same frame upright.
+  let mut rgb = Vec::with_capacity(width * height * 3);
+  let bgra_row_bytes = width * 4;
+  for target_y in 0..height {
+    let source_y = height - 1 - target_y;
+    let row = &bgra[source_y * bgra_row_bytes..(source_y + 1) * bgra_row_bytes];
+    for pixel in row.chunks_exact(4) {
+      rgb.extend_from_slice(&[pixel[2], pixel[1], pixel[0]]);
+    }
+  }
+
+  let source = RgbImage::from_raw(width as u32, height as u32, rgb)
+    .ok_or_else(|| "failed to construct webcam preview image".to_string())?;
+  let preview =
+    if source.width() > WEBCAM_PREVIEW_MAX_WIDTH || source.height() > WEBCAM_PREVIEW_MAX_HEIGHT {
+      DynamicImage::ImageRgb8(source)
+        .resize(
+          WEBCAM_PREVIEW_MAX_WIDTH,
+          WEBCAM_PREVIEW_MAX_HEIGHT,
+          FilterType::Triangle,
+        )
+        .to_rgb8()
+    } else {
+      source
+    };
+  let preview_width = preview.width();
+  let preview_height = preview.height();
+  let mut jpeg = Vec::new();
+  JpegEncoder::new_with_quality(&mut jpeg, WEBCAM_PREVIEW_JPEG_QUALITY)
+    .encode(
+      preview.as_raw(),
+      preview_width,
+      preview_height,
+      ExtendedColorType::Rgb8,
+    )
+    .map_err(|error| format!("failed to encode webcam preview: {error}"))?;
+
+  Ok((jpeg, preview_width, preview_height))
+}
+
+fn publish_webcam_preview(bgra: &[u8], width: usize, height: usize) -> Result<(), String> {
+  let (jpeg, preview_width, preview_height) =
+    preview_jpeg_from_bgra_bottom_up(bgra, width, height)?;
+  let sequence = WEBCAM_PREVIEW_SEQUENCE
+    .fetch_add(1, Ordering::Relaxed)
+    .wrapping_add(1);
+  let mut slot = preview_frame_slot()
+    .lock()
+    .map_err(|_| "webcam preview frame lock was poisoned".to_string())?;
+  *slot = Some(StoredWebcamPreviewFrame {
+    jpeg,
+    width: preview_width,
+    height: preview_height,
+    sequence,
+  });
+  Ok(())
+}
+
+struct PreviewPublisher {
+  last_published: Option<Instant>,
+}
+
+impl PreviewPublisher {
+  fn new() -> Self {
+    Self {
+      last_published: None,
+    }
+  }
+
+  fn publish_if_due(&mut self, bgra: &[u8], width: usize, height: usize) {
+    if self
+      .last_published
+      .is_some_and(|last| last.elapsed() < WEBCAM_PREVIEW_PERIOD)
+    {
+      return;
     }
 
-    output
+    if publish_webcam_preview(bgra, width, height).is_ok() {
+      self.last_published = Some(Instant::now());
+    }
+  }
 }
 
 /// Where the sidecar loop gets its pictures.
@@ -164,6 +338,7 @@ trait FrameSource {
 
 struct LocalCamera {
   camera: Camera,
+  selected_fps: u32,
 }
 
 impl FrameSource for LocalCamera {
@@ -172,7 +347,7 @@ impl FrameSource for LocalCamera {
   }
 
   fn effective_fps(&self, requested: u32) -> u32 {
-    let reported = self.camera.camera_format().frame_rate();
+    let reported = self.selected_fps;
     if reported > 0 {
       reported
     } else {
@@ -223,9 +398,7 @@ pub(crate) enum WebcamSource {
   Phone,
 }
 
-fn capture_next_bgra_frame(
-  camera: &mut Camera,
- ) -> Result<(Vec<u8>, usize, usize), String> {
+fn capture_next_bgra_frame(camera: &mut Camera) -> Result<(Vec<u8>, usize, usize), String> {
   let frame = camera
     .frame()
     .map_err(|error| format!("capture failed: {error}"))?;
@@ -238,9 +411,7 @@ fn capture_next_bgra_frame(
   let frame_height = rgb_frame.height() as usize;
 
   let rgb_raw = rgb_frame.into_raw();
-  let expected_len = frame_width
-    .saturating_mul(frame_height)
-    .saturating_mul(3);
+  let expected_len = frame_width.saturating_mul(frame_height).saturating_mul(3);
   if rgb_raw.len() < expected_len {
     return Err(format!(
       "decoded frame buffer too small (have={}, need={})",
@@ -294,10 +465,158 @@ fn open_source(source: WebcamSource, requested_fps: u32) -> Result<Box<dyn Frame
       let index = select_camera_index(device_id.as_deref())?;
       let mut camera = create_camera(index, requested_fps)?;
       camera
+        .camera
         .open_stream()
         .map_err(|error| format!("failed to open webcam stream: {error}"))?;
-      Ok(Box::new(LocalCamera { camera }))
+      Ok(Box::new(camera))
     }
+  }
+}
+
+struct PreviewRunningGuard;
+
+impl Drop for PreviewRunningGuard {
+  fn drop(&mut self) {
+    WEBCAM_PREVIEW_RUNNING.store(false, Ordering::Release);
+  }
+}
+
+struct CameraThreadComGuard;
+
+impl CameraThreadComGuard {
+  fn initialize() -> Result<Self, String> {
+    unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) }
+      .ok()
+      .map_err(|error| format!("failed to initialize camera worker COM apartment: {error}"))?;
+    Ok(Self)
+  }
+}
+
+impl Drop for CameraThreadComGuard {
+  fn drop(&mut self) {
+    unsafe { CoUninitialize() };
+  }
+}
+
+fn run_webcam_preview_loop(
+  device_id: Option<String>,
+  stop_rx: Receiver<()>,
+  ready_tx: Sender<Result<(), String>>,
+) {
+  let _running_guard = PreviewRunningGuard;
+  let _com_guard = match CameraThreadComGuard::initialize() {
+    Ok(guard) => guard,
+    Err(error) => {
+      let _ = ready_tx.send(Err(error));
+      return;
+    }
+  };
+  let mut camera = match open_source(WebcamSource::Local(device_id), WEBCAM_PREVIEW_FPS) {
+    Ok(source) => source,
+    Err(error) => {
+      let _ = ready_tx.send(Err(error));
+      return;
+    }
+  };
+
+  let effective_fps = camera.effective_fps(WEBCAM_PREVIEW_FPS).max(1);
+  let frame_period = Duration::from_nanos(1_000_000_000u64 / effective_fps as u64);
+  let startup_deadline = Instant::now() + WEBCAM_READY_FRAME_TIMEOUT;
+  let mut ready_tx = Some(ready_tx);
+  let mut startup_error = "no frame produced".to_string();
+  let mut preview = PreviewPublisher::new();
+
+  loop {
+    match stop_rx.try_recv() {
+      Ok(_) | Err(TryRecvError::Disconnected) => break,
+      Err(TryRecvError::Empty) => {}
+    }
+
+    let frame_started = Instant::now();
+    match camera.next_bgra() {
+      Ok((frame, width, height)) => {
+        if ready_tx.is_some() {
+          match publish_webcam_preview(&frame, width, height) {
+            Ok(()) => {
+              preview.last_published = Some(Instant::now());
+              if let Some(sender) = ready_tx.take() {
+                let _ = sender.send(Ok(()));
+              }
+            }
+            Err(error) => startup_error = error,
+          }
+        } else {
+          preview.publish_if_due(&frame, width, height);
+        }
+      }
+      Err(error) => startup_error = error,
+    }
+
+    if ready_tx.is_some() && Instant::now() >= startup_deadline {
+      if let Some(sender) = ready_tx.take() {
+        let _ = sender.send(Err(format!(
+          "webcam preview produced no valid frame in startup window: {startup_error}"
+        )));
+      }
+      break;
+    }
+
+    let elapsed = frame_started.elapsed();
+    if elapsed < frame_period {
+      thread::sleep(frame_period - elapsed);
+    }
+  }
+
+  camera.close();
+}
+
+/**
+ * Open one local webcam for the recorder setup preview.
+ *
+ * The returned stopper must be stopped before recording begins. The recording
+ * loop then publishes into the same preview slot while it owns the device, so
+ * there is never a browser/native or preview/recording ownership race.
+ */
+#[napi]
+pub fn start_webcam_preview(device_id: Option<String>) -> napi::Result<Stopper> {
+  if WEBCAM_PREVIEW_RUNNING
+    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+    .is_err()
+  {
+    return Err(napi::Error::from_reason(
+      "a native webcam preview is already running".to_string(),
+    ));
+  }
+
+  clear_webcam_preview_frame();
+  let (stop_tx, stop_rx) = channel();
+  let (done_tx, done_rx) = channel();
+  let (ready_tx, ready_rx) = channel();
+
+  thread::spawn(move || {
+    run_webcam_preview_loop(device_id, stop_rx, ready_tx);
+    let _ = done_tx.send(());
+  });
+
+  match ready_rx.recv_timeout(Duration::from_secs(8)) {
+    Ok(Ok(())) => Ok(Stopper::from_channels(stop_tx, done_rx)),
+    Ok(Err(error)) => {
+      let _ = stop_tx.send(());
+      let _ = done_rx.recv_timeout(Duration::from_secs(2));
+      Err(napi::Error::from_reason(format!(
+        "failed to start native webcam preview: {error}"
+      )))
+    }
+    Err(RecvTimeoutError::Timeout) => {
+      let _ = stop_tx.send(());
+      let _ = done_rx.recv_timeout(Duration::from_secs(2));
+      Err(napi::Error::from_reason(
+        "native webcam preview startup timed out".to_string(),
+      ))
+    }
+    Err(RecvTimeoutError::Disconnected) => Err(napi::Error::from_reason(
+      "native webcam preview thread exited during startup".to_string(),
+    )),
   }
 }
 
@@ -310,6 +629,14 @@ fn run_webcam_recording_loop(
 ) {
   let sidecar_path = camera_sidecar_path(&output_path);
   let requested_fps = target_webcam_fps(target_fps);
+
+  let _com_guard = match CameraThreadComGuard::initialize() {
+    Ok(guard) => guard,
+    Err(error) => {
+      let _ = ready_tx.send(Err(error));
+      return;
+    }
+  };
 
   let mut camera = match open_source(source, requested_fps) {
     Ok(source) => source,
@@ -332,6 +659,7 @@ fn run_webcam_recording_loop(
   let mut expected_frame_width: usize = 0;
   let mut expected_frame_height: usize = 0;
   let mut startup_error = String::from("no frame produced");
+  let mut preview = PreviewPublisher::new();
 
   while Instant::now() < startup_deadline {
     match stop_rx.try_recv() {
@@ -344,6 +672,7 @@ fn run_webcam_recording_loop(
 
     match camera.next_bgra() {
       Ok((frame, frame_width, frame_height)) => {
+        preview.publish_if_due(&frame, frame_width, frame_height);
         latest_bgra = Some(frame);
         expected_frame_width = frame_width;
         expected_frame_height = frame_height;
@@ -416,6 +745,7 @@ fn run_webcam_recording_loop(
     match camera.next_bgra() {
       Ok((frame, frame_width, frame_height)) => {
         if frame_width == expected_frame_width && frame_height == expected_frame_height {
+          preview.publish_if_due(&frame, frame_width, frame_height);
           latest_bgra = Some(frame);
         } else {
           mismatched_dimension_counter = mismatched_dimension_counter.saturating_add(1);
@@ -564,7 +894,9 @@ mod tests {
   fn camera_sidecar_path_defaults_extension_to_mp4_when_missing() {
     let sidecar = camera_sidecar_path("tests/recording_noext");
     assert_eq!(
-      Path::new(&sidecar).extension().and_then(|value| value.to_str()),
+      Path::new(&sidecar)
+        .extension()
+        .and_then(|value| value.to_str()),
       Some("mp4")
     );
     assert!(sidecar.contains("recording_noext_camera"));
@@ -646,7 +978,10 @@ mod sidecar_path_scenarios {
 
   #[test]
   fn the_camera_suffix_goes_before_the_extension() {
-    assert_eq!(normalised("C:/takes/recording.mp4"), "C:/takes/recording_camera.mp4");
+    assert_eq!(
+      normalised("C:/takes/recording.mp4"),
+      "C:/takes/recording_camera.mp4"
+    );
   }
 
   #[test]
@@ -663,23 +998,35 @@ mod sidecar_path_scenarios {
   fn a_missing_extension_defaults_to_mp4() {
     // The sidecar is written by the same encoder as the screen track, so it is
     // an MP4 whatever the caller called the main file.
-    assert_eq!(normalised("C:/takes/recording"), "C:/takes/recording_camera.mp4");
+    assert_eq!(
+      normalised("C:/takes/recording"),
+      "C:/takes/recording_camera.mp4"
+    );
   }
 
   #[test]
   fn an_empty_extension_defaults_to_mp4() {
-    assert_eq!(normalised("C:/takes/recording."), "C:/takes/recording_camera.mp4");
+    assert_eq!(
+      normalised("C:/takes/recording."),
+      "C:/takes/recording_camera.mp4"
+    );
   }
 
   #[test]
   fn a_non_mp4_extension_is_preserved() {
     assert_eq!(normalised("C:/takes/take.mkv"), "C:/takes/take_camera.mkv");
-    assert_eq!(normalised("C:/takes/take.webm"), "C:/takes/take_camera.webm");
+    assert_eq!(
+      normalised("C:/takes/take.webm"),
+      "C:/takes/take_camera.webm"
+    );
   }
 
   #[test]
   fn only_the_last_extension_counts() {
-    assert_eq!(normalised("C:/takes/take.2024.mp4"), "C:/takes/take.2024_camera.mp4");
+    assert_eq!(
+      normalised("C:/takes/take.2024.mp4"),
+      "C:/takes/take.2024_camera.mp4"
+    );
   }
 
   #[test]
@@ -855,7 +1202,11 @@ mod colour_conversion_scenarios {
   fn the_output_is_four_bytes_a_pixel() {
     for (w, h) in [(1usize, 1usize), (4, 4), (16, 9), (320, 240)] {
       let rgb = vec![0u8; w * h * 3];
-      assert_eq!(rgb_to_bgra_bottom_up(&rgb, w, h).len(), w * h * 4, "{w}x{h}");
+      assert_eq!(
+        rgb_to_bgra_bottom_up(&rgb, w, h).len(),
+        w * h * 4,
+        "{w}x{h}"
+      );
     }
   }
 
@@ -953,5 +1304,68 @@ mod colour_conversion_scenarios {
     // the first source row, which lands in the last output row.
     let last_row = (h - 1) * w * 4;
     assert_eq!(bgra[last_row + 2], rgb[0]);
+  }
+}
+
+#[cfg(test)]
+mod preview_frame_scenarios {
+  use super::*;
+
+  #[test]
+  fn the_native_preview_is_a_decodable_jpeg() {
+    let rgb = vec![96u8; 64 * 48 * 3];
+    let bgra = rgb_to_bgra_bottom_up(&rgb, 64, 48);
+    let (jpeg, width, height) =
+      preview_jpeg_from_bgra_bottom_up(&bgra, 64, 48).expect("preview jpeg");
+
+    let decoded = image::load_from_memory(&jpeg).expect("decodable jpeg");
+    assert_eq!(decoded.width(), width);
+    assert_eq!(decoded.height(), height);
+  }
+
+  #[test]
+  fn the_native_preview_is_bounded_without_changing_aspect_ratio() {
+    let rgb = vec![0u8; 960 * 540 * 3];
+    let bgra = rgb_to_bgra_bottom_up(&rgb, 960, 540);
+    let (_, width, height) =
+      preview_jpeg_from_bgra_bottom_up(&bgra, 960, 540).expect("preview jpeg");
+
+    assert_eq!((width, height), (480, 270));
+  }
+
+  #[test]
+  fn the_native_preview_undoes_the_encoder_row_flip() {
+    let (width, height) = (32usize, 16usize);
+    let mut rgb = Vec::with_capacity(width * height * 3);
+    for y in 0..height {
+      let colour = if y < height / 2 {
+        [240, 16, 16]
+      } else {
+        [16, 16, 240]
+      };
+      for _ in 0..width {
+        rgb.extend_from_slice(&colour);
+      }
+    }
+
+    let bgra = rgb_to_bgra_bottom_up(&rgb, width, height);
+    let (jpeg, _, _) =
+      preview_jpeg_from_bgra_bottom_up(&bgra, width, height).expect("preview jpeg");
+    let decoded = image::load_from_memory(&jpeg)
+      .expect("decodable jpeg")
+      .to_rgb8();
+    let top = decoded.get_pixel(width as u32 / 2, 2).0;
+    let bottom = decoded.get_pixel(width as u32 / 2, height as u32 - 3).0;
+
+    assert!(top[0] > top[2], "top pixel should remain red: {top:?}");
+    assert!(
+      bottom[2] > bottom[0],
+      "bottom pixel should remain blue: {bottom:?}"
+    );
+  }
+
+  #[test]
+  fn an_empty_native_preview_frame_is_rejected() {
+    assert!(preview_jpeg_from_bgra_bottom_up(&[], 0, 0).is_err());
   }
 }

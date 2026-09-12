@@ -35,15 +35,17 @@ import type {
   CompositionCursorEvent,
   CompositionCutRegion,
   CompositionZoomRegion,
+  ShadowLayer,
   WebcamOverlayShape,
-  WebcamShadowLayer,
 } from '../types';
 import type { CursorBitmapTable } from './raster';
 import {
   backgroundColour,
   buildCursorBitmapTable,
+  canvasBackgroundColour,
   parseCssColour,
   rasteriseBackground,
+  rasteriseCanvasBackground,
   rasteriseCursor,
 } from './raster';
 
@@ -246,7 +248,7 @@ function toEngineLayerOrder(config: CompositionConfig): string[] {
 }
 
 /**
- * The webcam's shadow stack, as the engine takes it.
+ * A shadow stack, as the engine takes it.
  *
  * A straight translation -- the engine draws the same silhouette from the same
  * four numbers the Canvas2D compositor uses, so there is nothing to resolve
@@ -254,11 +256,11 @@ function toEngineLayerOrder(config: CompositionConfig): string[] {
  * to the code that would otherwise size a quad for an invisible one.
  *
  * An unparseable colour drops the layer rather than falling back to black. A
- * shadow is decoration, and inventing an opaque black one under the camera is a
- * worse answer than leaving it out.
+ * shadow is decoration, and inventing an opaque black one under the recording
+ * is a worse answer than leaving it out.
  */
-function toEngineWebcamShadows(
-  shadows: WebcamShadowLayer[] | undefined,
+function toEngineShadows(
+  shadows: ShadowLayer[] | undefined,
 ): NonNullable<Parameters<EnginePlayer['setWebcamLayout']>[0]['shadows']> {
   return (shadows ?? []).flatMap((shadow) => {
     const colour = parseCssColour(shadow.color);
@@ -343,15 +345,30 @@ export async function resolveComposition(
     cornerRadius: config.video.borderRadius,
     borderWidth: config.video.border.width,
     borderColour: parseCssColour(config.video.border.color) ?? undefined,
+    shadows: toEngineShadows(config.video.shadows),
   };
 
   // ---- background ----------------------------------------------------------
+  //
+  // From the project rather than from `config.background`, because for an engine
+  // consumer the canvas background is always the one the user picked in the
+  // panel -- a colour, a CSS pattern or an image file. `config.background` is
+  // the Canvas2D compositor's own description, which the preview leaves
+  // disabled (a DOM layer draws it behind a transparent canvas) and the export
+  // fills in as a flat colour, so reading it here is how patterns and image
+  // backgrounds ended up missing from both the engine preview and the engine
+  // export. It stays as the fallback for a caller with no project, such as the
+  // dev harness.
 
-  const image = rasteriseBackground(config.background, canvas.width, canvas.height);
-  const background = {
-    colour: backgroundColour(config.background),
-    image: image ?? undefined,
-  };
+  const background = project
+    ? {
+        colour: canvasBackgroundColour(project),
+        image: (await rasteriseCanvasBackground(project, canvas.width, canvas.height)) ?? undefined,
+      }
+    : {
+        colour: backgroundColour(config.background),
+        image: rasteriseBackground(config.background, canvas.width, canvas.height) ?? undefined,
+      };
 
   // ---- crop ----------------------------------------------------------------
 
@@ -372,7 +389,7 @@ export async function resolveComposition(
           opacity: config.webcam!.opacity,
           borderWidth: config.webcam!.border.width,
           borderColour: parseCssColour(config.webcam!.border.color) ?? undefined,
-          shadows: toEngineWebcamShadows(config.webcam!.shadows),
+          shadows: toEngineShadows(config.webcam!.shadows),
         };
       })()
     : { x: 0, y: 0, width: 0, height: 0 };
@@ -450,17 +467,30 @@ export async function resolveComposition(
  *
  * Everything here re-renders the frames already queued rather than going back
  * to the decoder, so this is cheap enough to call from a slider drag.
+ *
+ * `applied` is what this returned last time for the same player, and exists for
+ * the background: it is a canvas-sized RGBA buffer, eight megabytes at 1080p,
+ * and structured-cloning that across the IPC boundary sixty times a second
+ * while someone drags the padding slider is not something to do for a picture
+ * that has not changed. Passing `null` -- which a freshly opened player must --
+ * sends everything.
+ *
+ * Nothing else is skipped. The rest of the setters carry numbers, and comparing
+ * them would cost more than sending them.
  */
 export async function applyComposition(
   player: EnginePlayer,
   config: CompositionConfig,
   canvas: CanvasSize,
   project: Project | null,
-): Promise<void> {
+  applied?: ResolvedComposition | null,
+): Promise<ResolvedComposition> {
   const resolved = await resolveComposition(config, canvas, project);
 
   await player.setLayout(resolved.layout);
-  await player.setBackground(resolved.background);
+  if (!sameBackground(applied?.background, resolved.background)) {
+    await player.setBackground(resolved.background);
+  }
   await player.setSourceCrop(resolved.crop);
   await player.setWebcamLayout(resolved.webcam);
 
@@ -481,4 +511,31 @@ export async function applyComposition(
   await player.setWebcamCuts(resolved.webcamCuts);
   await player.setLayerOrder(resolved.layerOrder);
   await player.setWebcamZoomRegions(resolved.webcamZoomRegions);
+
+  return resolved;
+}
+
+/**
+ * Whether two resolved backgrounds are the same picture.
+ *
+ * The bitmap is compared by identity rather than by content, which is exact
+ * here rather than approximate: the rasteriser hands back the same object for
+ * the same background, so two different objects really are two different
+ * pictures. Comparing eight megabytes of pixels to avoid sending eight
+ * megabytes of pixels would defeat the point.
+ */
+function sameBackground(
+  previous: ResolvedComposition['background'] | undefined,
+  next: ResolvedComposition['background'],
+): boolean {
+  if (!previous || previous.image !== next.image) {
+    return false;
+  }
+
+  const a = previous.colour;
+  const b = next.colour;
+  if (!a || !b) {
+    return a === b;
+  }
+  return a.r === b.r && a.g === b.g && a.b === b.b && a.a === b.a;
 }

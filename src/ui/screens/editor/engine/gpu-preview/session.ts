@@ -19,6 +19,7 @@ import type { Project } from '@/types';
 
 import type { CanvasSize } from '../preview-config/types';
 import type { CompositionConfig } from '../types';
+import type { ResolvedComposition } from './config-to-engine';
 import { applyComposition } from './config-to-engine';
 
 export interface GpuPreviewState {
@@ -87,6 +88,12 @@ export function useGpuPreview({
    */
   const tickInFlight = useRef(false);
   const rafRef = useRef<number | null>(null);
+  /**
+   * What the open player has already been told, so an unchanged background is
+   * not re-sent. Cleared around every open, because a new player has been told
+   * nothing.
+   */
+  const appliedRef = useRef<ResolvedComposition | null>(null);
 
   const path = project?.rawVideoPath ?? '';
 
@@ -99,6 +106,7 @@ export function useGpuPreview({
 
     let cancelled = false;
     openRef.current = false;
+    appliedRef.current = null;
 
     const engine = window.electron.engine;
 
@@ -137,6 +145,7 @@ export function useGpuPreview({
     return () => {
       cancelled = true;
       openRef.current = false;
+      appliedRef.current = null;
       engine.unbindFrameSink();
       void engine.player.close();
       setState((previous) => ({ ...previous, ready: false }));
@@ -154,8 +163,15 @@ export function useGpuPreview({
     let cancelled = false;
     void (async () => {
       try {
-        await applyComposition(window.electron.engine.player, config, canvasSize, project);
+        const applied = await applyComposition(
+          window.electron.engine.player,
+          config,
+          canvasSize,
+          project,
+          appliedRef.current,
+        );
         if (!cancelled) {
+          appliedRef.current = applied;
           const durationMs = await window.electron.engine.player.compositionDuration();
           setState((previous) => ({ ...previous, durationMs }));
         }

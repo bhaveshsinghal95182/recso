@@ -16,6 +16,7 @@ import { createTray } from './services/tray.service.js';
 import { initializeLogging } from './utils/logger.js';
 import { getPreloadPath } from './path-resolver.js';
 import { isDevelopment } from './util.js';
+import { createMainWindowWebPreferences } from './window-security.js';
 
 // Shared textures cannot cross adapters. The engine builds its D3D11 device on
 // the high-performance GPU, so Chromium's GPU process has to be there too, or
@@ -45,23 +46,9 @@ app.on('ready', () => {
   const mainWindow = new BrowserWindow({
     width,
     height,
-    webPreferences: {
-      preload: getPreloadPath(),
-      webSecurity: false,
-      // The GPU engine's preview needs this.
-      //
-      // A `VideoFrame` cannot cross a contextBridge, so the shared texture has
-      // to be received and drawn inside preload. `sharedTexture` is not part
-      // of the polyfilled electron module a sandboxed preload gets, and a
-      // sandboxed preload cannot require a relative file either -- so with the
-      // default (`sandbox: true`) the engine bridge cannot load at all.
-      //
-      // This is much weaker than what the original prototype needed, which was
-      // `nodeIntegration: true` plus `contextIsolation: false`. Context
-      // isolation stays on: the main world still has no Node, and still only
-      // sees what the contextBridge exposes.
-      sandbox: false,
-    },
+    webPreferences: createMainWindowWebPreferences(getPreloadPath(), {
+      development: isDevelopment(),
+    }),
     frame: false,
   });
 

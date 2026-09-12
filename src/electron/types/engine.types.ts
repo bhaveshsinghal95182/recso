@@ -223,6 +223,15 @@ export interface ProbeResult {
   nativeTypes: string[];
 }
 
+/** What Media Foundation can decode from a file's audio track. */
+export interface AudioProbe {
+  hasAudio: boolean;
+  sampleRate: number;
+  channels: number;
+  /** Milliseconds. */
+  duration: number;
+}
+
 export interface GpuMemory {
   /** Bytes of local (on-GPU) memory this process is using. */
   used: number;
@@ -370,6 +379,8 @@ export interface EngineBindings {
   gpuDecoderProfiles(): string[];
   /** What does Media Foundation see in this file? */
   probeVideo(path: string): ProbeResult;
+  /** What decodable audio does this file carry? */
+  probeAudio(path: string): AudioProbe;
   /** GPU-side memory usage, so a scrub test can show whether textures leak. */
   gpuMemory(): GpuMemory;
 }
@@ -449,6 +460,8 @@ export interface VideoPlacement {
   /** Border thickness, drawn outside the rect. Defaults to 0. */
   borderWidth?: number;
   borderColour?: Colour;
+  /** Drop shadows under the recording, drawn in the order given. Empty is none. */
+  shadows?: ShadowLayer[];
 }
 
 /**
@@ -544,16 +557,16 @@ export interface WebcamOverlay {
   borderWidth?: number;
   borderColour?: Colour;
   /** Drop shadows under the camera, drawn in the order given. Empty is none. */
-  shadows?: WebcamShadowLayer[];
+  shadows?: ShadowLayer[];
 }
 
 /**
- * One drop shadow under the camera.
+ * One drop shadow, under the recording or under the camera.
  *
- * The same four numbers a CSS box-shadow carries, because the editor's webcam
- * styles are authored as shadow stacks and this is where they arrive.
+ * The same four numbers a CSS box-shadow carries, because the editor's styles
+ * are authored as shadow stacks and this is where they arrive.
  */
-export interface WebcamShadowLayer {
+export interface ShadowLayer {
   /** Canvas pixels, positive right and down. Default 0. */
   offsetX?: number;
   offsetY?: number;

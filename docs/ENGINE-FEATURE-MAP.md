@@ -1,15 +1,16 @@
 # Engine ↔ editor feature map
 
-What the editor's compositor and its mediabunny export actually do, against what
-the GPU engine has, and what it would take to put the engine underneath them.
+The parity map used to replace the editor's former Canvas2D/Mediabunny export
+with the GPU engine. The cutover is complete; this now records the decisions and
+the features that neither implementation ever had.
 
 Read [ENGINE.md](ENGINE.md) first for how the engine works.
 [ENGINE-BACKLOG.md](ENGINE-BACKLOG.md) is what is broken or missing _inside_ the
 engine; this is the different question of what the engine would have to grow
 before it can replace anything.
 
-Sources: `src/ui/screens/editor/engine/functions/` (the compositor) and
-`src/ui/screens/editor/engine/export-pipeline/` (the mediabunny export).
+Sources: `src/ui/screens/editor/engine/functions/` (the preview compositor) and
+`src/ui/screens/editor/engine/export-pipeline/` (native export planning).
 
 ---
 
@@ -48,8 +49,9 @@ GPU engine (Rust/D3D11, in `velocity/src/engine/`). This document says
 > with no scratch target. The profile matches canvas's own Gaussian to within a
 > couple of percent -- see `ps_shadow`.
 >
-> What remains is not parity but the things neither path has: audio as the
-> master clock, and multiple clips. Then the test suite, then mediabunny goes.
+> The test gate and export cutover are complete. What remains is not parity but
+> the things neither path had: audio as the playback master clock and multiple
+> clips.
 
 ---
 
@@ -431,23 +433,14 @@ built around, which is why it is still here rather than in the table above.
 
 ## Also worth knowing
 
-**mediabunny is being retired.** The engine is the export path; the two are not
-going to coexist indefinitely, and nothing new should be added to the mediabunny
-side.
+**Mediabunny is retired.** The engine is the only export path, the old
+renderer-memory compositor has been deleted, and the dependency is gone.
 
-The immediate reason is the 5GB ceiling: `run-engine-canvas-export.ts` does
-`await response.blob()` on the source before handing it to `BlobSource`, so the
-whole recording goes through memory. The engine's exporter streams through a
-Media Foundation source reader and has no equivalent limit. That was tracked as
-its own bug for a while; it is not a bug to fix, it is a reason the path is
-going away.
-
-**What has to land before it can go.** Audio is the whole of it. The engine
-export already carries background, layout, zoom, cuts, crop, the webcam and the
-cursor -- everything the compositor draws except the items in the tables above.
-It has no audio at all, and mediabunny's path is where the microphone, system
-audio and camera audio are currently mixed. Until the engine can do that, the
-mediabunny exporter is the only one that can produce a finished file.
+The immediate reason was the 5GB ceiling: the old path materialised the source
+as a Blob and later returned the result as an ArrayBuffer. The engine streams
+through a Media Foundation source reader and has no equivalent renderer-memory
+limit. Native audio decode, mixing, and AAC output removed the last functional
+reason to retain that path.
 
 ---
 
@@ -480,10 +473,11 @@ Sequenced so each step is independently shippable and nothing is wasted.
    placement and an AAC stream. Preview does not, and that is the half that
    forces the clock rework — audio has to become the master and `Clock` has to
    slave to it.
-9. **The test suite.** See "Before the cutover" above. It belongs before the
-   step after it, not after it.
-10. **Retire mediabunny.** Delete the second export path, and the `<video>`
-    preview with it.
+9. ~~**The test suite.**~~ **Done.** The Rust suite, Vitest boundary tests, and
+   deterministic app-to-native export check guard the cutover.
+10. ~~**Retire Mediabunny.**~~ **Done.** The second export path and dependency
+    are gone. GPU preview stays on the shared-texture path; `<video>`/Canvas2D
+    remains its runtime fallback.
 
 Steps 1–4 were engine-internal and changed nothing the user sees. Step 5 is the
 first point where any of this is reachable from the app, and it is deliberately

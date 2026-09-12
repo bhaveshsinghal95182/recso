@@ -13,16 +13,14 @@
 
 use crate::engine::composite::{
   fit_source, smear_geometry, CursorSample, CursorTrack, FitMode, HiddenSpans, OverlayShape, Rect,
-  UvRect, WebcamLayout, WebcamShadow,
+  Shadow, UvRect, WebcamLayout,
 };
 use crate::engine::cuts::{Cut, CutTrack};
 use crate::engine::render::{
   parse_layer_order, CursorEffects, EffectParams, Layer, SourceCrop, VideoLayout,
   DEFAULT_LAYER_ORDER,
 };
-use crate::engine::zoom::{
-  lerp_rect, WebcamZoomRegion, WebcamZoomTrack, ZoomRegion, ZoomTrack,
-};
+use crate::engine::zoom::{lerp_rect, WebcamZoomRegion, WebcamZoomTrack, ZoomRegion, ZoomTrack};
 
 // -- shared fixtures ---------------------------------------------------------
 
@@ -238,14 +236,21 @@ mod clock_convention {
   fn a_zoom_past_the_end_of_the_edit_never_plays() {
     let cuts = project_cuts();
     let duration = cuts.composition_duration(30_000.0);
-    let zooms = ZoomTrack::new(vec![zoom_region(duration + 1_000.0, duration + 2_000.0, 2.0, 0.0)]);
+    let zooms = ZoomTrack::new(vec![zoom_region(
+      duration + 1_000.0,
+      duration + 2_000.0,
+      2.0,
+      0.0,
+    )]);
     for step in 0..300 {
       let source_ms = step as f64 * 100.0;
       if cuts.contains(source_ms) {
         continue;
       }
       assert!(
-        zooms.state_at(cuts.to_composition(source_ms), video_rect()).is_identity(),
+        zooms
+          .state_at(cuts.to_composition(source_ms), video_rect())
+          .is_identity(),
         "{source_ms}"
       );
     }
@@ -358,7 +363,13 @@ mod layout_pipeline {
   #[test]
   fn a_zoom_grows_the_video_rect_by_its_scale() {
     let zooms = ZoomTrack::new(vec![zoom_region(0.0, 1_000.0, 2.0, 0.0)]);
-    let (rect, _) = resolve(video_rect(), (1920, 1080), FitMode::Cover, Some(&zooms), 500.0);
+    let (rect, _) = resolve(
+      video_rect(),
+      (1920, 1080),
+      FitMode::Cover,
+      Some(&zooms),
+      500.0,
+    );
     assert!((rect.width - video_rect().width * 2.0).abs() < 1e-3);
     assert!((rect.height - video_rect().height * 2.0).abs() < 1e-3);
   }
@@ -366,7 +377,13 @@ mod layout_pipeline {
   #[test]
   fn a_zoom_about_the_centre_keeps_the_video_centred() {
     let zooms = ZoomTrack::new(vec![zoom_region(0.0, 1_000.0, 2.0, 0.0)]);
-    let (rect, _) = resolve(video_rect(), (1920, 1080), FitMode::Cover, Some(&zooms), 500.0);
+    let (rect, _) = resolve(
+      video_rect(),
+      (1920, 1080),
+      FitMode::Cover,
+      Some(&zooms),
+      500.0,
+    );
     let before = video_rect().x + video_rect().width * 0.5;
     let after = rect.x + rect.width * 0.5;
     assert!((before - after).abs() < 1e-3);
@@ -380,7 +397,13 @@ mod layout_pipeline {
     region.focal_x = 0.0;
     region.focal_y = 0.0;
     let zooms = ZoomTrack::new(vec![region]);
-    let (rect, _) = resolve(video_rect(), (1920, 1080), FitMode::Cover, Some(&zooms), 500.0);
+    let (rect, _) = resolve(
+      video_rect(),
+      (1920, 1080),
+      FitMode::Cover,
+      Some(&zooms),
+      500.0,
+    );
     assert!((rect.x - video_rect().x).abs() < 1e-3);
     assert!(rect.x + rect.width > video_rect().x + video_rect().width);
   }
@@ -391,7 +414,13 @@ mod layout_pipeline {
     // interfere, or zooming would also re-crop the picture.
     let zooms = ZoomTrack::new(vec![zoom_region(0.0, 1_000.0, 3.0, 0.0)]);
     let (_, plain) = resolve(video_rect(), (3840, 1080), FitMode::Cover, None, 0.0);
-    let (_, zoomed) = resolve(video_rect(), (3840, 1080), FitMode::Cover, Some(&zooms), 500.0);
+    let (_, zoomed) = resolve(
+      video_rect(),
+      (3840, 1080),
+      FitMode::Cover,
+      Some(&zooms),
+      500.0,
+    );
     assert_eq!(plain, zoomed);
   }
 
@@ -401,7 +430,10 @@ mod layout_pipeline {
     for fit in [FitMode::Cover, FitMode::Contain, FitMode::Stretch] {
       for src in [(1920u32, 1080u32), (1080, 1920), (640, 640)] {
         let (rect, uv) = resolve(video_rect(), src, fit, Some(&zooms), 500.0);
-        assert!(rect.width.is_finite() && rect.height.is_finite(), "{fit:?} {src:?}");
+        assert!(
+          rect.width.is_finite() && rect.height.is_finite(),
+          "{fit:?} {src:?}"
+        );
         assert!(uv.scale.iter().all(|v| v.is_finite()), "{fit:?} {src:?}");
         assert!(rect.width > 0.0, "{fit:?} {src:?}");
       }
@@ -412,7 +444,13 @@ mod layout_pipeline {
   fn contain_then_zoom_scales_the_shrunken_box_not_the_original() {
     let zooms = ZoomTrack::new(vec![zoom_region(0.0, 1_000.0, 2.0, 0.0)]);
     let (contained, _) = resolve(video_rect(), (1080, 1920), FitMode::Contain, None, 0.0);
-    let (zoomed, _) = resolve(video_rect(), (1080, 1920), FitMode::Contain, Some(&zooms), 500.0);
+    let (zoomed, _) = resolve(
+      video_rect(),
+      (1080, 1920),
+      FitMode::Contain,
+      Some(&zooms),
+      500.0,
+    );
     assert!((zoomed.width - contained.width * 2.0).abs() < 1e-2);
   }
 
@@ -442,7 +480,13 @@ mod layout_pipeline {
     .resolve()
     .unwrap();
     let zooms = ZoomTrack::new(vec![zoom_region(0.0, 1_000.0, 2.0, 0.0)]);
-    let (rect, _) = resolve(video_rect(), (1920, 1080), FitMode::Cover, Some(&zooms), 500.0);
+    let (rect, _) = resolve(
+      video_rect(),
+      (1920, 1080),
+      FitMode::Cover,
+      Some(&zooms),
+      500.0,
+    );
     // The crop did not change the destination rect at all.
     assert!((rect.width - video_rect().width * 2.0).abs() < 1e-3);
     assert_eq!(crop.left, 0.1);
@@ -484,7 +528,10 @@ mod layout_pipeline {
               "{layout:?} {src:?} {fit:?} {at}"
             );
             assert!(
-              uv.scale.iter().chain(uv.offset.iter()).all(|v| v.is_finite()),
+              uv.scale
+                .iter()
+                .chain(uv.offset.iter())
+                .all(|v| v.is_finite()),
               "{layout:?} {src:?} {fit:?} {at}"
             );
           }
@@ -509,7 +556,7 @@ mod layout_pipeline {
 mod webcam_pipeline {
   use super::*;
 
-  fn styled(shape: OverlayShape, radius: f32, border: f32, shadows: Vec<WebcamShadow>) -> WebcamLayout {
+  fn styled(shape: OverlayShape, radius: f32, border: f32, shadows: Vec<Shadow>) -> WebcamLayout {
     WebcamLayout {
       rect: camera_rect(),
       shape,
@@ -523,8 +570,8 @@ mod webcam_pipeline {
     .sanitized()
   }
 
-  fn shadow(offset: [f32; 2], blur: f32, alpha: f32) -> WebcamShadow {
-    WebcamShadow {
+  fn shadow(offset: [f32; 2], blur: f32, alpha: f32) -> Shadow {
+    Shadow {
       offset,
       blur,
       colour: [0.0, 0.0, 0.0, alpha],
@@ -534,7 +581,12 @@ mod webcam_pipeline {
   #[test]
   fn a_hidden_camera_is_not_drawn_however_it_is_styled() {
     let hidden = HiddenSpans::new(vec![(1_000.0, 2_000.0)]);
-    let layout = styled(OverlayShape::Ellipse, 0.0, 4.0, vec![shadow([4.0, 4.0], 12.0, 0.5)]);
+    let layout = styled(
+      OverlayShape::Ellipse,
+      0.0,
+      4.0,
+      vec![shadow([4.0, 4.0], 12.0, 0.5)],
+    );
     assert!(layout.is_visible());
     // Visibility on the timeline is a separate question from the layout's own.
     assert!(hidden.contains(1_500.0));
@@ -617,7 +669,10 @@ mod webcam_pipeline {
       Vec::new(),
       vec![shadow([0.0, 0.0], 0.0, 1.0)],
       vec![shadow([4.0, 4.0], 12.0, 0.4)],
-      vec![shadow([4.0, 4.0], 12.0, 0.4), shadow([0.0, 16.0], 40.0, 0.2)],
+      vec![
+        shadow([4.0, 4.0], 12.0, 0.4),
+        shadow([0.0, 16.0], 40.0, 0.2),
+      ],
       vec![shadow([f32::NAN, 0.0], 12.0, 0.4)],
     ];
     for shape in shapes {
@@ -845,7 +900,11 @@ mod cursor_pipeline {
     let popped = sprite_rect(s, video_rect(), 32.0 * pop);
     let final_rect = zooms.state_at(36.0, video_rect()).apply(popped);
     // Both multiply: a 1.5x pop inside a 2x zoom is a 3x sprite.
-    assert!((final_rect.width - 32.0 * 3.0).abs() < 1e-3, "{}", final_rect.width);
+    assert!(
+      (final_rect.width - 32.0 * 3.0).abs() < 1e-3,
+      "{}",
+      final_rect.width
+    );
   }
 
   #[test]
@@ -854,7 +913,9 @@ mod cursor_pipeline {
     let track = CursorTrack::new(vec![sample(0.0, 0.4, 0.5), sample(50.0, 0.5, 0.5)]);
     let motion = track.motion_at(50.0).unwrap();
     let s = track.sample_at(50.0).unwrap();
-    let head = zooms.state_at(50.0, video_rect()).apply(sprite_rect(s, video_rect(), 32.0));
+    let head = zooms
+      .state_at(50.0, video_rect())
+      .apply(sprite_rect(s, video_rect(), 32.0));
     // Velocity is in normalised source units, so it scales by the video rect
     // and then by the zoom, exactly like the sprite did.
     let travel = motion.vx * video_rect().width * 2.0 * 16.0;
@@ -869,7 +930,9 @@ mod cursor_pipeline {
     let zooms = ZoomTrack::new(vec![zoom_region(0.0, 1_000.0, 4.0, 0.0)]);
     let track = CursorTrack::new(vec![sample(0.0, 0.5, 0.5)]);
     let s = track.sample_at(500.0).unwrap();
-    let head = zooms.state_at(500.0, video_rect()).apply(sprite_rect(s, video_rect(), 32.0));
+    let head = zooms
+      .state_at(500.0, video_rect())
+      .apply(sprite_rect(s, video_rect(), 32.0));
     assert!(smear_geometry(head, [0.0, 0.0]).is_none());
   }
 
@@ -919,7 +982,9 @@ mod cursor_pipeline {
       for y in [0.0f32, 0.5, 1.0] {
         let track = CursorTrack::new(vec![sample(0.0, x, y)]);
         let s = track.sample_at(500.0).unwrap();
-        let rect = zooms.state_at(500.0, video_rect()).apply(sprite_rect(s, video_rect(), 32.0));
+        let rect = zooms
+          .state_at(500.0, video_rect())
+          .apply(sprite_rect(s, video_rect(), 32.0));
         assert!(rect.x.is_finite() && rect.y.is_finite(), "{x},{y}");
         assert!(rect.width > 0.0, "{x},{y}");
       }
@@ -990,7 +1055,10 @@ mod editing_session {
 
       let zoom = s.zooms.state_at(at, video_rect());
       assert!(zoom.scale.is_finite() && zoom.scale >= 1.0, "{source_ms}");
-      assert!(zoom.pivot_x.is_finite() && zoom.pivot_y.is_finite(), "{source_ms}");
+      assert!(
+        zoom.pivot_x.is_finite() && zoom.pivot_y.is_finite(),
+        "{source_ms}"
+      );
 
       let video = zoom.apply(video_rect());
       assert!(video.width > 0.0 && video.height > 0.0, "{source_ms}");
@@ -1117,7 +1185,10 @@ mod editing_session {
     for step in 0..100 {
       let at = step as f64 * 100.0;
       assert!(s.zooms.state_at(at, video_rect()).is_identity(), "{at}");
-      assert_eq!(s.webcam_zoom.state_at(at, camera_rect()).rect, camera_rect());
+      assert_eq!(
+        s.webcam_zoom.state_at(at, camera_rect()).rect,
+        camera_rect()
+      );
       assert!(!s.webcam_hidden.contains(at), "{at}");
       assert!(s.cursor.sample_at(at).is_none(), "{at}");
       assert_eq!(s.cuts.to_composition(at), at);

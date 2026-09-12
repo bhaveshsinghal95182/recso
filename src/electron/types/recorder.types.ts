@@ -30,7 +30,7 @@ export interface RecordingConfig {
   recordCamera?: boolean;
   /** Whether to record microphone audio (embedded into video files) */
   recordMic?: boolean;
-  /** Specific camera device ID (defaults to system default) */
+  /** Native webcam ID from `listWebcamDevices` (defaults to the native default). */
   cameraDeviceId?: string;
   /**
    * Where the camera picture comes from. Defaults to a camera on this machine.
@@ -54,8 +54,6 @@ export interface RecordingConfig {
   nativeMicDeviceId?: string;
   /** Target fps for native singular-clock capture path. */
   targetFps?: 30 | 60;
-  /** Optional native webcam device id used by velocity v2 path. */
-  nativeWebcamDeviceId?: string;
   options?: RecordingOptions;
 }
 
@@ -135,7 +133,7 @@ export interface StartRecordingResult {
  * What the native recorder knows about a file it just wrote.
  *
  * Reported by `Stopper.stop()`. Every field here used to be recovered by
- * demuxing the finished file with mediabunny; the recorder had all of it at
+ * demuxing the finished file after capture; the recorder had all of it at
  * capture time and was throwing it away.
  */
 export interface RecordingMediaInfo {

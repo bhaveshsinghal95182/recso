@@ -44,6 +44,18 @@ impl Rect {
     }
   }
 
+  /// Whether this rect swallows a `width` x `height` surface whole.
+  ///
+  /// Asked before drawing a drop shadow: once the recording reaches every edge
+  /// there is no background left for one to land on, and every pixel of it
+  /// would be painted over by the recording itself.
+  pub fn contains_canvas(&self, width: u32, height: u32) -> bool {
+    self.x <= 0.0
+      && self.y <= 0.0
+      && self.x + self.width >= width as f32
+      && self.y + self.height >= height as f32
+  }
+
   /// The whole of a `width` x `height` surface.
   pub fn covering(width: u32, height: u32) -> Self {
     Self {
@@ -256,16 +268,16 @@ pub struct WebcamLayout {
   pub border_colour: [f32; 4],
   /// Drop shadows, drawn under everything else in the order given. Usually two
   /// or three: a style is built out of a tight dark one and a wide soft one.
-  pub shadows: Vec<WebcamShadow>,
+  pub shadows: Vec<Shadow>,
 }
 
-/// One drop shadow layer under the camera.
+/// One drop shadow layer, under the recording or under the camera.
 ///
 /// The same four numbers a CSS box-shadow or a Canvas2D `shadowBlur` carries,
-/// because that is where the values come from -- the editor's webcam styles are
+/// because that is where the values come from -- the editor's styles are
 /// authored as shadow stacks and this is what they mean.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct WebcamShadow {
+pub struct Shadow {
   /// Canvas pixels, positive right and down.
   pub offset: [f32; 2],
   /// Canvas's `shadowBlur`, which is a Gaussian of sigma = blur/2.
@@ -281,7 +293,7 @@ pub struct WebcamShadow {
 /// so 1.88 * 0.5 = 0.94.
 const SHADOW_SOFTNESS_PER_BLUR: f32 = 0.94;
 
-impl WebcamShadow {
+impl Shadow {
   /// How far the falloff reaches past the shape, in pixels.
   ///
   /// Exact rather than a guess, because a smoothstep actually reaches zero --
@@ -293,6 +305,20 @@ impl WebcamShadow {
 
   pub fn softness(&self) -> f32 {
     self.blur.max(0.0) * SHADOW_SOFTNESS_PER_BLUR
+  }
+
+  /// This shadow at a different scale.
+  ///
+  /// For the video layer, which is drawn zoomed: the offset and the blur are
+  /// canvas pixels authored against the unzoomed recording, so under a 2x zoom
+  /// they have to grow with it. A shadow that stayed 18px while the recording
+  /// doubled would read as the picture coming loose from its own shadow.
+  pub fn scaled(&self, factor: f32) -> Self {
+    Self {
+      offset: [self.offset[0] * factor, self.offset[1] * factor],
+      blur: self.blur * factor,
+      colour: self.colour,
+    }
   }
 
   /// The quad to draw this shadow in: the shape moved by the offset, then grown
@@ -1502,8 +1528,8 @@ mod tests {
 
   // --- webcam shadows ------------------------------------------------------
 
-  fn shadow(offset: [f32; 2], blur: f32) -> WebcamShadow {
-    WebcamShadow {
+  fn shadow(offset: [f32; 2], blur: f32) -> Shadow {
+    Shadow {
       offset,
       blur,
       colour: [0.0, 0.0, 0.0, 0.5],
@@ -1566,7 +1592,7 @@ mod tests {
 
   #[test]
   fn a_shadow_that_cannot_be_seen_is_not_drawn() {
-    let transparent = WebcamShadow {
+    let transparent = Shadow {
       colour: [0.0, 0.0, 0.0, 0.0],
       ..shadow([4.0, 4.0], 10.0)
     };
@@ -1586,11 +1612,11 @@ mod tests {
       shadows: vec![
         shadow([0.0, 0.0], 0.0),
         shadow([4.0, 4.0], 12.0),
-        WebcamShadow {
+        Shadow {
           blur: f32::NAN,
           ..shadow([0.0, 0.0], 0.0)
         },
-        WebcamShadow {
+        Shadow {
           offset: [f32::INFINITY, 0.0],
           ..shadow([0.0, 0.0], 8.0)
         },
@@ -1631,6 +1657,23 @@ mod rect_scenarios {
   #[test]
   fn a_rect_with_both_sides_is_not_empty() {
     assert!(!r(0.0, 0.0, 1.0, 1.0).is_empty());
+  }
+
+  #[test]
+  fn a_rect_reaching_every_edge_contains_the_canvas() {
+    assert!(r(0.0, 0.0, 1920.0, 1080.0).contains_canvas(1920, 1080));
+    // Overhanging on every side, which is what a zoom does.
+    assert!(r(-400.0, -200.0, 2800.0, 1600.0).contains_canvas(1920, 1080));
+  }
+
+  #[test]
+  fn a_rect_short_of_any_one_edge_does_not() {
+    // One edge is enough: background still shows there, so a shadow cast onto
+    // it is visible and skipping the pass would drop it.
+    assert!(!r(1.0, 0.0, 1919.0, 1080.0).contains_canvas(1920, 1080));
+    assert!(!r(0.0, 0.0, 1920.0, 1079.0).contains_canvas(1920, 1080));
+    assert!(!r(-400.0, -200.0, 2800.0, 1000.0).contains_canvas(1920, 1080));
+    assert!(!r(200.0, 100.0, 400.0, 300.0).contains_canvas(1920, 1080));
   }
 
   #[test]
@@ -2053,7 +2096,10 @@ mod fit_source_scenarios {
       let (rect, _) = fit_source(square(), w, h, FitMode::Contain);
       let drawn = rect.width / rect.height;
       let source = w as f32 / h as f32;
-      assert!((drawn - source).abs() < 1e-3, "{w}x{h}: {drawn} vs {source}");
+      assert!(
+        (drawn - source).abs() < 1e-3,
+        "{w}x{h}: {drawn} vs {source}"
+      );
     }
   }
 
@@ -2354,8 +2400,8 @@ mod smear_scenarios {
 mod shadow_scenarios {
   use super::*;
 
-  fn shadow(offset: [f32; 2], blur: f32, alpha: f32) -> WebcamShadow {
-    WebcamShadow {
+  fn shadow(offset: [f32; 2], blur: f32, alpha: f32) -> Shadow {
+    Shadow {
       offset,
       blur,
       colour: [0.0, 0.0, 0.0, alpha],
@@ -2369,6 +2415,36 @@ mod shadow_scenarios {
       width: 320.0,
       height: 180.0,
     }
+  }
+
+  #[test]
+  fn scaling_a_shadow_grows_its_offset_and_its_blur() {
+    // What a zoom does to the video layer: the shadow was authored in canvas
+    // pixels against the unzoomed recording, so it has to grow with it.
+    let scaled = shadow([0.0, 18.0], 45.0, 0.22).scaled(2.0);
+    assert_eq!(scaled.offset, [0.0, 36.0]);
+    assert_eq!(scaled.blur, 90.0);
+  }
+
+  #[test]
+  fn scaling_a_shadow_leaves_its_colour_alone() {
+    // Including the alpha: a zoomed shadow is bigger, not darker.
+    let scaled = shadow([-3.0, 6.0], 10.0, 0.16).scaled(3.0);
+    assert_eq!(scaled.colour, [0.0, 0.0, 0.0, 0.16]);
+  }
+
+  #[test]
+  fn scaling_a_shadow_by_one_changes_nothing() {
+    let original = shadow([-3.0, 6.0], 10.0, 0.16);
+    assert_eq!(original.scaled(1.0), original);
+  }
+
+  #[test]
+  fn a_shadow_scaled_to_nothing_is_no_longer_visible() {
+    // Not a case the video layer reaches -- a zero zoom has no rect either --
+    // but the sanitiser's rule and this one have to agree about what "nothing"
+    // is, or a scaled shadow could survive as an invisible quad.
+    assert!(!shadow([0.0, 18.0], 45.0, 0.22).scaled(0.0).is_visible());
   }
 
   #[test]
@@ -2553,8 +2629,8 @@ mod webcam_layout_scenarios {
     }
   }
 
-  fn visible_shadow() -> WebcamShadow {
-    WebcamShadow {
+  fn visible_shadow() -> Shadow {
+    Shadow {
       offset: [4.0, 4.0],
       blur: 12.0,
       colour: [0.0, 0.0, 0.0, 0.4],
@@ -2722,7 +2798,7 @@ mod webcam_layout_scenarios {
 
   #[test]
   fn sanitizing_drops_an_all_zero_layer_a_style_carries_as_disabled() {
-    let off = WebcamShadow {
+    let off = Shadow {
       offset: [0.0, 0.0],
       blur: 0.0,
       colour: [0.0, 0.0, 0.0, 0.0],
@@ -2854,7 +2930,7 @@ mod webcam_layout_scenarios {
       border_width: -1.0,
       shadows: vec![
         visible_shadow(),
-        WebcamShadow {
+        Shadow {
           offset: [0.0, 0.0],
           blur: 0.0,
           colour: [0.0, 0.0, 0.0, 1.0],
@@ -2995,7 +3071,9 @@ mod hidden_span_scenarios {
   fn the_early_exit_does_not_miss_a_later_span() {
     // `contains` bails as soon as it passes the time, which only works because
     // the spans were sorted on the way in. Ten of them, asked in reverse.
-    let list: Vec<(f64, f64)> = (0..10).map(|i| (i as f64 * 100.0, i as f64 * 100.0 + 50.0)).collect();
+    let list: Vec<(f64, f64)> = (0..10)
+      .map(|i| (i as f64 * 100.0, i as f64 * 100.0 + 50.0))
+      .collect();
     let spans = HiddenSpans::new(list);
     for i in (0..10).rev() {
       assert!(spans.contains(i as f64 * 100.0 + 10.0), "{i}");
@@ -3060,7 +3138,11 @@ mod cursor_track_scenarios {
 
   #[test]
   fn sorting_does_not_drop_or_duplicate_samples() {
-    let track = CursorTrack::new(vec![at(30.0, 0.3, 0.0), at(10.0, 0.1, 0.0), at(20.0, 0.2, 0.0)]);
+    let track = CursorTrack::new(vec![
+      at(30.0, 0.3, 0.0),
+      at(10.0, 0.1, 0.0),
+      at(20.0, 0.2, 0.0),
+    ]);
     assert_eq!(track.len(), 3);
   }
 
@@ -3131,7 +3213,11 @@ mod cursor_track_scenarios {
   fn samples_arriving_out_of_order_are_sorted_on_the_way_in() {
     // The recorder emits in order, but a track assembled from several sources
     // might not be, and the lookup binary searches.
-    let track = CursorTrack::new(vec![at(200.0, 0.2, 0.0), at(0.0, 0.0, 0.0), at(100.0, 0.1, 0.0)]);
+    let track = CursorTrack::new(vec![
+      at(200.0, 0.2, 0.0),
+      at(0.0, 0.0, 0.0),
+      at(100.0, 0.1, 0.0),
+    ]);
     assert_eq!(track.sample_at(50.0).unwrap().x, 0.0);
     assert_eq!(track.sample_at(150.0).unwrap().x, 0.1);
     assert_eq!(track.sample_at(250.0).unwrap().x, 0.2);
@@ -3197,7 +3283,11 @@ mod cursor_track_scenarios {
   fn motion_only_looks_at_the_most_recent_pair() {
     // An average over more samples lags the direction through a corner, and the
     // smear is meant to read as "where it is going right now".
-    let track = CursorTrack::new(vec![at(0.0, 0.0, 0.0), at(50.0, 0.5, 0.0), at(60.0, 0.5, 0.5)]);
+    let track = CursorTrack::new(vec![
+      at(0.0, 0.0, 0.0),
+      at(50.0, 0.5, 0.0),
+      at(60.0, 0.5, 0.5),
+    ]);
     let motion = track.motion_at(60.0).unwrap();
     assert_eq!(motion.vx, 0.0);
     assert!(motion.vy > 0.0);
@@ -3286,7 +3376,10 @@ mod cursor_track_scenarios {
   fn the_hold_is_never_shorter_than_the_floor_for_any_gap() {
     for gap in [1.0f64, 5.0, 16.0, 34.0, 100.0] {
       let track = CursorTrack::new(vec![at(0.0, 0.0, 0.0), at(gap, 0.1, 0.0)]);
-      assert!(track.motion_at(gap + MIN_MOTION_HOLD_MS).is_some(), "gap {gap}");
+      assert!(
+        track.motion_at(gap + MIN_MOTION_HOLD_MS).is_some(),
+        "gap {gap}"
+      );
     }
   }
 
@@ -3682,7 +3775,12 @@ mod clip_space_matrix {
       if w == 0 || h == 0 {
         continue;
       }
-      let base = rect(w as f32 * 0.25, h as f32 * 0.25, w as f32 * 0.5, h as f32 * 0.5);
+      let base = rect(
+        w as f32 * 0.25,
+        h as f32 * 0.25,
+        w as f32 * 0.5,
+        h as f32 * 0.5,
+      );
       let grown = base.expanded(4.0);
       let a = base.to_ndc(w, h);
       let b = grown.to_ndc(w, h);
@@ -3778,7 +3876,11 @@ mod click_envelope_matrix {
   fn a_non_positive_duration_disables_the_envelope_at_every_elapsed() {
     for duration in [0.0f64, -1.0, -1_000.0] {
       for elapsed in [-10.0f64, 0.0, 1.0, 100.0] {
-        assert_eq!(click_envelope(elapsed, duration), 0.0, "{duration}/{elapsed}");
+        assert_eq!(
+          click_envelope(elapsed, duration),
+          0.0,
+          "{duration}/{elapsed}"
+        );
       }
     }
   }
@@ -3787,7 +3889,11 @@ mod click_envelope_matrix {
   fn a_negative_elapsed_is_never_part_of_the_envelope() {
     for duration in DURATIONS.iter().filter(|d| **d > 0.0) {
       for elapsed in [-1e6f64, -100.0, -1.0, -1e-9] {
-        assert_eq!(click_envelope(elapsed, *duration), 0.0, "{duration}/{elapsed}");
+        assert_eq!(
+          click_envelope(elapsed, *duration),
+          0.0,
+          "{duration}/{elapsed}"
+        );
       }
     }
   }
@@ -3805,7 +3911,11 @@ mod click_envelope_matrix {
       }
       assert!((best.0 - 1.0).abs() < 1e-3, "{duration}: peak {}", best.0);
       // ATTACK is 0.18 of the duration.
-      assert!((best.1 - 0.18).abs() < 0.02, "{duration}: peaked at {}", best.1);
+      assert!(
+        (best.1 - 0.18).abs() < 0.02,
+        "{duration}: peaked at {}",
+        best.1
+      );
     }
   }
 
@@ -3978,7 +4088,10 @@ mod motion_hold_matrix {
           b.visible = false;
         }
         let track = CursorTrack::new(vec![a, b]);
-        assert!(track.motion_at(gap).is_none(), "gap {gap} hide_first {hide_first}");
+        assert!(
+          track.motion_at(gap).is_none(),
+          "gap {gap} hide_first {hide_first}"
+        );
       }
     }
   }

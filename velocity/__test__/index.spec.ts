@@ -19,6 +19,12 @@ test('native addon exports the documented public API surface', (t) => {
   t.is(typeof velocity.startWindowRecordingV2, 'function')
 })
 
+test('native webcam preview exposes its lifecycle and frame APIs', (t) => {
+  t.is(typeof velocity.startWebcamPreview, 'function')
+  t.is(typeof velocity.webcamPreviewFrame, 'function')
+  t.is(typeof velocity.clearWebcamPreviewFrame, 'function')
+})
+
 test('Stopper instances only expose stop()', (t) => {
   // We can't construct a Stopper directly from JS (it's only ever returned by the
   // start*Recording functions), but we can assert its prototype shape so a future

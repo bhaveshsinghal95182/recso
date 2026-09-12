@@ -24,7 +24,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { quality } from '@/constants';
 import { cn, formatBytes, formatDuration } from '@/lib/utils';
-import type { DesktopSource } from '@/types';
+import type { DesktopSource, NativeCaptureDevice } from '@/types';
 
 import { PhoneCameraPanel } from './phone-camera-panel';
 
@@ -54,9 +54,7 @@ interface FloatingRecorderToolbarProps {
   recordCamera: boolean;
   recordSystemAudio: boolean;
   cameraDeviceId: string | null;
-  micDeviceId: string | null;
-  cameras: MediaDeviceInfo[];
-  microphones: MediaDeviceInfo[];
+  cameras: NativeCaptureDevice[];
   onSourceSelect: (id: string) => void;
   onRefreshSources: () => Promise<DesktopSource[]> | DesktopSource[] | void;
   setIsLoading: (loading: boolean) => void;
@@ -71,10 +69,9 @@ interface FloatingRecorderToolbarProps {
   cameraSource: 'local' | 'phone';
   onCameraSourceChange: (source: 'local' | 'phone') => void;
   /** Microphones as the native recorder sees them; its ids are what it opens. */
-  nativeMicrophones: Array<{ id: string; label: string; isDefault: boolean }>;
+  nativeMicrophones: NativeCaptureDevice[];
   nativeMicDeviceId: string | null;
   onNativeMicDeviceChange: (deviceId: string) => void;
-  onMicDeviceChange: (deviceId: string) => void;
   onStart: () => void;
   onStop: () => void;
   onPause: () => void;
@@ -99,9 +96,7 @@ export function FloatingRecorderToolbar({
   recordCamera,
   recordSystemAudio,
   cameraDeviceId,
-  micDeviceId,
   cameras,
-  microphones,
   onSourceSelect,
   onRefreshSources,
   setIsLoading,
@@ -117,7 +112,6 @@ export function FloatingRecorderToolbar({
   nativeMicrophones,
   nativeMicDeviceId,
   onNativeMicDeviceChange,
-  onMicDeviceChange,
   onStart,
   onStop,
   onPause,
@@ -209,8 +203,8 @@ export function FloatingRecorderToolbar({
   const toggleMic = () => {
     const next = !recordMic;
     onRecordMicChange(next);
-    if (next && !micDeviceId && microphones[0]) {
-      onMicDeviceChange(microphones[0].deviceId);
+    if (next && !nativeMicDeviceId && nativeMicrophones[0]) {
+      onNativeMicDeviceChange(nativeMicrophones[0].id);
     }
   };
 
@@ -221,30 +215,9 @@ export function FloatingRecorderToolbar({
     onCameraSourceChange('local');
     onRecordCameraChange(next);
     if (next && !cameraDeviceId && cameras[0]) {
-      onCameraDeviceChange(cameras[0].deviceId);
+      onCameraDeviceChange(cameras[0].id);
     }
   };
-
-  /**
-   * The microphone list to show.
-   *
-   * The native one when it has anything, because native capture is what records
-   * the sound now and it can only open devices from that list. The browser's is
-   * the fallback for a machine where native enumeration found nothing, which is
-   * anywhere that is not Windows.
-   */
-  const usingNativeMics = nativeMicrophones.length > 0;
-  const micDevices = usingNativeMics
-    ? nativeMicrophones.map(
-        (device) =>
-          ({
-            deviceId: device.id,
-            label: device.label,
-            kind: 'audioinput',
-            groupId: '',
-          }) as MediaDeviceInfo,
-      )
-    : microphones;
 
   const canStart = Boolean(selectedSourceId && outputDir && fileName && isOutputValid);
 
@@ -279,22 +252,15 @@ export function FloatingRecorderToolbar({
             <DevicePanel
               title="Microphone"
               enabled={recordMic}
-              devices={micDevices}
-              selectedDeviceId={usingNativeMics ? nativeMicDeviceId : micDeviceId}
+              devices={nativeMicrophones}
+              selectedDeviceId={nativeMicDeviceId}
               emptyLabel="No microphones found"
               fallbackLabel="Default microphone"
               activeIcon={<Mic size={18} />}
               inactiveIcon={<MicOff size={18} />}
               onToggle={toggleMic}
               onDeviceSelect={(deviceId) => {
-                // Which id this is depends on which list produced it, and they
-                // are not interchangeable -- a browser id means nothing to the
-                // native recorder and vice versa.
-                if (usingNativeMics) {
-                  onNativeMicDeviceChange(deviceId);
-                } else {
-                  onMicDeviceChange(deviceId);
-                }
+                onNativeMicDeviceChange(deviceId);
                 onRecordMicChange(true);
               }}
             />
@@ -377,7 +343,7 @@ export function FloatingRecorderToolbar({
 
             <ToolbarButton
               label="Mic"
-              value={recordMic ? deviceName(microphones, micDeviceId, 'On') : 'Off'}
+              value={recordMic ? deviceName(nativeMicrophones, nativeMicDeviceId, 'On') : 'Off'}
               icon={recordMic ? <Mic size={18} /> : <MicOff size={18} />}
               active={recordMic}
               isOpen={openPanel === 'microphone'}
@@ -699,7 +665,7 @@ function DevicePanel({
 }: {
   title: string;
   enabled: boolean;
-  devices: MediaDeviceInfo[];
+  devices: NativeCaptureDevice[];
   selectedDeviceId: string | null;
   emptyLabel: string;
   fallbackLabel: string;
@@ -738,18 +704,17 @@ function DevicePanel({
           </div>
         ) : (
           devices.map((device, index) => {
-            const isSelected =
-              selectedDeviceId === device.deviceId || (!selectedDeviceId && index === 0);
+            const isSelected = selectedDeviceId === device.id || (!selectedDeviceId && index === 0);
 
             return (
               <button
-                key={device.deviceId || `${title}-${index}`}
+                key={device.id || `${title}-${index}`}
                 type="button"
                 className={cn(
                   'grid grid-cols-[24px_minmax(0,1fr)_18px] items-center gap-2.5 rounded-[14px] border border-white/10 bg-white/[0.045] px-3 py-2.5 text-left text-white/70 transition duration-150 cursor-pointer hover:border-[#5eead4]/35 hover:bg-emerald-500/15 hover:text-[#ccfbf1]',
                   enabled && isSelected && 'border-[#5eead4]/35 bg-emerald-500/15 text-[#ccfbf1]',
                 )}
-                onClick={() => onDeviceSelect(device.deviceId)}
+                onClick={() => onDeviceSelect(device.id)}
               >
                 <span>{enabled ? activeIcon : inactiveIcon}</span>
                 <strong className="truncate text-[13px] font-[650]">
@@ -880,9 +845,13 @@ function FilterButton({
   );
 }
 
-function deviceName(devices: MediaDeviceInfo[], selectedDeviceId: string | null, fallback: string) {
+function deviceName(
+  devices: NativeCaptureDevice[],
+  selectedDeviceId: string | null,
+  fallback: string,
+) {
   const selectedDevice = selectedDeviceId
-    ? devices.find((device) => device.deviceId === selectedDeviceId)
+    ? devices.find((device) => device.id === selectedDeviceId)
     : devices[0];
 
   return selectedDevice?.label || fallback;

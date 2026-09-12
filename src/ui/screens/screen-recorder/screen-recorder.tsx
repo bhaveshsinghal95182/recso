@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { formats } from '@/constants';
+import type { NativeCaptureDevice } from '@/types';
 
 import { useScreenRecorder } from '../../hooks/useScreenRecorder.ts';
 import { CapturePreviewStage } from './capture-preview-stage';
@@ -38,20 +39,12 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
   const [recordSystemAudio, setRecordSystemAudio] = useState(true);
   const [cameraDeviceId, setCameraDeviceId] = useState<string | null>(null);
   const [cameraSource, setCameraSource] = useState<'local' | 'phone'>('local');
-  const [micDeviceId, setMicDeviceId] = useState<string | null>(null);
-  const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
-  const [microphones, setMicrophones] = useState<MediaDeviceInfo[]>([]);
+  const [cameras, setCameras] = useState<NativeCaptureDevice[]>([]);
+  const [cameraPreviewError, setCameraPreviewError] = useState<string | null>(null);
   /**
    * Microphones as WASAPI sees them, which is what native capture opens.
-   *
-   * Listed separately from the browser's because the two do not share ids --
-   * `enumerateDevices` salts them per origin, so a choice made from that list
-   * could not be honoured by the recorder and the system default was used
-   * instead, silently.
    */
-  const [nativeMicrophones, setNativeMicrophones] = useState<
-    Array<{ id: string; label: string; isDefault: boolean }>
-  >([]);
+  const [nativeMicrophones, setNativeMicrophones] = useState<NativeCaptureDevice[]>([]);
   const [nativeMicDeviceId, setNativeMicDeviceId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -61,17 +54,18 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
       setFileName(`recording_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}`);
 
       try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        setCameras(devices.filter((device) => device.kind === 'videoinput'));
-        setMicrophones(devices.filter((device) => device.kind === 'audioinput'));
-      } catch (err) {
-        console.error('Failed to enumerate devices:', err);
-      }
-
-      try {
-        const native = await window.electron.recorder.listAudioCaptureDevices();
-        setNativeMicrophones(native);
-        setNativeMicDeviceId((current) => current ?? native.find((d) => d.isDefault)?.id ?? null);
+        const [nativeCameras, nativeMics] = await Promise.all([
+          window.electron.recorder.listWebcamDevices(),
+          window.electron.recorder.listAudioCaptureDevices(),
+        ]);
+        setCameras(nativeCameras);
+        setCameraDeviceId(
+          (current) => current ?? nativeCameras.find((device) => device.isDefault)?.id ?? null,
+        );
+        setNativeMicrophones(nativeMics);
+        setNativeMicDeviceId(
+          (current) => current ?? nativeMics.find((device) => device.isDefault)?.id ?? null,
+        );
       } catch (err) {
         console.error('Failed to list native recording devices:', err);
       }
@@ -85,6 +79,45 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
       setIsLoading(false);
     }
   }, [sources]);
+
+  useEffect(() => {
+    const shouldOwnSetupPreview =
+      recordCamera &&
+      cameraSource === 'local' &&
+      Boolean(cameraDeviceId) &&
+      !isStarting &&
+      !isRecording &&
+      !isPaused &&
+      !isStopping;
+
+    if (!shouldOwnSetupPreview) {
+      if (!recordCamera || cameraSource !== 'local' || !cameraDeviceId) {
+        setCameraPreviewError(
+          recordCamera && cameraSource === 'local' ? 'No native webcam is available.' : null,
+        );
+        void window.electron.recorder.stopWebcamPreview().catch(console.warn);
+      }
+      return;
+    }
+
+    let cancelled = false;
+    setCameraPreviewError(null);
+    void window.electron.recorder
+      .startWebcamPreview(cameraDeviceId ?? undefined)
+      .then((result) => {
+        if (!cancelled && !result.success) {
+          setCameraPreviewError(result.error ?? 'Native webcam preview could not start.');
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setCameraPreviewError('Native webcam preview could not start.');
+      });
+
+    return () => {
+      cancelled = true;
+      void window.electron.recorder.stopWebcamPreview().catch(console.warn);
+    };
+  }, [cameraDeviceId, cameraSource, isPaused, isRecording, isStarting, isStopping, recordCamera]);
 
   useEffect(() => {
     if (sources.length === 0) return;
@@ -120,9 +153,8 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
       recordCamera,
       recordMic,
       cameraDeviceId || undefined,
-      micDeviceId || undefined,
-      recordSystemAudio,
       undefined,
+      recordSystemAudio,
       undefined,
       cameraSource,
       nativeMicDeviceId || undefined,
@@ -162,7 +194,11 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
         isStopping={isStopping}
         recordCamera={recordCamera}
         cameraDeviceId={cameraDeviceId}
+        cameraDeviceLabel={
+          cameras.find((device) => device.id === cameraDeviceId)?.label ?? cameras[0]?.label ?? null
+        }
         cameraSource={cameraSource}
+        cameraPreviewError={cameraPreviewError}
         onRefresh={handleRefreshSources}
       />
 
@@ -184,12 +220,10 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
         recordCamera={recordCamera}
         recordSystemAudio={recordSystemAudio}
         cameraDeviceId={cameraDeviceId}
-        micDeviceId={micDeviceId}
         nativeMicrophones={nativeMicrophones}
         nativeMicDeviceId={nativeMicDeviceId}
         onNativeMicDeviceChange={setNativeMicDeviceId}
         cameras={cameras}
-        microphones={microphones}
         onSourceSelect={setSelectedSourceId}
         onRefreshSources={refreshSources}
         setIsLoading={setIsLoading}
@@ -202,7 +236,6 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
         onCameraDeviceChange={setCameraDeviceId}
         cameraSource={cameraSource}
         onCameraSourceChange={setCameraSource}
-        onMicDeviceChange={setMicDeviceId}
         onStart={handleStart}
         onStop={handleStop}
         onPause={pauseRecording}

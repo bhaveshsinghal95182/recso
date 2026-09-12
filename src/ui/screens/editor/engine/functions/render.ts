@@ -32,6 +32,14 @@ interface LayerRenderContext {
   source: FrameVideoSource;
   webcamSource?: FrameVideoSource | null;
   videoLayout: VideoLayout;
+  /**
+   * The zoom the `zoomed` layers are drawn at.
+   *
+   * Needed because canvas shadow offsets and blurs ignore the current
+   * transform, so the video's shadow has to be scaled by hand to stay attached
+   * to a zoomed recording.
+   */
+  zoomScale: number;
   /** Active webcam height ratio override from a zoom region, if any. */
   activeWebcamHeightRatio?: number;
   /** Active webcam full-canvas transition progress from a zoom region, if any. */
@@ -59,8 +67,8 @@ const LAYER_DEFINITIONS: Record<CompositionLayerId, LayerDefinition> = {
   },
   video: {
     defaultSpace: 'zoomed',
-    render: ({ ctx, videoLayout, config, source }) => {
-      drawVideoLayer(ctx, videoLayout, config.video, source);
+    render: ({ ctx, videoLayout, config, source, zoomScale }) => {
+      drawVideoLayer(ctx, videoLayout, config.video, source, zoomScale);
     },
   },
   cursor: {
@@ -196,6 +204,7 @@ export function renderCompositionFrame({
     source,
     webcamSource,
     videoLayout,
+    zoomScale: zoomState.scale,
     activeWebcamHeightRatio,
     activeWebcamFullScreenProgress,
   };

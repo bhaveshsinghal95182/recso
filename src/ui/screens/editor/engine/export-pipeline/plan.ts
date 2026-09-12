@@ -1,19 +1,13 @@
 /**
- * Which exporter runs, and everything both of them need to know.
+ * Everything the native exporter needs to know.
  *
- * The engine is the default now, because it is the only path that can open a
- * recording bigger than renderer memory. But it is not at parity with the
- * Canvas2D compositor yet, and an export that quietly drops a webcam cut is
- * worse than a slow one -- so anything the engine cannot draw sends the export
- * back to the old path, and the user is told which feature did it.
- *
- * The composition is built once, here, and handed to whichever runner wins.
- * Building it in each of them would be two chances to disagree about where the
- * webcam goes, and the disagreement would only ever show up in the output.
+ * There is one export path. The composition is built once here and handed to
+ * the engine; if the editor grows a feature the engine cannot draw, planning
+ * fails with the feature's name instead of falling back to a renderer-memory
+ * pipeline or quietly dropping it.
  */
 
 import { getCutAdjustedDurationMs } from '../functions';
-import type { UnsupportedFeature } from '../gpu-preview/unsupported';
 import { unsupportedFeatures } from '../gpu-preview/unsupported';
 import { resolveCroppedSourceDimensions } from '../source-crop';
 import type { CompositionConfig } from '../types';
@@ -21,24 +15,9 @@ import { buildExportCompositionConfig } from './composition-config';
 import { resolveLayout, resolveWebcamLayout } from './layout-resolver';
 import { resolveOutputDimensions } from './settings';
 import { resolveProjectWebcamSourcePath } from './source-paths';
-import type { EngineCanvasExportOptions } from './types';
+import type { ExportRequestOptions } from './types';
 
 export interface ExportPlan {
-  /** Whether the engine can draw this composition correctly. */
-  native: boolean;
-  /** What sent it back to the canvas path. Empty when `native` is true. */
-  blockers: UnsupportedFeature[];
-  /**
-   * Cosmetic details the engine will skip, when it runs.
-   *
-   * Reported rather than refused over. The webcam shadow was the whole reason
-   * this distinction exists: the default style has three blurred layers, so
-   * treating it as blocking meant every export with a camera took the Canvas2D
-   * path -- the slow, memory-bound one the engine was made to replace. The
-   * engine draws shadows now and the list is empty, but the split is what stops
-   * the next cosmetic gap from doing the same thing.
-   */
-  omissions: UnsupportedFeature[];
   composition: CompositionConfig;
   output: { width: number; height: number };
   webcamSourcePath: string | undefined;
@@ -47,7 +26,7 @@ export interface ExportPlan {
 }
 
 type PlanInput = Pick<
-  EngineCanvasExportOptions,
+  ExportRequestOptions,
   'project' | 'config' | 'screenZoomRegions' | 'webcamZoomRegions' | 'mouseEvents'
 >;
 
@@ -99,13 +78,13 @@ export async function planExport({
   });
 
   const gaps = unsupportedFeatures(composition);
-  const blockers = gaps.filter((gap) => gap.severity === 'blocking');
-  const omissions = gaps.filter((gap) => gap.severity === 'cosmetic');
+  if (gaps.length > 0) {
+    throw new Error(
+      `The native exporter cannot render this project yet: ${gaps.map((gap) => gap.label).join(', ')}`,
+    );
+  }
 
   return {
-    native: blockers.length === 0,
-    blockers,
-    omissions,
     composition,
     output,
     webcamSourcePath,

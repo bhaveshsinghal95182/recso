@@ -3,9 +3,8 @@
  *
  * Starts and stops a native recording. That is the whole of it.
  *
- * There used to be a second pipeline here: `getUserMedia` and `getDisplayMedia`
- * feeding mediabunny `Output`s that streamed camera, microphone and desktop
- * audio back through IPC as sidecar files, to be muxed or aligned afterwards.
+ * There used to be a second browser-media pipeline here that streamed camera,
+ * microphone and desktop audio back through IPC as sidecar files.
  * It is gone. Every one of those is captured natively now, against the
  * picture's own clock, so the sidecars existed only to be reconciled with the
  * recording they were supposed to be part of -- and the reconciliation was a
@@ -147,7 +146,6 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
       micDeviceId?: string,
       recordSystemAudio: boolean = false,
       targetFps: 30 | 60 = 60,
-      nativeWebcamDeviceId?: string,
       cameraSource: 'local' | 'phone' = 'local',
       nativeMicDeviceId?: string,
     ) => {
@@ -175,7 +173,6 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
           cameraDeviceId,
           micDeviceId,
           targetFps,
-          nativeWebcamDeviceId,
           cameraSource,
           nativeMicDeviceId,
           options: {

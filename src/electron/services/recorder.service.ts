@@ -1,9 +1,9 @@
 /**
  * RecorderService
  *
- * Hybrid recording pipeline:
- * - Velocity native capture for screen/window video
- * - Electron-managed auxiliary streams (camera / mic / desktop-audio)
+ * Native recording pipeline:
+ * - Velocity owns screen/window, webcam, microphone and system-audio capture.
+ * - Electron selects devices, controls the session and persists the outputs.
  */
 
 import { createRequire } from 'node:module';
@@ -26,7 +26,11 @@ import type {
 import { completeRecording, createRecording, getRecording } from './database.service.js';
 import { phoneCameraState } from './phone-camera.service.js';
 import { initProjectFolder } from './project-storage.service.js';
-import { phoneCameraProblem, planNativeAudio } from './recorder-capture-plan.js';
+import {
+  nativeWebcamStartProblem,
+  phoneCameraProblem,
+  planNativeAudio,
+} from './recorder-capture-plan.js';
 
 interface VelocityStopper {
   /**
@@ -40,11 +44,22 @@ interface VelocityStopper {
 }
 
 interface VelocityBindings {
+  VideoDecoder: new (path: string) => {
+    info(): { duration: number };
+  };
   listWebcamDevices?(): Array<{
     id: string;
     label: string;
     isDefault: boolean;
   }>;
+  startWebcamPreview?(deviceId?: string): VelocityStopper;
+  webcamPreviewFrame?(): {
+    jpeg: Buffer;
+    width: number;
+    height: number;
+    sequence: number;
+  } | null;
+  clearWebcamPreviewFrame?(): void;
   listAudioCaptureDevices?(): Array<{
     id: string;
     label: string;
@@ -116,6 +131,11 @@ interface ActiveRecording {
   stopper: VelocityStopper;
 }
 
+interface ActiveWebcamPreview {
+  deviceId?: string;
+  stopper: VelocityStopper;
+}
+
 interface SourceCaptureBounds {
   x: number;
   y: number;
@@ -131,6 +151,7 @@ interface SourceMeta {
 }
 
 let activeRecording: ActiveRecording | null = null;
+let activeWebcamPreview: ActiveWebcamPreview | null = null;
 
 /**
  * Finalize passes that are currently running, keyed by recording id.
@@ -207,6 +228,102 @@ export function listNativeAudioCaptureDevices(): Array<{
     return getVelocityBindings().listAudioCaptureDevices?.() ?? [];
   } catch {
     return [];
+  }
+}
+
+/** Every webcam the native recorder can open. Empty on a build without it. */
+export function listNativeWebcamDevices(): Array<{
+  id: string;
+  label: string;
+  isDefault: boolean;
+}> {
+  try {
+    return getVelocityBindings().listWebcamDevices?.() ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export interface NativeWebcamPreviewStartResult {
+  success: boolean;
+  error?: string;
+}
+
+export interface NativeWebcamPreviewFrame {
+  jpeg: Buffer;
+  width: number;
+  height: number;
+  sequence: number;
+}
+
+/**
+ * Open the selected webcam for setup preview.
+ *
+ * Recording owns the camera once it starts and publishes into the same frame
+ * slot, so an active recording is already a successful preview owner.
+ */
+export function startNativeWebcamPreview(deviceId?: string): NativeWebcamPreviewStartResult {
+  if (activeRecording) {
+    return { success: true };
+  }
+
+  if (activeWebcamPreview && activeWebcamPreview.deviceId === deviceId) {
+    return { success: true };
+  }
+
+  stopNativeWebcamPreview();
+
+  try {
+    const velocity = getVelocityBindings();
+    if (typeof velocity.startWebcamPreview !== 'function') {
+      return {
+        success: false,
+        error: 'Native webcam preview is unavailable in this Velocity build.',
+      };
+    }
+
+    activeWebcamPreview = {
+      deviceId,
+      stopper: velocity.startWebcamPreview(deviceId),
+    };
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to start native webcam preview.',
+    };
+  }
+}
+
+/** Release only the setup preview owner; this never stops an active recording. */
+export function stopNativeWebcamPreview(): void {
+  const current = activeWebcamPreview;
+  activeWebcamPreview = null;
+
+  if (current) {
+    try {
+      current.stopper.stop();
+    } catch (error) {
+      console.warn('[RecorderService] Failed to stop native webcam preview:', error);
+    }
+  }
+
+  if (!activeRecording) {
+    try {
+      getVelocityBindings().clearWebcamPreviewFrame?.();
+    } catch {
+      // The preview is already stopped. A stale thumbnail is preferable to
+      // turning teardown into an application error on an older native build.
+    }
+  }
+}
+
+/** The newest small JPEG emitted by whichever native owner currently has the camera. */
+export function nativeWebcamPreviewFrame(): NativeWebcamPreviewFrame | null {
+  try {
+    return getVelocityBindings().webcamPreviewFrame?.() ?? null;
+  } catch {
+    return null;
   }
 }
 
@@ -529,24 +646,10 @@ function findScreenMedia(
 }
 
 async function hasReadableVideoTrack(filePath: string): Promise<boolean> {
-  const { ALL_FORMATS, FilePathSource, Input } = await import('mediabunny');
-
-  const input = new Input({
-    source: new FilePathSource(filePath),
-    formats: ALL_FORMATS,
-  });
-
   try {
-    const videoTrack = await input.getPrimaryVideoTrack();
-    if (!videoTrack) {
-      return false;
-    }
-
-    return (await videoTrack.computeDuration()) > 0;
+    return new (getVelocityBindings().VideoDecoder)(filePath).info().duration > 0;
   } catch {
     return false;
-  } finally {
-    input.dispose();
   }
 }
 
@@ -595,13 +698,16 @@ async function waitForNativeRecordingFile(filePath: string): Promise<boolean> {
 /**
  * Start a new recording session.
  *
- * Native screen/window video starts in velocity.
- * Camera/mic/system-audio streams are written by renderer via writeChunk.
+ * Velocity owns screen/window video, webcam, microphone and system audio.
+ * The renderer only selects native device ids and controls the session.
  */
 export function startRecording(config: RecordingConfig): StartRecordingResult {
   if (activeRecording) {
     return { success: false, error: 'A recording is already in progress' };
   }
+
+  // Release the setup owner before recording opens the same physical camera.
+  stopNativeWebcamPreview();
 
   let stopper: VelocityStopper | null = null;
 
@@ -627,8 +733,8 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
 
     // Checked before anything else, and outside the native-path branch below.
     // A phone that is not sending has to fail here rather than fall through to
-    // a take with no camera track in it -- the renderer sidecar cannot open a
-    // phone, so there is nothing downstream to catch it.
+    // a take with no camera track in it. A selected camera is part of the native
+    // recording contract, so there is no screen-only retry downstream.
     const phoneProblem = phoneCameraProblem(config, phoneCameraState()?.live ?? false);
     if (phoneProblem) {
       return { success: false, error: phoneProblem };
@@ -656,7 +762,7 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
       microphoneDeviceId: config.nativeMicDeviceId,
       targetFps: config.targetFps === 30 ? 30 : 60,
       enableWebcam: Boolean(config.recordCamera),
-      webcamDeviceId: config.nativeWebcamDeviceId || config.cameraDeviceId,
+      webcamDeviceId: config.cameraDeviceId,
       webcamSource: usePhoneCamera ? 'phone' : 'local',
     };
     let useNativeWebcam = false;
@@ -685,9 +791,10 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
             );
           }
         } else {
-          console.warn(
-            `[RecorderService] Native webcam capture unavailable; falling back to renderer camera sidecar (${webcamCapability.reason || 'unknown reason'}).`,
-          );
+          return {
+            success: false,
+            error: `Native webcam capture is unavailable: ${webcamCapability.reason || 'unknown reason'}.`,
+          };
         }
       }
     }
@@ -727,31 +834,14 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
           effectiveNativeClockOptions,
         );
       } catch (error) {
-        if (!useNativeWebcam) {
+        const webcamProblem = useNativeWebcam
+          ? nativeWebcamStartProblem(error, usePhoneCamera)
+          : null;
+        if (!webcamProblem) {
           throw error;
         }
 
-        if (usePhoneCamera) {
-          // Nothing to fall back to: the renderer sidecar can only open a local
-          // camera, and quietly recording that instead of the phone would be a
-          // surprise discovered in the editor.
-          return {
-            success: false,
-            error: `The phone camera would not start: ${error instanceof Error ? error.message : String(error)}`,
-          };
-        }
-
-        console.warn(
-          '[RecorderService] Native webcam start failed; falling back to renderer camera sidecar.',
-          error,
-        );
-
-        useNativeWebcam = false;
-        stopper = startVelocityMonitorRecording(velocity, tempPath, bitrate, useNativeSystemAudio, {
-          ...effectiveNativeClockOptions,
-          enableWebcam: false,
-          webcamDeviceId: undefined,
-        });
+        return { success: false, error: webcamProblem };
       }
     } else {
       const windowTitle = selectedSourceMeta?.name;
@@ -772,38 +862,14 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
           effectiveNativeClockOptions,
         );
       } catch (error) {
-        if (!useNativeWebcam) {
+        const webcamProblem = useNativeWebcam
+          ? nativeWebcamStartProblem(error, usePhoneCamera)
+          : null;
+        if (!webcamProblem) {
           throw error;
         }
 
-        if (usePhoneCamera) {
-          // Nothing to fall back to: the renderer sidecar can only open a local
-          // camera, and quietly recording that instead of the phone would be a
-          // surprise discovered in the editor.
-          return {
-            success: false,
-            error: `The phone camera would not start: ${error instanceof Error ? error.message : String(error)}`,
-          };
-        }
-
-        console.warn(
-          '[RecorderService] Native webcam start failed; falling back to renderer camera sidecar.',
-          error,
-        );
-
-        useNativeWebcam = false;
-        stopper = startVelocityWindowRecording(
-          velocity,
-          windowTitle,
-          tempPath,
-          bitrate,
-          useNativeSystemAudio,
-          {
-            ...effectiveNativeClockOptions,
-            enableWebcam: false,
-            webcamDeviceId: undefined,
-          },
-        );
+        return { success: false, error: webcamProblem };
       }
     }
 
@@ -856,7 +922,7 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
 
     const safeError = getSafeStartRecordingError(error, config.sourceId);
 
-    console.error('[RecorderService] Failed to start hybrid recording:', error);
+    console.error('[RecorderService] Failed to start native recording:', error);
     return {
       success: false,
       error: safeError,
@@ -1038,14 +1104,14 @@ export async function whenFinalized(recordingId: string): Promise<void> {
 }
 
 /**
- * Pause the active recording (state marker; render-side streams are paused in UI hook).
+ * Pause the active recording. Native capture currently has no pause operation.
  */
 export function pauseRecording(recordingId: string): boolean {
   if (!activeRecording || activeRecording.id !== recordingId) {
     return false;
   }
 
-  console.warn('[RecorderService] Pause is not supported for hybrid velocity capture; continuing.');
+  console.warn('[RecorderService] Pause is not supported for native velocity capture; continuing.');
   return false;
 }
 
@@ -1058,7 +1124,7 @@ export function resumeRecording(recordingId: string): boolean {
   }
 
   console.warn(
-    '[RecorderService] Resume is not supported for hybrid velocity capture; continuing.',
+    '[RecorderService] Resume is not supported for native velocity capture; continuing.',
   );
   return false;
 }

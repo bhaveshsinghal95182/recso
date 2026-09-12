@@ -25,18 +25,21 @@ export function setRecorderMainWindow(window: BrowserWindow): void {
     if (mainWindowRef === window) {
       mainWindowRef = null;
       stopStatePolling(false);
+      RecorderService.stopNativeWebcamPreview();
     }
   });
 
   window.webContents.on('render-process-gone', () => {
     if (mainWindowRef === window) {
       stopStatePolling(false);
+      RecorderService.stopNativeWebcamPreview();
     }
   });
 
   window.webContents.once('destroyed', () => {
     if (mainWindowRef === window) {
       stopStatePolling(false);
+      RecorderService.stopNativeWebcamPreview();
     }
   });
 }
@@ -51,6 +54,32 @@ export function registerRecorderHandlers(): void {
   ipcMain.handle('recorder:list-audio-capture-devices', () =>
     RecorderService.listNativeAudioCaptureDevices(),
   );
+
+  // Webcams as Media Foundation sees them. These ids are the only ids the
+  // native recorder accepts; renderer-originated device ids are deliberately
+  // not part of this interface.
+  ipcMain.handle('recorder:list-webcam-devices', () => RecorderService.listNativeWebcamDevices());
+
+  ipcMain.handle('recorder:start-webcam-preview', (_event, deviceId?: string) =>
+    RecorderService.startNativeWebcamPreview(deviceId),
+  );
+  ipcMain.handle('recorder:stop-webcam-preview', () => RecorderService.stopNativeWebcamPreview());
+  ipcMain.handle('recorder:webcam-preview-frame', () => {
+    const frame = RecorderService.nativeWebcamPreviewFrame();
+    if (!frame) {
+      return null;
+    }
+
+    return {
+      jpeg: frame.jpeg.buffer.slice(
+        frame.jpeg.byteOffset,
+        frame.jpeg.byteOffset + frame.jpeg.byteLength,
+      ),
+      width: frame.width,
+      height: frame.height,
+      sequence: frame.sequence,
+    };
+  });
 
   ipcMain.handle('recorder:get-sources', async () => {
     return RecorderService.getSources();

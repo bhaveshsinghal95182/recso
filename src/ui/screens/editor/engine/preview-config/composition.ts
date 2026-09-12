@@ -208,6 +208,10 @@ export function buildPreviewCompositionConfig({
             width: 0,
             color: 'transparent',
           },
+      // Gated on the background for the same reason the radius and the border
+      // are: full-bleed puts the recording on every edge of the canvas, and a
+      // shadow needs something to fall on.
+      shadows: canvasBackgroundEnabled ? DEFAULT_VIDEO_STYLE.shadows : [],
     },
     webcam: webcamEnabled
       ? {

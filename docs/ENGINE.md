@@ -1,29 +1,26 @@
 # GPU video engine
 
-A second video path inside recso: hardware decode, grading and encode that
+A native video path inside recso: hardware decode, grading and encode that
 never take the pixels off the GPU. It lives in the `velocity` crate next to the
 capture code and is exposed to the renderer as `window.electron.engine`.
 
-Nothing in the editor uses it yet. That is deliberate — it went in as a
-strangler fig, so the new path can take over one piece at a time instead of in
-a single cutover.
+The cutover is complete for export and preview. The engine renders shaders into
+a shared D3D11 texture which Electron imports directly into the editor preview;
+Canvas2D remains the fallback when the engine cannot initialize.
 
 ## The two paths
 
 ```
-today (editor)     recording.mp4 -> <video> -> Pixi CompositionEngine -> canvas
-                                            \
-                                             -> mediabunny + WebCodecs -> mp4
+secure preview     recording.mp4 -> <video> -> Canvas2D compositor -> canvas
 
-engine (parallel)  file -> MF hardware decode -> D3D11 texture
-                        -> render chain (NV12->BGRA, effects)
-                        -> shared NT handle -> Chromium -> canvas
-                                            \
-                                             -> NV12 -> hardware encoder -> mp4
+native export      file -> MF hardware decode -> D3D11 render chain
+                        -> NV12 -> hardware encoder -> mp4
+
+optional preview   same D3D11 render chain -> shared NT handle -> canvas
 ```
 
-Both end at a canvas, which is the whole reason a gradual swap is possible.
-`FrameVideoSource` in `src/ui/screens/editor/engine/types.ts` is the seam:
+The preview paths meet at a canvas. `FrameVideoSource` in
+`src/ui/screens/editor/engine/types.ts` is the seam:
 `HtmlVideoFrameSource` wraps a `<video>`, and `GpuFrameSource` in
 `gpu-frame-source.ts` wraps the canvas preload paints engine frames into. The
 compositor — background, zoom, cursor, webcam, cuts — cannot tell them apart.
@@ -57,17 +54,17 @@ paints into a canvas that lives in the page. The main world only touches that
 canvas. The pixels stay on the GPU until the `drawImage`, and even then only as
 far as the compositor.
 
-This is why the main window now sets **`sandbox: false`**. A sandboxed preload
-gets only a polyfilled subset of the electron module -- `ipcRenderer`,
-`contextBridge`, `webFrame` -- with no `sharedTexture`, and it cannot `require`
-a relative file either, so the bridge cannot load at all. Note this is still
-far weaker than what the prototype needed: `contextIsolation` stays **on**, so
-the main world has no Node and sees only what the contextBridge exposes.
+The main editor window therefore sets **`sandbox: false`**. A sandboxed preload
+gets only a polyfilled subset of Electron and does not include `sharedTexture`,
+so enabling it here disables the architecture above. This exception is limited
+to the window that owns the receiver: context isolation stays on, Node
+integration stays off, webviews stay off, and the main world only sees the
+narrow API exposed by the preload bridge.
 
-The bridge is loaded inside a `try`/`catch` and degrades to a stub that reports
-`available: false`. It is an optional path, and an exception escaping it would
-take the whole `window.electron` bridge down with it -- breaking recording and
-editing along with the preview.
+The shared-texture bridge is loaded inside a `try`/`catch`. Its fallback reports
+preview as unavailable but exposes the IPC-only engine operations. An
+exception escaping it would take the whole `window.electron` bridge down with
+it, so preview setup is never allowed to do that.
 
 **Renderer `console.*` does not reach the log file.** Preload patches the
 console of the _isolated_ world, so main-world logs go nowhere the main process
@@ -176,8 +173,9 @@ deliberately does not count.
 The info is persisted with the recording (`recordings.media_info`, added by an
 idempotent `ALTER TABLE` since the schema has no migration framework), so it
 survives a reload and the editor never probes. Recordings made before this, and
-files recovered after a crash, have no stored info and fall back to the old
-mediabunny probe.
+files recovered after a crash, have no stored info and fall back to opening the
+native `VideoDecoder`. That reads container metadata without materialising the
+recording in JavaScript memory.
 
 ### Opening a recording in the engine
 

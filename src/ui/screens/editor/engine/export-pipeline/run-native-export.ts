@@ -1,14 +1,7 @@
 /**
  * Export through the engine.
  *
- * The difference from `runEngineCanvasExport` is not speed, it is where the
- * bytes live. That path fetches the whole recording into a `Blob`, decodes it
- * frame by frame in the renderer, composites onto a canvas, muxes with
- * mediabunny, and hands back an `ArrayBuffer` for the main process to write --
- * so a recording has to fit in renderer memory twice over. A five gigabyte take
- * does not fit once.
- *
- * Here the renderer sends a description and a path. The engine opens the file
+ * The renderer sends a composition description and a path. The engine opens the file
  * with Media Foundation, which streams it, composites on the GPU, encodes, and
  * writes the output itself. Nothing crosses into the renderer except progress
  * numbers, so the size of the recording stops mattering.
@@ -23,11 +16,11 @@ import type { EngineAudioSource } from '@/electron.js';
 import type { Project } from '@/types';
 
 import { resolveComposition } from '../gpu-preview/config-to-engine';
-import { resolveStartDelayCompensationSeconds } from './audio-mix';
+import { resolveStartDelayCompensationSeconds } from './audio-timing';
 import type { ExportPlan } from './plan';
 import { createProgressSnapshot } from './progress';
-import { resolveProjectAudioSidecarPaths, toFileUrl } from './source-paths';
-import type { EngineCanvasExportOptions, EngineCanvasExportResult } from './types';
+import { resolveProjectAudioSidecarPaths } from './source-paths';
+import type { ExportRequestOptions } from './types';
 
 /** How often to ask the engine where it has got to. */
 const POLL_MS = 200;
@@ -35,7 +28,7 @@ const POLL_MS = 200;
 /** Bitrate for a given output size and quality, matching the canvas path. */
 function resolveBitrate(width: number, height: number, quality: string | undefined): number {
   // Roughly 0.1 bits per pixel per frame at 30fps for "high", which lands near
-  // 12Mbit for 1080p -- the same ballpark the canvas exporter targets.
+  // 12Mbit for 1080p keeps the existing quality profile users expect.
   const pixels = Math.max(1, width * height);
   const perPixel = quality === 'low' ? 0.05 : quality === 'medium' ? 0.075 : 0.1;
   return Math.round(Math.min(80_000_000, Math.max(2_000_000, pixels * perPixel * 30)));
@@ -55,8 +48,9 @@ function resolveBitrate(width: number, height: number, quality: string | undefin
  * recorded them, so anything missing is dropped rather than handed to the engine
  * as a path that is not there.
  *
- * Durations are probed with mediabunny, which is safe here in a way it is not
- * for the video: these are a few megabytes of audio, not the recording.
+ * Durations are probed by the same native Media Foundation layer that will
+ * decode them for export. That keeps the renderer out of media demuxing and
+ * means the old canvas exporter is not retained just to inspect a sidecar.
  */
 async function resolveAudioSources(
   project: Project,
@@ -92,7 +86,6 @@ async function resolveAudioSources(
     return [];
   }
 
-  const { ALL_FORMATS, BlobSource, Input } = await import('mediabunny');
   const sources: EngineAudioSource[] = [];
 
   for (const candidate of present) {
@@ -101,25 +94,22 @@ async function resolveAudioSources(
       continue;
     }
 
-    let offsetMs = 0;
+    let probe: Awaited<ReturnType<typeof window.electron.engine.probeAudio>>;
     try {
-      const response = await fetch(toFileUrl(candidate.path));
-      if (response.ok || response.status === 0) {
-        const input = new Input({
-          source: new BlobSource(await response.blob()),
-          formats: ALL_FORMATS,
-        });
-        const track = await input.getPrimaryAudioTrack();
-        const durationSeconds = track ? await track.computeDuration() : 0;
-        if (durationSeconds > 0) {
-          offsetMs =
-            resolveStartDelayCompensationSeconds(sourceDurationMs / 1000, durationSeconds) * 1000;
-        }
-      }
+      probe = await window.electron.engine.probeAudio(candidate.path);
     } catch {
-      // A sidecar that will not open is one the canvas path would have skipped
-      // too. Mixing it unshifted is closer to right than dropping it.
+      // Legacy and crash-recovered projects can contain an incomplete sidecar.
+      // A bad optional audio file should not make an otherwise valid video
+      // impossible to export.
+      continue;
     }
+
+    if (!probe.hasAudio || probe.duration <= 0) {
+      continue;
+    }
+
+    const offsetMs =
+      resolveStartDelayCompensationSeconds(sourceDurationMs / 1000, probe.duration / 1000) * 1000;
 
     sources.push({ path: candidate.path, offsetMs: offsetMs || undefined });
   }
@@ -128,7 +118,7 @@ async function resolveAudioSources(
 }
 
 export interface NativeExportOptions extends Pick<
-  EngineCanvasExportOptions,
+  ExportRequestOptions,
   'project' | 'config' | 'onProgress' | 'onCancelReady'
 > {
   /** Where the engine should write. Resolved by the caller, not invented here. */
@@ -137,9 +127,10 @@ export interface NativeExportOptions extends Pick<
   plan: ExportPlan;
 }
 
-export interface NativeExportResult extends Omit<EngineCanvasExportResult, 'buffer' | 'fileSize'> {
+export interface NativeExportResult {
   /** The file the engine wrote. Already on disk. */
   outputPath: string;
+  durationSeconds: number;
 }
 
 export async function runNativeExport({

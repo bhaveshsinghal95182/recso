@@ -1,0 +1,6 @@
+{
+  "name": "recso-engine-export-service-check",
+  "private": true,
+  "type": "module",
+  "main": "main.mjs"
+}

@@ -6,10 +6,8 @@
  * - Player transport (open/warm/play/pause/rate/seek/tick/effects/stats)
  * - Engine-side export (start/progress/cancel)
  *
- * This is a second, parallel path. It does not touch the compositor, the
- * mediabunny exporter, or anything the editor currently uses -- every handler
- * here is namespaced `engine:` and is only reachable from code that asks for
- * it. See `docs/ENGINE.md` for how the two paths are meant to converge.
+ * Every handler is namespaced `engine:`. Preview may fall back to Canvas2D when
+ * shared textures are unavailable; export always runs through this service.
  *
  * Every handler tolerates a missing addon: `engine:status` reports it, and the
  * rest throw a readable error rather than crashing the main process.
@@ -88,6 +86,10 @@ export function registerEngineHandlers(): void {
    */
   ipcMain.handle('engine:probe', (_event, path: string) =>
     requireEngineBindings().probeVideo(normalizeMediaPath(path)),
+  );
+
+  ipcMain.handle('engine:probe-audio', (_event, path: string) =>
+    requireEngineBindings().probeAudio(normalizeMediaPath(path)),
   );
 
   ipcMain.handle('engine:gpu-memory', () => requireEngineBindings().gpuMemory());

@@ -18,12 +18,20 @@ function loadEngineBridge(): typeof EngineBridge {
   } catch (error) {
     const message = 'engine bridge failed to load: ' + (error as Error).message;
     const unavailable = () => Promise.reject(new Error(message));
+    const invoke = electron.ipcRenderer.invoke.bind(electron.ipcRenderer);
 
     return {
-      status: () => Promise.resolve({ available: false, error: message, version: null, gpu: null }),
-      diagnostics: unavailable,
-      probe: unavailable,
-      gpuMemory: unavailable,
+      // A sandboxed preload cannot receive shared textures, so the preview is
+      // unavailable. Plain IPC still works: diagnostics and native export stay
+      // usable without giving the application renderer Node privileges.
+      status: async () => {
+        const status = await invoke('engine:status');
+        return { ...status, available: false, error: message };
+      },
+      diagnostics: () => invoke('engine:diagnostics'),
+      probe: (path: string) => invoke('engine:probe', path),
+      probeAudio: (path: string) => invoke('engine:probe-audio', path),
+      gpuMemory: () => invoke('engine:gpu-memory'),
       bindFrameSink: () => false,
       unbindFrameSink: () => {},
       frameInfo: () => ({ frame: null, painted: 0 }),
@@ -40,7 +48,12 @@ function loadEngineBridge(): typeof EngineBridge {
         setEffects: unavailable,
         stats: unavailable,
       },
-      export: { start: unavailable, progress: unavailable, cancel: unavailable },
+      export: {
+        start: (input: string, options: Record<string, unknown>) =>
+          invoke('engine:export:start', input, options),
+        progress: () => invoke('engine:export:progress'),
+        cancel: () => invoke('engine:export:cancel'),
+      },
     } as unknown as typeof EngineBridge;
   }
 }
@@ -177,6 +190,23 @@ electron.contextBridge.exposeInMainWorld('electron', {
     listAudioCaptureDevices: (): Promise<
       Array<{ id: string; label: string; isDefault: boolean }>
     > => electron.ipcRenderer.invoke('recorder:list-audio-capture-devices'),
+
+    /** Webcams as the native recorder sees them. */
+    listWebcamDevices: (): Promise<Array<{ id: string; label: string; isDefault: boolean }>> =>
+      electron.ipcRenderer.invoke('recorder:list-webcam-devices'),
+
+    /** Open/release the native setup-preview owner. Recording takes ownership at start. */
+    startWebcamPreview: (deviceId?: string): Promise<{ success: boolean; error?: string }> =>
+      electron.ipcRenderer.invoke('recorder:start-webcam-preview', deviceId),
+    stopWebcamPreview: (): Promise<void> =>
+      electron.ipcRenderer.invoke('recorder:stop-webcam-preview'),
+    /** Latest small JPEG from the native setup or recording camera owner. */
+    webcamPreviewFrame: (): Promise<{
+      jpeg: ArrayBuffer;
+      width: number;
+      height: number;
+      sequence: number;
+    } | null> => electron.ipcRenderer.invoke('recorder:webcam-preview-frame'),
 
     start: (config: RecordingConfig): Promise<StartRecordingResult> =>
       electron.ipcRenderer.invoke('recorder:start', config),

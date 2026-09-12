@@ -303,16 +303,16 @@ export interface EngineWebcamOverlay {
   borderWidth?: number;
   borderColour?: EngineColour;
   /** Drop shadows under the camera, drawn in the order given. Empty is none. */
-  shadows?: EngineWebcamShadow[];
+  shadows?: EngineShadow[];
 }
 
 /**
- * One drop shadow under the camera.
+ * One drop shadow, under the recording or under the camera.
  *
- * The same four numbers a CSS box-shadow carries, because the editor's webcam
- * styles are authored as shadow stacks and this is where they arrive.
+ * The same four numbers a CSS box-shadow carries, because the editor's styles
+ * are authored as shadow stacks and this is where they arrive.
  */
-export interface EngineWebcamShadow {
+export interface EngineShadow {
   /** Canvas pixels, positive right and down. Default 0. */
   offsetX?: number;
   offsetY?: number;
@@ -342,6 +342,8 @@ export interface EngineVideoPlacement {
   /** Border thickness, drawn outside the rect. Defaults to 0. */
   borderWidth?: number;
   borderColour?: EngineColour;
+  /** Drop shadows under the recording, drawn in the order given. */
+  shadows?: EngineShadow[];
 }
 
 /**
@@ -452,6 +454,14 @@ export interface EngineAPI {
   }>;
   /** What Media Foundation sees in a file, before committing to opening it. */
   probe: (path: string) => Promise<{ opened: boolean; error: string; nativeTypes: string[] }>;
+  /** What decodable audio Media Foundation sees in a file. */
+  probeAudio: (path: string) => Promise<{
+    hasAudio: boolean;
+    sampleRate: number;
+    channels: number;
+    /** Milliseconds. */
+    duration: number;
+  }>;
   gpuMemory: () => Promise<{ used: number; budget: number }>;
 
   /**
@@ -592,6 +602,20 @@ interface ElectronAPI {
     listAudioCaptureDevices: () => Promise<
       Array<{ id: string; label: string; isDefault: boolean }>
     >;
+
+    /** Webcams as the native recorder sees them; these ids go to `cameraDeviceId`. */
+    listWebcamDevices: () => Promise<Array<{ id: string; label: string; isDefault: boolean }>>;
+
+    /** Open/release the native setup-preview owner. Recording takes ownership at start. */
+    startWebcamPreview: (deviceId?: string) => Promise<{ success: boolean; error?: string }>;
+    stopWebcamPreview: () => Promise<void>;
+    /** Latest small JPEG from the native setup or recording camera owner. */
+    webcamPreviewFrame: () => Promise<{
+      jpeg: ArrayBuffer;
+      width: number;
+      height: number;
+      sequence: number;
+    } | null>;
 
     /** Start a new recording session */
     start: (config: RecordingConfig) => Promise<StartRecordingResult>;

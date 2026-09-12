@@ -338,6 +338,8 @@ export declare function captureCursorSamplesJson(durationMs: number, intervalMs?
 
 export declare function captureCursorSnapshotJson(): string
 
+export declare function clearWebcamPreviewFrame(): void
+
 /**
  * A colour as four 0..1 channels.
  *
@@ -856,6 +858,25 @@ export interface SelfSignedCertificate {
 }
 
 /**
+ * One drop shadow, under the recording or under the camera.
+ *
+ * The same four numbers a CSS box-shadow carries, because the editor's styles
+ * are authored as shadow stacks and this is where they arrive.
+ */
+export interface ShadowLayer {
+  /** Canvas pixels, positive right and down. Default 0. */
+  offsetX?: number
+  offsetY?: number
+  /**
+   * Canvas's `shadowBlur`: a Gaussian of sigma = blur/2. Default 0, which is a
+   * hard offset silhouette rather than nothing.
+   */
+  blur?: number
+  /** A fully transparent shadow is dropped rather than drawn. */
+  colour?: Colour
+}
+
+/**
  * Everything Electron's `importSharedTexture` needs, in the shape it wants.
  *
  * `handle` is the raw NT HANDLE as 8 little-endian bytes. It is only valid in
@@ -941,6 +962,14 @@ export interface SpritesheetOptions {
 
 export declare function startMonitorRecordingV2(options: NativeRecordingOptions): Stopper
 
+/** * Open one local webcam for the recorder setup preview.
+ *
+ * The returned stopper must be stopped before recording begins. The recording
+ * loop then publishes into the same preview slot while it owns the device, so
+ * there is never a browser/native or preview/recording ownership race.
+ */
+export declare function startWebcamPreview(deviceId?: string | undefined | null): Stopper
+
 export declare function startWindowRecordingV2(options: NativeWindowRecordingOptions): Stopper
 
 export interface VideoInfo {
@@ -971,6 +1000,8 @@ export interface VideoPlacement {
   /** Border thickness, drawn outside the rect. Defaults to 0. */
   borderWidth?: number
   borderColour?: Colour
+  /** Drop shadows under the recording, drawn in the order given. Empty is none. */
+  shadows?: Array<ShadowLayer>
 }
 
 export interface WebcamDeviceInfo {
@@ -1005,26 +1036,18 @@ export interface WebcamOverlay {
   borderWidth?: number
   borderColour?: Colour
   /** Drop shadows under the camera, drawn in the order given. Empty is none. */
-  shadows?: Array<WebcamShadowLayer>
+  shadows?: Array<ShadowLayer>
 }
 
-/**
- * One drop shadow under the camera.
- *
- * The same four numbers a CSS box-shadow carries, because the editor's webcam
- * styles are authored as shadow stacks and this is where they arrive.
- */
-export interface WebcamShadowLayer {
-  /** Canvas pixels, positive right and down. Default 0. */
-  offsetX?: number
-  offsetY?: number
-  /**
-   * Canvas's `shadowBlur`: a Gaussian of sigma = blur/2. Default 0, which is a
-   * hard offset silhouette rather than nothing.
-   */
-  blur?: number
-  /** A fully transparent shadow is dropped rather than drawn. */
-  colour?: Colour
+export declare function webcamPreviewFrame(): WebcamPreviewFrame | null
+
+/** A small JPEG copied from the native camera owner for the recorder UI.  */
+export interface WebcamPreviewFrame {
+  jpeg: Buffer
+  width: number
+  height: number
+  /** Monotonic, so a polling renderer can skip a frame it has already drawn.  */
+  sequence: number
 }
 
 /**

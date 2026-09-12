@@ -13,8 +13,8 @@ import { requireEngineBindings } from './native.js';
  * not contend with the player -- but two concurrent exports would fight over
  * the hardware encoder, and there is no reason to want that yet.
  *
- * This is deliberately separate from recso's mediabunny exporter. Both can be
- * running; they share nothing.
+ * This is the application's only export implementation. The renderer sends a
+ * composition description; this service owns the native exporter instance.
  */
 let current: VideoExporterInstance | null = null;
 let outputPath: string | null = null;

@@ -37,7 +37,7 @@ import type {
   ExportResolution,
 } from '@/types';
 
-import { planExport, runEngineCanvasExport, runNativeExport } from './engine/export-pipeline';
+import { planExport, runNativeExport } from './engine/export-pipeline';
 
 interface ExportModalProps {
   open: boolean;
@@ -101,15 +101,6 @@ function ConfettiTrigger() {
 
   return null;
 }
-
-/**
- * Where the canvas exporter stops being slow and starts being impossible.
- *
- * It reads the source into a Blob and returns an ArrayBuffer, and V8 caps those
- * near 2GB. Under the limit it is merely slow; over it, it fails partway with an
- * allocation error that says nothing about why.
- */
-const CANVAS_EXPORT_SOURCE_LIMIT_BYTES = 2_000_000_000;
 
 export function ExportModal({ open, onOpenChange }: ExportModalProps) {
   const { project, mouseEvents } = useProjectStore();
@@ -211,58 +202,15 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
 
       const plan = await planExport(shared);
 
-      if (plan.native) {
-        if (plan.omissions.length > 0) {
-          console.info(
-            '[Export] Drawing through the engine without:',
-            plan.omissions.map((omission) => omission.label).join(', '),
-          );
-        }
+      // The engine writes the file itself. Nothing comes back through the
+      // renderer, so recording size is not bounded by renderer memory.
+      const rendered = await runNativeExport({ ...shared, plan, outputPath });
 
-        // The engine writes the file itself. Nothing comes back through the
-        // renderer, which is the whole reason a recording larger than renderer
-        // memory can be exported at all.
-        const rendered = await runNativeExport({ ...shared, plan, outputPath });
-
-        completeExport({
-          outputPath: rendered.outputPath,
-          duration: rendered.durationSeconds,
-          fileSize: await window.electron.exporter.fileSize(rendered.outputPath),
-        });
-      } else {
-        // Something in this project is beyond the engine, and dropping it
-        // silently would be worse than being slow.
-        const reasons = plan.blockers.map((blocker) => blocker.label).join(', ');
-        console.warn('[Export] Falling back to the canvas compositor:', reasons);
-
-        // The canvas path reads the whole recording into a Blob and hands back
-        // an ArrayBuffer, both of which are capped near 2GB. Past that it does
-        // not get slower, it fails -- after grinding for several minutes. Say
-        // which feature forced the slow path while the user can still act on it.
-        const sourceBytes = await window.electron.exporter.fileSize(project.rawVideoPath ?? '');
-        if (sourceBytes > CANVAS_EXPORT_SOURCE_LIMIT_BYTES) {
-          throw new Error(
-            `This recording is too large for the canvas exporter (${(sourceBytes / 1e9).toFixed(1)} GB), ` +
-              `and it cannot use the engine because of: ${reasons}. Remove that and it will export natively.`,
-          );
-        }
-
-        const rendered = await runEngineCanvasExport(shared);
-
-        const writeResult = await window.electron.exporter.writeOutputFile(
-          outputPath,
-          rendered.buffer,
-        );
-        if (!writeResult.success || !writeResult.outputPath) {
-          throw new Error(writeResult.error || 'Failed to save exported file');
-        }
-
-        completeExport({
-          outputPath: writeResult.outputPath,
-          duration: rendered.durationSeconds,
-          fileSize: writeResult.fileSize ?? rendered.fileSize,
-        });
-      }
+      completeExport({
+        outputPath: rendered.outputPath,
+        duration: rendered.durationSeconds,
+        fileSize: await window.electron.exporter.fileSize(rendered.outputPath),
+      });
 
       // Trigger confetti
       confetti({

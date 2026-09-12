@@ -11,7 +11,7 @@
 
 use crate::engine::composite::{
   fit_source, smear_geometry, CursorSample, CursorTrack, FitMode, HiddenSpans, OverlayShape, Rect,
-  UvRect, WebcamLayout, WebcamShadow,
+  Shadow, UvRect, WebcamLayout,
 };
 use crate::engine::cuts::{Cut, CutTrack};
 use crate::engine::render::{parse_layer_order, Layer, SourceCrop, VideoLayout};
@@ -188,8 +188,14 @@ mod fit_matrix {
         let label = format!("{bw}x{bh} <- {sw}x{sh}");
         assert!(rect.x >= outer.x - 1e-2, "{label}");
         assert!(rect.y >= outer.y - 1e-2, "{label}");
-        assert!(rect.x + rect.width <= outer.x + outer.width + 1e-2, "{label}");
-        assert!(rect.y + rect.height <= outer.y + outer.height + 1e-2, "{label}");
+        assert!(
+          rect.x + rect.width <= outer.x + outer.width + 1e-2,
+          "{label}"
+        );
+        assert!(
+          rect.y + rect.height <= outer.y + outer.height + 1e-2,
+          "{label}"
+        );
       }
     }
   }
@@ -261,8 +267,14 @@ mod fit_matrix {
         }
         let (twice, _) = fit_source(once, sw, sh, FitMode::Contain);
         let label = format!("{bw}x{bh} <- {sw}x{sh}");
-        assert!((once.width - twice.width).abs() < once.width * 0.05, "{label}");
-        assert!((once.height - twice.height).abs() < once.height * 0.05, "{label}");
+        assert!(
+          (once.width - twice.width).abs() < once.width * 0.05,
+          "{label}"
+        );
+        assert!(
+          (once.height - twice.height).abs() < once.height * 0.05,
+          "{label}"
+        );
       }
     }
   }
@@ -285,7 +297,10 @@ mod fit_matrix {
     for (bw, bh) in BOXES {
       for fit in FITS {
         let (rect, uv) = fit_source(boxed(bw, bh), 0, 0, fit);
-        assert!(rect.width.is_finite() && rect.height.is_finite(), "{bw}x{bh} {fit:?}");
+        assert!(
+          rect.width.is_finite() && rect.height.is_finite(),
+          "{bw}x{bh} {fit:?}"
+        );
         assert!(uv.scale.iter().all(|v| v.is_finite()), "{bw}x{bh} {fit:?}");
       }
     }
@@ -296,8 +311,18 @@ mod fit_matrix {
     // NaN makes the aspect ratio non-finite, which short-circuits to reading
     // the whole source.
     let bad = [
-      Rect { x: 0.0, y: 0.0, width: f32::NAN, height: 100.0 },
-      Rect { x: 0.0, y: 0.0, width: 100.0, height: f32::NAN },
+      Rect {
+        x: 0.0,
+        y: 0.0,
+        width: f32::NAN,
+        height: 100.0,
+      },
+      Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 100.0,
+        height: f32::NAN,
+      },
     ];
     for rect in bad {
       for (sw, sh) in SOURCES {
@@ -412,7 +437,12 @@ mod zoom_matrix {
       for level in LEVELS {
         for ease in EASES {
           let track = ZoomTrack::new(vec![region(span, level, ease)]);
-          for at in [span.0 - 1.0, span.1 + 1.0, span.0 - 10_000.0, span.1 + 10_000.0] {
+          for at in [
+            span.0 - 1.0,
+            span.1 + 1.0,
+            span.0 - 10_000.0,
+            span.1 + 10_000.0,
+          ] {
             assert!(
               track.state_at(at, video()).is_identity(),
               "{span:?} level {level} ease {ease} at {at}"
@@ -437,7 +467,10 @@ mod zoom_matrix {
           assert!(state.pivot_x >= video().x - 1e-3, "{label}");
           assert!(state.pivot_x <= video().x + video().width + 1e-3, "{label}");
           assert!(state.pivot_y >= video().y - 1e-3, "{label}");
-          assert!(state.pivot_y <= video().y + video().height + 1e-3, "{label}");
+          assert!(
+            state.pivot_y <= video().y + video().height + 1e-3,
+            "{label}"
+          );
         }
       }
     }
@@ -577,7 +610,12 @@ mod zoom_matrix {
   #[test]
   fn the_pivot_is_a_fixed_point_of_the_transform_in_every_cell() {
     for scale in [0.25f32, 0.5, 1.0, 1.5, 2.0, 4.0, 10.0] {
-      for pivot in [(0.0f32, 0.0f32), (960.0, 540.0), (1920.0, 1080.0), (-100.0, 50.0)] {
+      for pivot in [
+        (0.0f32, 0.0f32),
+        (960.0, 540.0),
+        (1920.0, 1080.0),
+        (-100.0, 50.0),
+      ] {
         let state = ZoomState {
           scale,
           pivot_x: pivot.0,
@@ -592,7 +630,10 @@ mod zoom_matrix {
         // The pivot sits at the same fraction of the rect before and after.
         let before = (pivot.0 - video().x) / video().width;
         let after = (pivot.0 - out.x) / out.width;
-        assert!((before - after).abs() < 1e-3, "{label}: {before} vs {after}");
+        assert!(
+          (before - after).abs() < 1e-3,
+          "{label}: {before} vs {after}"
+        );
       }
     }
   }
@@ -639,21 +680,36 @@ mod zoom_matrix {
   #[test]
   fn a_run_of_back_to_back_regions_never_leaves_a_non_finite_frame() {
     let regions: Vec<ZoomRegion> = (0..12)
-      .map(|i| region((i as f64 * 1_000.0, i as f64 * 1_000.0 + 1_000.0), 1.0 + i as f32 * 0.25, 200.0))
+      .map(|i| {
+        region(
+          (i as f64 * 1_000.0, i as f64 * 1_000.0 + 1_000.0),
+          1.0 + i as f32 * 0.25,
+          200.0,
+        )
+      })
       .collect();
     let track = ZoomTrack::new(regions);
     for step in 0..600 {
       let at = step as f64 * 25.0;
       let state = track.state_at(at, video());
       assert!(state.scale.is_finite(), "{at}");
-      assert!(state.pivot_x.is_finite() && state.pivot_y.is_finite(), "{at}");
+      assert!(
+        state.pivot_x.is_finite() && state.pivot_y.is_finite(),
+        "{at}"
+      );
       assert!(state.apply(video()).width.is_finite(), "{at}");
     }
   }
 
   #[test]
   fn a_pan_never_leaves_the_recording_for_any_keyframe_set() {
-    let corners = [(0.0f32, 0.0f32), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.5, 0.5)];
+    let corners = [
+      (0.0f32, 0.0f32),
+      (1.0, 0.0),
+      (1.0, 1.0),
+      (0.0, 1.0),
+      (0.5, 0.5),
+    ];
     for a in corners {
       for b in corners {
         let mut r = region((1_000.0, 3_000.0), 2.0, 0.0);
@@ -672,7 +728,10 @@ mod zoom_matrix {
           assert!(state.pivot_x >= video().x - 1e-3, "{label}");
           assert!(state.pivot_x <= video().x + video().width + 1e-3, "{label}");
           assert!(state.pivot_y >= video().y - 1e-3, "{label}");
-          assert!(state.pivot_y <= video().y + video().height + 1e-3, "{label}");
+          assert!(
+            state.pivot_y <= video().y + video().height + 1e-3,
+            "{label}"
+          );
         }
       }
     }
@@ -753,7 +812,11 @@ mod webcam_zoom_matrix {
             let label = format!("ease {ease} full {full} {w}x{h} at {at}");
             let lo = BASE.width.min(grown.width) - 1e-2;
             let hi = BASE.width.max(grown.width) + 1e-2;
-            assert!(rect.width >= lo && rect.width <= hi, "{label}: {}", rect.width);
+            assert!(
+              rect.width >= lo && rect.width <= hi,
+              "{label}: {}",
+              rect.width
+            );
             assert!(rect.width.is_finite() && rect.height.is_finite(), "{label}");
           }
         }
@@ -826,8 +889,18 @@ mod webcam_zoom_matrix {
   fn the_camera_returns_to_whatever_layout_it_currently_has_in_every_cell() {
     let layouts = [
       BASE,
-      Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 },
-      Rect { x: 500.0, y: 500.0, width: 800.0, height: 450.0 },
+      Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 100.0,
+        height: 100.0,
+      },
+      Rect {
+        x: 500.0,
+        y: 500.0,
+        width: 800.0,
+        height: 450.0,
+      },
     ];
     for layout in layouts {
       let track = WebcamZoomTrack::new(vec![region(
@@ -857,7 +930,10 @@ mod webcam_zoom_matrix {
     for step in 0..800 {
       let at = step as f64 * 25.0;
       let state = track.state_at(at, BASE);
-      assert!(state.rect.width.is_finite() && state.rect.height.is_finite(), "{at}");
+      assert!(
+        state.rect.width.is_finite() && state.rect.height.is_finite(),
+        "{at}"
+      );
       assert!(state.full_screen.is_finite(), "{at}");
       assert!((0.0..=1.0).contains(&state.full_screen), "{at}");
     }
@@ -871,13 +947,22 @@ mod cut_matrix {
 
   /// Cut sets that between them exercise every normalisation branch.
   fn cut_sets() -> Vec<(&'static str, Vec<Cut>)> {
-    let c = |a: f64, b: f64| Cut { start_ms: a, end_ms: b };
+    let c = |a: f64, b: f64| Cut {
+      start_ms: a,
+      end_ms: b,
+    };
     vec![
       ("none", vec![]),
       ("one", vec![c(5_000.0, 8_000.0)]),
-      ("two apart", vec![c(5_000.0, 8_000.0), c(20_000.0, 22_500.0)]),
+      (
+        "two apart",
+        vec![c(5_000.0, 8_000.0), c(20_000.0, 22_500.0)],
+      ),
       ("touching", vec![c(1_000.0, 2_000.0), c(2_000.0, 3_000.0)]),
-      ("overlapping", vec![c(1_000.0, 3_000.0), c(2_000.0, 4_000.0)]),
+      (
+        "overlapping",
+        vec![c(1_000.0, 3_000.0), c(2_000.0, 4_000.0)],
+      ),
       ("nested", vec![c(1_000.0, 9_000.0), c(3_000.0, 4_000.0)]),
       ("unsorted", vec![c(9_000.0, 10_000.0), c(1_000.0, 2_000.0)]),
       ("at the start", vec![c(0.0, 2_000.0)]),
@@ -923,7 +1008,10 @@ mod cut_matrix {
       let track = CutTrack::new(cuts);
       for step in 0..500 {
         let source = step as f64 * 50.0;
-        assert!(track.to_composition(source) <= source + 1e-9, "{name} at {source}");
+        assert!(
+          track.to_composition(source) <= source + 1e-9,
+          "{name} at {source}"
+        );
       }
     }
   }
@@ -984,7 +1072,10 @@ mod cut_matrix {
       for step in 0..500 {
         let composition = step as f64 * 50.0;
         let source = track.to_source(composition);
-        assert!(!track.contains(source), "{name} at {composition} -> {source}");
+        assert!(
+          !track.contains(source),
+          "{name} at {composition} -> {source}"
+        );
       }
     }
   }
@@ -1101,7 +1192,13 @@ mod layout_matrix {
 
   #[test]
   fn a_video_layout_covering_any_canvas_is_the_whole_canvas() {
-    for (w, h) in [(1920u32, 1080u32), (1280, 720), (1, 1), (3840, 2160), (0, 0)] {
+    for (w, h) in [
+      (1920u32, 1080u32),
+      (1280, 720),
+      (1, 1),
+      (3840, 2160),
+      (0, 0),
+    ] {
       let layout = VideoLayout::covering(w, h);
       assert_eq!(layout.rect, Rect::covering(w, h), "{w}x{h}");
       assert_eq!(layout.corner_radius, 0.0, "{w}x{h}");
@@ -1137,14 +1234,19 @@ mod layout_matrix {
 
   #[test]
   fn every_surviving_shadow_is_visible_and_finite_for_any_stack() {
-    let offsets = [[0.0f32, 0.0f32], [4.0, 4.0], [f32::NAN, 0.0], [0.0, f32::INFINITY]];
+    let offsets = [
+      [0.0f32, 0.0f32],
+      [4.0, 4.0],
+      [f32::NAN, 0.0],
+      [0.0, f32::INFINITY],
+    ];
     let blurs = [0.0f32, 12.0, -4.0, f32::NAN];
     let alphas = [0.0f32, 0.5, 1.0];
     let mut stack = Vec::new();
     for offset in offsets {
       for blur in blurs {
         for alpha in alphas {
-          stack.push(WebcamShadow {
+          stack.push(Shadow {
             offset,
             blur,
             colour: [0.0, 0.0, 0.0, alpha],
@@ -1176,14 +1278,17 @@ mod layout_matrix {
     };
     for offset in [[0.0f32, 0.0f32], [12.0, -6.0], [-30.0, 30.0]] {
       for blur in [0.0f32, 4.0, 20.0, 80.0] {
-        let s = WebcamShadow {
+        let s = Shadow {
           offset,
           blur,
           colour: [0.0, 0.0, 0.0, 0.5],
         };
         let quad = s.quad_rect(shape);
         let label = format!("{offset:?} blur {blur}");
-        assert!(quad.x <= shape.x + offset[0] - s.softness() + 1e-3, "{label}");
+        assert!(
+          quad.x <= shape.x + offset[0] - s.softness() + 1e-3,
+          "{label}"
+        );
         assert!(
           quad.x + quad.width >= shape.x + offset[0] + shape.width + s.softness() - 1e-3,
           "{label}"
@@ -1207,9 +1312,18 @@ mod layout_matrix {
         };
         if let Some(resolved) = crop.resolve() {
           let label = format!("{top} {left}");
-          assert!(resolved.top.is_finite() && resolved.left.is_finite(), "{label}");
-          assert!(1.0 - resolved.left - resolved.right >= 0.05 - 1e-4, "{label}");
-          assert!(1.0 - resolved.top - resolved.bottom >= 0.05 - 1e-4, "{label}");
+          assert!(
+            resolved.top.is_finite() && resolved.left.is_finite(),
+            "{label}"
+          );
+          assert!(
+            1.0 - resolved.left - resolved.right >= 0.05 - 1e-4,
+            "{label}"
+          );
+          assert!(
+            1.0 - resolved.top - resolved.bottom >= 0.05 - 1e-4,
+            "{label}"
+          );
         }
       }
     }
@@ -1297,7 +1411,11 @@ mod cursor_matrix {
       let track = CursorTrack::new(samples);
       for after in [0.0, 1_000.0, 1e6] {
         let query = (count as f64 - 1.0) * 100.0 + after;
-        assert_eq!(track.sample_at(query).unwrap().x, last_x, "{count} at {query}");
+        assert_eq!(
+          track.sample_at(query).unwrap().x,
+          last_x,
+          "{count} at {query}"
+        );
       }
     }
   }
@@ -1307,7 +1425,10 @@ mod cursor_matrix {
     for start in [0.0f64, 100.0, 5_000.0] {
       let track = CursorTrack::new(vec![at(start, 0.5, 0.5)]);
       for before in [1.0f64, 10.0, 1_000.0] {
-        assert!(track.sample_at(start - before).is_none(), "{start} - {before}");
+        assert!(
+          track.sample_at(start - before).is_none(),
+          "{start} - {before}"
+        );
       }
       assert!(track.sample_at(start).is_some(), "{start}");
     }
@@ -1320,7 +1441,11 @@ mod cursor_matrix {
         let mut clicked = at(1_000.0, 0.5, 0.5);
         clicked.click = true;
         let track = CursorTrack::new(vec![clicked]);
-        let (lo, hi) = if peak >= 1.0 { (1.0, peak) } else { (peak, 1.0) };
+        let (lo, hi) = if peak >= 1.0 {
+          (1.0, peak)
+        } else {
+          (peak, 1.0)
+        };
         for step in 0..40 {
           let query = 900.0 + step as f64 * 40.0;
           let scale = track.click_scale_at(query, peak, duration);
@@ -1388,7 +1513,10 @@ mod cursor_matrix {
         assert!(quad.x <= head.x + 1e-3, "{label}");
         assert!(quad.y <= head.y + 1e-3, "{label}");
         assert!(quad.x + quad.width >= head.x + head.width - 1e-3, "{label}");
-        assert!(quad.y + quad.height >= head.y + head.height - 1e-3, "{label}");
+        assert!(
+          quad.y + quad.height >= head.y + head.height - 1e-3,
+          "{label}"
+        );
         assert!(uv.scale.iter().all(|v| *v >= 1.0 - 1e-3), "{label}");
         assert!(travel.iter().all(|v| v.is_finite()), "{label}");
       }

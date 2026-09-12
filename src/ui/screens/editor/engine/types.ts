@@ -34,6 +34,15 @@ export interface VideoConfig {
     width: number;
     color: string;
   };
+  /**
+   * Drop shadows under the recording, drawn in the order given.
+   *
+   * This is what lifts it off the background. A border does the same job by
+   * outlining the edge, which reads as a frame drawn around the picture rather
+   * than as the picture sitting above the canvas -- so the default is a shadow
+   * stack and a border width of zero.
+   */
+  shadows: ShadowLayer[];
 }
 
 /**
@@ -45,7 +54,14 @@ import type { WebcamOverlayAnchor } from '@/types';
 export type { WebcamOverlayAnchor };
 export type WebcamOverlayShape = 'circle' | 'rectangle-landscape' | 'rectangle-portrait' | 'square';
 
-export interface WebcamShadowLayer {
+/**
+ * One drop shadow layer, under the recording or under the camera.
+ *
+ * The four numbers a CSS box-shadow carries, minus the spread -- which neither
+ * compositor can express, since Canvas2D has no such thing and the engine's
+ * shadow is a soft silhouette of the shape rather than a grown one.
+ */
+export interface ShadowLayer {
   offsetX: number;
   offsetY: number;
   blur: number;
@@ -66,7 +82,7 @@ export interface WebcamOverlayConfig {
     width: number;
     color: string;
   };
-  shadows: WebcamShadowLayer[];
+  shadows: ShadowLayer[];
   layout?: CompositionLayout;
 }
 

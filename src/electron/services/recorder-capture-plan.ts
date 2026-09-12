@@ -1,12 +1,9 @@
 /**
- * Decisions about which capture path a recording takes.
+ * Decisions and failure policy for native capture.
  *
- * Pure, and in their own file, because this is where the choice between "native
- * capture writes the camera track" and "the renderer records a sidecar" is
- * actually made -- and getting it wrong produces a recording that is *missing* a
- * track rather than one that fails, which is the worst kind of bug to find
- * later. `recorder.service.ts` cannot be loaded outside Electron, so anything
- * left in there is untestable by construction.
+ * Pure, and in their own file, because `recorder.service.ts` cannot be loaded
+ * outside Electron. Camera capture is native-only: when a requested camera
+ * cannot start, the recording must fail rather than silently lose that track.
  */
 
 export interface PhoneReadiness {
@@ -33,6 +30,25 @@ export function phoneCameraProblem(config: PhoneReadiness, phoneLive: boolean): 
   }
 
   return null;
+}
+
+/**
+ * Turn a native webcam startup failure into an actionable recording error.
+ * Returns `null` when the error belongs to screen/window capture instead.
+ */
+export function nativeWebcamStartProblem(error: unknown, usePhoneCamera: boolean): string | null {
+  const detail = (error instanceof Error ? error.message : String(error)).replace(/[.\s]+$/, '');
+  const normalized = detail.toLowerCase();
+
+  if (!normalized.includes('failed to start webcam') && !normalized.includes('webcam stream')) {
+    return null;
+  }
+
+  if (usePhoneCamera) {
+    return `The phone camera would not start: ${detail}.`;
+  }
+
+  return `The webcam would not start: ${detail}. Close any other app using the camera, then select the webcam again and retry.`;
 }
 
 export interface NativeAudioInput {

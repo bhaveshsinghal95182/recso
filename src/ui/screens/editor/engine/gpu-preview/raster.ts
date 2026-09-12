@@ -12,6 +12,14 @@
  * drift by construction.
  */
 
+import type { Project } from '@/types';
+
+import {
+  paintCanvasBackground,
+  resolveBackgroundMode,
+  resolveCanvasBackgroundLayers,
+} from '../background-raster';
+import { toFileUrl } from '../export-pipeline/source-paths';
 import {
   drawArrowCursor,
   drawBackground,
@@ -80,6 +88,99 @@ export function rasteriseBackground(
 
   drawBackground(ctx, width, height, background);
   return readBack(ctx);
+}
+
+/**
+ * The project's canvas background, at canvas size, for the engine to upload.
+ *
+ * This is the one the editor actually uses. `BackgroundConfig` is the Canvas2D
+ * compositor's vocabulary -- gradients and cross-hatch described as numbers --
+ * but the editor's background picker does not speak it: a pattern is CSS and an
+ * image is a file on disk, and both were previously drawn as a DOM layer sitting
+ * *behind* the preview canvas. That works while the canvas is transparent, and
+ * the engine's is not: it composites the whole frame, so it clears to opaque
+ * black and the layer behind it may as well not exist. The engine has to be
+ * given the background, not left to let it show through.
+ *
+ * Returns `null` for anything the engine can express as a flat clear -- a plain
+ * colour, or full-bleed -- since a clear costs nothing and an image costs an
+ * upload plus a full-canvas quad.
+ */
+export async function rasteriseCanvasBackground(
+  project: Project | null,
+  width: number,
+  height: number,
+): Promise<RgbaBitmap | null> {
+  const mode = resolveBackgroundMode(project);
+  const layers = resolveCanvasBackgroundLayers(
+    project,
+    mode === 'image' ? toFileUrl(project?.backgroundPath) : '',
+  );
+
+  if (!layers || (!layers.pattern && !layers.imageUrl)) {
+    return null;
+  }
+
+  const key = `${width}x${height}|${JSON.stringify(layers)}`;
+  if (lastBackground?.key === key) {
+    return lastBackground.bitmap;
+  }
+
+  const ctx = createContext(width, height);
+  if (!ctx) {
+    return null;
+  }
+
+  let bitmap: RgbaBitmap;
+  try {
+    await paintCanvasBackground(ctx, layers, width, height);
+    bitmap = readBack(ctx);
+  } catch (error) {
+    // Nothing here is worth losing the preview over. The caller falls back to
+    // clearing to the flat colour, which is the background minus its
+    // decoration rather than a blank canvas -- and the alternative is that the
+    // whole composition fails to apply and the editor drops to the Canvas2D
+    // compositor, which is a much louder failure than a missing gradient.
+    console.warn('[background] could not be rasterised for the engine:', error);
+    return null;
+  }
+
+  lastBackground = { key, bitmap };
+  return bitmap;
+}
+
+/**
+ * The last background drawn, keyed by what it was drawn from.
+ *
+ * The whole composition is re-resolved whenever anything in it moves, and a
+ * slider drag emits one of those per pixel of travel -- so without this, moving
+ * the padding would re-lay-out and repaint a canvas-sized SVG on every frame of
+ * the drag for a background that has not changed. One entry, because the only
+ * question ever asked is "the same as last time?".
+ *
+ * Safe to hand out repeatedly: the buffer is structured-cloned on its way to
+ * the main process rather than transferred, so it survives being sent.
+ */
+let lastBackground: { key: string; bitmap: RgbaBitmap } | null = null;
+
+/**
+ * The colour the engine clears to for a project.
+ *
+ * Full-bleed clears to black: the recording covers the canvas, so nothing of
+ * this is visible and black is the honest answer for the edges of a frame that
+ * does not quite fill it.
+ */
+export function canvasBackgroundColour(project: Project | null): {
+  r: number;
+  g: number;
+  b: number;
+  a: number;
+} {
+  const opaqueBlack = { r: 0, g: 0, b: 0, a: 1 };
+  if (project?.canvasBackgroundEnabled === false) {
+    return opaqueBlack;
+  }
+  return parseCssColour(project?.backgroundColor) ?? opaqueBlack;
 }
 
 /** The flat colour behind everything, as the engine's 0..1 channels. */

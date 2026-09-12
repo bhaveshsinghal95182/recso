@@ -32,7 +32,7 @@ pub struct Cut {
 /// Normalisation is not cosmetic: the mapping walks the list in order and
 /// assumes no overlaps, so two cuts that touch have to become one or the
 /// second one's time gets subtracted twice.
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug, PartialEq)]
 pub struct CutTrack {
   cuts: Vec<Cut>,
 }
@@ -216,6 +216,28 @@ mod tests {
   }
 
   #[test]
+  fn two_ways_of_writing_the_same_edit_compare_equal() {
+    // The player leans on this to tell a real cut change from the editor
+    // re-sending the composition it already has: only a difference in the
+    // *edit* is worth throwing the frame queue away for.
+    assert_eq!(CutTrack::new(vec![]), CutTrack::default());
+    assert_eq!(
+      CutTrack::new(vec![cut(500.0, 1500.0), cut(2000.0, 2500.0)]),
+      CutTrack::new(vec![cut(2000.0, 2500.0), cut(500.0, 1500.0)]),
+    );
+    // Merged and unmerged spellings of one removed span.
+    assert_eq!(
+      CutTrack::new(vec![cut(0.0, 100.0), cut(100.0, 200.0)]),
+      CutTrack::new(vec![cut(0.0, 200.0)]),
+    );
+    // And a genuine difference still reads as one.
+    assert_ne!(
+      CutTrack::new(vec![cut(0.0, 200.0)]),
+      CutTrack::new(vec![cut(0.0, 201.0)]),
+    );
+  }
+
+  #[test]
   fn touching_cuts_merge_too() {
     let track = CutTrack::new(vec![cut(0.0, 100.0), cut(100.0, 200.0)]);
     assert_eq!(track.len(), 1);
@@ -273,7 +295,11 @@ mod tests {
 
   #[test]
   fn several_cuts_accumulate() {
-    let track = CutTrack::new(vec![cut(100.0, 200.0), cut(400.0, 500.0), cut(700.0, 900.0)]);
+    let track = CutTrack::new(vec![
+      cut(100.0, 200.0),
+      cut(400.0, 500.0),
+      cut(700.0, 900.0),
+    ]);
     // 400ms removed in total before the end.
     assert_eq!(track.composition_duration(1000.0), 600.0);
     // Between the second and third cuts: 600 source, 200 removed so far.
@@ -318,7 +344,11 @@ mod normalisation_scenarios {
   #[test]
   fn cuts_arriving_out_of_order_are_sorted() {
     // The mapping walks the list in order and assumes it is sorted.
-    let track = CutTrack::new(vec![cut(4000.0, 5000.0), cut(0.0, 1000.0), cut(2000.0, 3000.0)]);
+    let track = CutTrack::new(vec![
+      cut(4000.0, 5000.0),
+      cut(0.0, 1000.0),
+      cut(2000.0, 3000.0),
+    ]);
     assert_eq!(track.len(), 3);
     assert_eq!(track.to_composition(6000.0), 3000.0);
   }
@@ -375,7 +405,11 @@ mod normalisation_scenarios {
 
   #[test]
   fn dropping_the_empty_ones_leaves_the_real_ones_alone() {
-    let track = CutTrack::new(vec![cut(0.0, 0.0), cut(1000.0, 2000.0), cut(5000.0, 4000.0)]);
+    let track = CutTrack::new(vec![
+      cut(0.0, 0.0),
+      cut(1000.0, 2000.0),
+      cut(5000.0, 4000.0),
+    ]);
     assert_eq!(track.len(), 1);
     assert!(track.contains(1500.0));
   }
@@ -617,7 +651,10 @@ mod mapping_scenarios {
   fn source_time_never_runs_behind_composition_time() {
     for step in 0..200 {
       let composition = step as f64 * 25.0;
-      assert!(double().to_source(composition) >= composition, "{composition}");
+      assert!(
+        double().to_source(composition) >= composition,
+        "{composition}"
+      );
     }
   }
 

@@ -31,8 +31,7 @@ use crate::engine::d3d::{gpu, SharedTexture, Sharing};
 use crate::engine::decode::Decoder;
 use crate::engine::render::{
   create_rtv, Background, BackgroundRequest, CursorEffects, EffectParams, Layer, RenderChain,
-  SourceCrop,
-  VideoLayout as RenderVideoLayout,
+  SourceCrop, VideoLayout as RenderVideoLayout,
 };
 use crate::engine::zoom::{WebcamZoomRegion, WebcamZoomTrack, ZoomRegion, ZoomTrack};
 
@@ -912,8 +911,22 @@ fn decode_loop(
       needs_repaint = true;
     }
 
-    if let Some(regions) = pending_cuts {
-      cuts = CutTrack::new(regions);
+    // Only when the edit actually changed. Applying cuts is the one setter that
+    // cannot re-render in place -- it throws the queue away and decodes again
+    // from the playhead -- and mid-playback that is a held frame followed by a
+    // jump over the ones the seek cost. The editor re-sends the whole
+    // composition whenever anything in it moves, so most of what arrives here
+    // is the track that is already loaded, and a slider drag sends one per
+    // pixel of travel.
+    //
+    // Compared after normalising, so this asks whether the edit differs rather
+    // than whether it was written down the same way.
+    let changed_cuts = pending_cuts
+      .map(CutTrack::new)
+      .filter(|track| *track != cuts);
+
+    if let Some(track) = changed_cuts {
+      cuts = track;
       shared.cut_count.store(cuts.len() as u64, Ordering::Release);
       // The edit just got longer or shorter, and the playhead is expressed in
       // composition time -- so the clock's end has to move with it or playback
@@ -1491,7 +1504,11 @@ mod clock_scenarios {
     c.playing = true;
     c.jump_to(2000.0);
     c.set_rate(4.0);
-    assert!((c.anchor_media_ms - 2000.0).abs() < 50.0, "{}", c.anchor_media_ms);
+    assert!(
+      (c.anchor_media_ms - 2000.0).abs() < 50.0,
+      "{}",
+      c.anchor_media_ms
+    );
   }
 
   #[test]
@@ -1561,7 +1578,12 @@ mod clock_scenarios {
     fast.rate = 8.0;
     fast.set_playing(true);
     std::thread::sleep(std::time::Duration::from_millis(40));
-    assert!(fast.now_ms() > slow.now_ms(), "{} vs {}", fast.now_ms(), slow.now_ms());
+    assert!(
+      fast.now_ms() > slow.now_ms(),
+      "{} vs {}",
+      fast.now_ms(),
+      slow.now_ms()
+    );
   }
 
   #[test]

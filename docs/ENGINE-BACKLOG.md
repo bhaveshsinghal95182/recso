@@ -209,20 +209,6 @@ GPU itself can decode it.
 Those recordings still play in the editor's `<video>` path, which goes through
 Chromium.
 
-### 8. `sandbox: false` on the main window
-
-[`main.ts:63`](../src/electron/main.ts#L63). A sandboxed preload gets only a
-polyfilled subset of the electron module, with no `sharedTexture`, and cannot
-`require` a relative file — so the engine bridge cannot load at all under the
-default.
-
-`contextIsolation` stays on and the `VideoFrame` never leaves the isolated
-world, so this is much weaker than the prototype's `nodeIntegration: true`. It
-is still a real loosening of recso's posture, taken for a path nothing uses yet,
-and it should be revisited if the engine is ever abandoned.
-
----
-
 ## Missing: parity with the Pixi compositor
 
 What the editor's `CompositionEngine` does, against what the engine has. This
@@ -322,8 +308,6 @@ the way the playhead is now.
   the engine fit the camera itself, since it already knows the resolution the
   caller would have had to demux for. Still worth doing for anything on the JS
   side that wants the aspect ratio before the engine is involved.
-- **`probeVideoMetadata` still reads the whole file into memory** on the fallback
-  path, used for pre-metadata recordings and crash recovery.
 - **Audio is written to sidecars, not interleaved.** The recorder writes system
   audio and the microphone beside the recording rather than muxing them in.
   Interleaving is the goal; keeping the sidecar as an option is worth having for
@@ -332,18 +316,15 @@ the way the playhead is now.
   and frame count are described at capture time; these two are not, and dropped
   frames in particular are only visible in the recorder's own logs. (Was item 2
   of `todo.md`.)
-- **`hasReadableVideoTrack` is still a mediabunny probe** in the finalize poll.
-  Deliberate: it checks the file is muxed and readable on disk, which a frame
-  count cannot tell you.
 
 ---
 
 ## Missing: integration
 
 This section used to open with "nothing in the app drives any of this". That is
-no longer true: recording, preview and export all run through the engine by
-default, `useGpuPreview` drives the webcam and cursor setters, and `planExport`
-decides which export path a composition gets. What is left is the leftovers.
+no longer true: recording, preview, and export run through the engine, and
+`useGpuPreview` drives the webcam and cursor setters through the shared-texture
+path. `planExport` now has one export target. What is left is the leftovers.
 
 - `GpuFrameSource` implements `FrameVideoSource` — the seam the _compositor_
   would pull from — and nothing constructs it. The preview went the other way in

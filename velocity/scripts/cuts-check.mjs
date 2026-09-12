@@ -97,6 +97,60 @@ try {
     `${player.compositionDuration().toFixed(0)}ms`,
   )
 
+  // ---- re-sending what is already loaded ----------------------------------
+  //
+  // The editor re-sends the whole composition whenever anything in it moves,
+  // and a slider drag emits one of those per pixel of travel. Applying cuts is
+  // the one setter that cannot re-render in place -- it throws the frame queue
+  // away and decodes again from the playhead -- so if it acted on a track it
+  // already had, every edit made during playback cost a held frame and then a
+  // jump over the ones the re-seek ate.
+
+  console.log('\nre-applying the same cuts')
+  player.setCuts([CUT])
+  await sleep(400)
+
+  player.seek(500, true)
+  await sleep(300)
+  player.play()
+
+  const presented = []
+  const startedAt = Date.now()
+  let resent = null
+  while (Date.now() - startedAt < 1600) {
+    const frame = player.tick()
+    if (frame) presented.push(frame.pts)
+    if (resent === null && Date.now() - startedAt > 700) {
+      resent = player.stats()
+      // The same edit, written differently: out of order, overlapping, and with
+      // an empty span in it. Normalised, it is the track already loaded.
+      player.setCuts([
+        { startMs: 2500, endMs: 3000 },
+        { startMs: 2000, endMs: 2600 },
+        { startMs: 1000, endMs: 1000 },
+      ])
+    }
+    await sleep(4)
+  }
+  player.pause()
+
+  const repeats = presented.filter((pts, i) => i > 0 && pts <= presented[i - 1]).length
+  check(
+    'playback does not stall or repeat a frame when the same cuts are re-sent',
+    repeats === 0,
+    `${repeats} of ${presented.length} frames repeated or went backwards`,
+  )
+  check(
+    'the same edit written differently does not re-seek the decoder',
+    player.stats().lastSeekDecoded === resent.lastSeekDecoded,
+    `${resent.lastSeekDecoded} -> ${player.stats().lastSeekDecoded} frames decoded on the last seek`,
+  )
+  check(
+    'and it is still the same edit afterwards',
+    Math.abs(player.compositionDuration() - (sourceMs - 1000)) < 1,
+    `${player.compositionDuration().toFixed(0)}ms`,
+  )
+
   player.close()
 
   // ---- export -------------------------------------------------------------

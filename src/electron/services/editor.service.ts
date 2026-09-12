@@ -413,7 +413,7 @@ export async function createProject(recordingId: string): Promise<Project | null
   } else {
     try {
       metadata = await mediaMetadataService.probeVideoMetadata(recording.finalPath);
-      console.log('[EditorService] Probed video metadata (MediaBunny):', metadata);
+      console.log('[EditorService] Probed video metadata (native decoder):', metadata);
     } catch (err) {
       console.error('[EditorService] Failed to probe video:', err);
       // Fallback to defaults if probe fails

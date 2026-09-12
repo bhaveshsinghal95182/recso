@@ -15,14 +15,17 @@ mod scenarios;
 
 use napi_derive::napi;
 
-pub use desktop_capture::Stopper;
 pub use borderless::borderless_capture_allowed;
+pub use desktop_capture::Stopper;
 pub use desktop_capture::{list_audio_capture_devices, AudioDeviceInfo};
 pub use phone_camera::{
   phone_camera_status, push_phone_frame, reset_phone_camera, PhoneCameraStatus,
 };
 pub use recording_info::{RecordingMediaInfo, RecordingStats};
-pub use webcam_capture::{list_webcam_devices, WebcamDeviceInfo};
+pub use webcam_capture::{
+  clear_webcam_preview_frame, list_webcam_devices, start_webcam_preview, webcam_preview_frame,
+  WebcamDeviceInfo, WebcamPreviewFrame,
+};
 
 use webcam_capture::WebcamSource;
 
@@ -127,11 +130,7 @@ fn attach_webcam_stopper_if_requested(
     Err(error) => {
       // Stop desktop capture immediately when webcam startup fails in v2 mode.
       stopper.stop();
-      Err(napi::Error::from_reason(format!(
-        "{}: {}",
-        api_name,
-        error
-      )))
+      Err(napi::Error::from_reason(format!("{}: {}", api_name, error)))
     }
   }
 }
@@ -382,13 +381,12 @@ mod webcam_source_scenarios {
 
   #[test]
   fn every_accepted_spelling_produces_a_source_the_recorder_can_open() {
-    let accepted: [Option<String>; 3] = [
-      None,
-      Some(String::new()),
-      Some("local".to_string()),
-    ];
+    let accepted: [Option<String>; 3] = [None, Some(String::new()), Some("local".to_string())];
     for source in accepted {
-      assert!(parse_webcam_source(source.clone(), None).is_ok(), "{source:?}");
+      assert!(
+        parse_webcam_source(source.clone(), None).is_ok(),
+        "{source:?}"
+      );
     }
     assert!(parse_webcam_source(Some("phone".to_string()), None).is_ok());
   }

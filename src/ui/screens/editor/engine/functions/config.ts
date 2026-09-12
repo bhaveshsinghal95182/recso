@@ -14,6 +14,10 @@ export const defaultConfig: CompositionConfig = {
       width: 0,
       color: '#ffffff',
     },
+    // Empty rather than the editor's default stack: this is the bare
+    // composition a caller starts from, and the project's own style is layered
+    // over it by the config builders.
+    shadows: [],
   },
   zooms: [],
   zoomRegions: [],

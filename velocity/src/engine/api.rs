@@ -4,7 +4,7 @@
 //! exists, which keeps the Windows code testable from `cargo test` and keeps
 //! the class wrappers thin enough to read in one pass.
 
-use super::composite::{CursorSample, FitMode, OverlayShape, Rect, WebcamLayout, WebcamShadow};
+use super::composite::{CursorSample, FitMode, OverlayShape, Rect, Shadow, WebcamLayout};
 use super::{
   audio, cuts, d3d, decode, encode, exporter, pattern, player, render, spritesheet, zoom,
 };
@@ -643,6 +643,8 @@ pub struct VideoPlacement {
   /// Border thickness, drawn outside the rect. Defaults to 0.
   pub border_width: Option<f64>,
   pub border_colour: Option<Colour>,
+  /// Drop shadows under the recording, drawn in the order given. Empty is none.
+  pub shadows: Option<Vec<ShadowLayer>>,
 }
 
 impl From<VideoPlacement> for render::VideoLayout {
@@ -657,6 +659,12 @@ impl From<VideoPlacement> for render::VideoLayout {
       corner_radius: placement.corner_radius.unwrap_or(0.0) as f32,
       border_width: placement.border_width.unwrap_or(0.0) as f32,
       border_colour: colour_or(placement.border_colour.as_ref(), [0.0, 0.0, 0.0, 1.0]),
+      shadows: placement
+        .shadows
+        .unwrap_or_default()
+        .into_iter()
+        .map(Shadow::from)
+        .collect(),
     }
   }
 }
@@ -700,15 +708,15 @@ pub struct WebcamOverlay {
   pub border_width: Option<f64>,
   pub border_colour: Option<Colour>,
   /// Drop shadows under the camera, drawn in the order given. Empty is none.
-  pub shadows: Option<Vec<WebcamShadowLayer>>,
+  pub shadows: Option<Vec<ShadowLayer>>,
 }
 
-/// One drop shadow under the camera.
+/// One drop shadow, under the recording or under the camera.
 ///
-/// The same four numbers a CSS box-shadow carries, because the editor's webcam
-/// styles are authored as shadow stacks and this is where they arrive.
+/// The same four numbers a CSS box-shadow carries, because the editor's styles
+/// are authored as shadow stacks and this is where they arrive.
 #[napi(object)]
-pub struct WebcamShadowLayer {
+pub struct ShadowLayer {
   /// Canvas pixels, positive right and down. Default 0.
   pub offset_x: Option<f64>,
   pub offset_y: Option<f64>,
@@ -719,9 +727,9 @@ pub struct WebcamShadowLayer {
   pub colour: Option<Colour>,
 }
 
-impl From<WebcamShadowLayer> for WebcamShadow {
-  fn from(shadow: WebcamShadowLayer) -> Self {
-    WebcamShadow {
+impl From<ShadowLayer> for Shadow {
+  fn from(shadow: ShadowLayer) -> Self {
+    Shadow {
       offset: [
         shadow.offset_x.unwrap_or(0.0) as f32,
         shadow.offset_y.unwrap_or(0.0) as f32,
@@ -759,7 +767,7 @@ impl From<WebcamOverlay> for WebcamLayout {
         .shadows
         .unwrap_or_default()
         .into_iter()
-        .map(WebcamShadow::from)
+        .map(Shadow::from)
         .collect(),
     }
     // Ranges enforced on the way in rather than trusted: an opacity above 1
@@ -1259,7 +1267,9 @@ impl VideoPlayer {
   /// knows about rather than refusing to draw.
   #[napi]
   pub fn set_layer_order(&self, order: Vec<String>) {
-    self.inner.set_layer_order(render::parse_layer_order(&order));
+    self
+      .inner
+      .set_layer_order(render::parse_layer_order(&order));
   }
 
   /// Spans of the composition to leave the camera out of, in composition time.
@@ -1769,8 +1779,7 @@ impl Task for BuildSpritesheet {
       decoder.duration_100ns as f64 / 10_000.0
     };
 
-    let plan =
-      spritesheet::generate(&self.input, &self.output, self.budget).map_err(win_err)?;
+    let plan = spritesheet::generate(&self.input, &self.output, self.budget).map_err(win_err)?;
 
     Ok((plan, duration_ms))
   }
@@ -1965,13 +1974,19 @@ mod colour_scenarios {
   #[test]
   fn a_present_colour_wins_over_the_fallback() {
     let given = colour(1.0, 0.0, 0.0, None);
-    assert_eq!(colour_or(Some(&given), [0.0, 0.0, 0.0, 1.0]), [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(
+      colour_or(Some(&given), [0.0, 0.0, 0.0, 1.0]),
+      [1.0, 0.0, 0.0, 1.0]
+    );
   }
 
   #[test]
   fn a_fully_transparent_colour_is_not_mistaken_for_a_missing_one() {
     let clear = colour(0.0, 0.0, 0.0, Some(0.0));
-    assert_eq!(colour_or(Some(&clear), [1.0, 1.0, 1.0, 1.0]), [0.0, 0.0, 0.0, 0.0]);
+    assert_eq!(
+      colour_or(Some(&clear), [1.0, 1.0, 1.0, 1.0]),
+      [0.0, 0.0, 0.0, 0.0]
+    );
   }
 }
 
@@ -1988,6 +2003,7 @@ mod placement_conversion_scenarios {
       corner_radius: None,
       border_width: None,
       border_colour: None,
+      shadows: None,
     }
   }
 
@@ -2197,7 +2213,7 @@ mod webcam_conversion_scenarios {
   fn a_shadow_stack_comes_across_in_order() {
     let layout: WebcamLayout = WebcamOverlay {
       shadows: Some(vec![
-        WebcamShadowLayer {
+        ShadowLayer {
           offset_x: Some(1.0),
           offset_y: Some(1.0),
           blur: Some(2.0),
@@ -2208,7 +2224,7 @@ mod webcam_conversion_scenarios {
             a: Some(0.5),
           }),
         },
-        WebcamShadowLayer {
+        ShadowLayer {
           offset_x: Some(0.0),
           offset_y: Some(8.0),
           blur: Some(24.0),
@@ -2233,7 +2249,7 @@ mod webcam_conversion_scenarios {
     // The default is a fully transparent black, and `sanitized` throws those
     // away rather than paying a quad for something invisible.
     let layout: WebcamLayout = WebcamOverlay {
-      shadows: Some(vec![WebcamShadowLayer {
+      shadows: Some(vec![ShadowLayer {
         offset_x: Some(4.0),
         offset_y: Some(4.0),
         blur: Some(8.0),
@@ -2248,7 +2264,7 @@ mod webcam_conversion_scenarios {
   #[test]
   fn a_shadow_with_no_offset_or_blur_is_dropped() {
     let layout: WebcamLayout = WebcamOverlay {
-      shadows: Some(vec![WebcamShadowLayer {
+      shadows: Some(vec![ShadowLayer {
         offset_x: None,
         offset_y: None,
         blur: None,
@@ -2267,7 +2283,7 @@ mod webcam_conversion_scenarios {
 
   #[test]
   fn a_shadow_layer_converts_its_four_numbers_faithfully() {
-    let shadow: WebcamShadow = WebcamShadowLayer {
+    let shadow: Shadow = ShadowLayer {
       offset_x: Some(-3.0),
       offset_y: Some(7.0),
       blur: Some(12.0),
@@ -2489,6 +2505,7 @@ mod timeline_conversion_scenarios {
         corner_radius: None,
         border_width: None,
         border_colour: None,
+        shadows: None,
       },
       full_screen: None,
     }
@@ -2513,6 +2530,7 @@ mod timeline_conversion_scenarios {
         corner_radius: None,
         border_width: None,
         border_colour: None,
+        shadows: None,
       },
       full_screen,
     };
@@ -2583,7 +2601,10 @@ mod boundary_matrix {
     for value in CHANNEL_VALUES {
       let out = colour(value, value, value, Some(value)).to_array();
       for (i, channel) in out.iter().enumerate() {
-        assert!((0.0..=1.0).contains(channel), "{value} channel {i}: {channel}");
+        assert!(
+          (0.0..=1.0).contains(channel),
+          "{value} channel {i}: {channel}"
+        );
         assert!(channel.is_finite(), "{value} channel {i}");
       }
     }
@@ -2665,6 +2686,7 @@ mod boundary_matrix {
       corner_radius: None,
       border_width: None,
       border_colour: None,
+      shadows: None,
     }
   }
 
@@ -2689,7 +2711,10 @@ mod boundary_matrix {
       assert_eq!(layout.rect.x as f64, x, "{x},{y} {width}x{height}");
       assert_eq!(layout.rect.y as f64, y, "{x},{y} {width}x{height}");
       assert_eq!(layout.rect.width as f64, width, "{x},{y} {width}x{height}");
-      assert_eq!(layout.rect.height as f64, height, "{x},{y} {width}x{height}");
+      assert_eq!(
+        layout.rect.height as f64, height,
+        "{x},{y} {width}x{height}"
+      );
     }
   }
 
@@ -2821,7 +2846,7 @@ mod boundary_matrix {
 
   #[test]
   fn a_shadow_layer_takes_its_documented_defaults_for_every_omitted_field() {
-    let shadow: WebcamShadow = WebcamShadowLayer {
+    let shadow: Shadow = ShadowLayer {
       offset_x: None,
       offset_y: None,
       blur: None,
@@ -2840,7 +2865,7 @@ mod boundary_matrix {
     for offset_x in [-20.0f64, 0.0, 12.0] {
       for offset_y in [-20.0f64, 0.0, 12.0] {
         for blur in [0.0f64, 4.0, 40.0] {
-          let shadow: WebcamShadow = WebcamShadowLayer {
+          let shadow: Shadow = ShadowLayer {
             offset_x: Some(offset_x),
             offset_y: Some(offset_y),
             blur: Some(blur),
@@ -2868,7 +2893,7 @@ mod boundary_matrix {
       for blur in [0.0f64, 12.0] {
         for alpha in [0.0f64, 0.5] {
           let layout: WebcamLayout = WebcamOverlay {
-            shadows: Some(vec![WebcamShadowLayer {
+            shadows: Some(vec![ShadowLayer {
               offset_x: Some(offset),
               offset_y: Some(0.0),
               blur: Some(blur),
@@ -2896,8 +2921,8 @@ mod boundary_matrix {
   #[test]
   fn a_shadow_stack_keeps_its_order_across_the_boundary() {
     for count in 1..6usize {
-      let shadows: Vec<WebcamShadowLayer> = (0..count)
-        .map(|i| WebcamShadowLayer {
+      let shadows: Vec<ShadowLayer> = (0..count)
+        .map(|i| ShadowLayer {
           offset_x: Some(0.0),
           offset_y: Some(0.0),
           blur: Some((i + 1) as f64 * 5.0),
@@ -2916,7 +2941,11 @@ mod boundary_matrix {
       .into();
       assert_eq!(layout.shadows.len(), count, "{count} shadows");
       for (i, s) in layout.shadows.iter().enumerate() {
-        assert_eq!(s.blur as f64, (i + 1) as f64 * 5.0, "{count} shadows at {i}");
+        assert_eq!(
+          s.blur as f64,
+          (i + 1) as f64 * 5.0,
+          "{count} shadows at {i}"
+        );
       }
     }
   }
@@ -2983,7 +3012,10 @@ mod boundary_matrix {
           .into();
           assert_eq!(on.click_scale as f64, scale, "{scale}/{duration}/{smear}");
           assert_eq!(on.click_duration_ms, duration, "{scale}/{duration}/{smear}");
-          assert_eq!(on.smear_strength as f64, smear, "{scale}/{duration}/{smear}");
+          assert_eq!(
+            on.smear_strength as f64, smear,
+            "{scale}/{duration}/{smear}"
+          );
         }
       }
     }
@@ -3012,10 +3044,22 @@ mod boundary_matrix {
     // The boundary is a plain copy; normalisation happens in `CutTrack::new`,
     // and the two together are what the caller actually gets.
     let regions = vec![
-      CutRegion { start_ms: 2_000.0, end_ms: 1_000.0 },
-      CutRegion { start_ms: 5_000.0, end_ms: 8_000.0 },
-      CutRegion { start_ms: 1_000.0, end_ms: 1_000.0 },
-      CutRegion { start_ms: -500.0, end_ms: 500.0 },
+      CutRegion {
+        start_ms: 2_000.0,
+        end_ms: 1_000.0,
+      },
+      CutRegion {
+        start_ms: 5_000.0,
+        end_ms: 8_000.0,
+      },
+      CutRegion {
+        start_ms: 1_000.0,
+        end_ms: 1_000.0,
+      },
+      CutRegion {
+        start_ms: -500.0,
+        end_ms: 500.0,
+      },
     ];
     let track = cuts::CutTrack::new(regions.into_iter().map(cuts::Cut::from).collect());
     assert_eq!(track.len(), 2);
@@ -3077,6 +3121,7 @@ mod boundary_matrix {
         corner_radius: Some(value),
         border_width: Some(value),
         border_colour: None,
+        shadows: None,
       }
       .into();
       assert_eq!(layout.rect.x as f64, value, "{value}");
@@ -3100,7 +3145,11 @@ mod boundary_matrix {
         }
         .into();
         assert_eq!(region.level as f64, level, "{level}/{ease:?}");
-        assert_eq!(region.ease_duration_ms, ease.unwrap_or(0.0), "{level}/{ease:?}");
+        assert_eq!(
+          region.ease_duration_ms,
+          ease.unwrap_or(0.0),
+          "{level}/{ease:?}"
+        );
         assert_eq!(region.focal_x, 0.25);
         assert_eq!(region.focal_y, 0.75);
         assert_eq!(region.start_ms, 1_000.0);
@@ -3152,6 +3201,7 @@ mod boundary_matrix {
             corner_radius: None,
             border_width: None,
             border_colour: None,
+            shadows: None,
           },
           full_screen: full,
         }
@@ -3195,7 +3245,9 @@ mod boundary_matrix {
     // Source 13s is composition 10s, which is where the zoom starts.
     assert_eq!(cuts.to_composition(13_000.0), 10_000.0);
     assert_eq!(zooms.state_at(10_000.0, video).scale, 2.0);
-    assert!(zooms.state_at(cuts.to_composition(4_000.0), video).is_identity());
+    assert!(zooms
+      .state_at(cuts.to_composition(4_000.0), video)
+      .is_identity());
   }
 
   #[test]

@@ -1,12 +1,57 @@
 import type {
   Canvas2DContext,
   FrameVideoSource,
+  ShadowLayer,
   VideoConfig,
   VideoLayout,
   WebcamOverlayConfig,
 } from '../types';
 import { clamp, roundRectPath } from './common';
 import { computeWebcamLayout, computeWebcamRegionLayout } from './layout';
+
+/**
+ * Paint a stack of drop shadows under a shape.
+ *
+ * One pass per layer, because canvas only holds one shadow at a time -- the
+ * stack is what makes it read as depth rather than as a smudge, so they cannot
+ * be collapsed into one.
+ *
+ * `scale` is the zoom the layer is drawn at. Canvas offsets and blurs are in
+ * device space and the current transform does *not* apply to them, unlike the
+ * path itself -- so under a 2x zoom the shape doubles and the shadow would not,
+ * and the picture would visibly come loose from its own shadow. The engine
+ * scales its shadows for the same reason, and this is where the two agree.
+ */
+function drawShadowStack(
+  ctx: Canvas2DContext,
+  shadows: ShadowLayer[] | undefined,
+  scale: number,
+  tracePath: () => void,
+): void {
+  if (!shadows || shadows.length === 0) {
+    return;
+  }
+
+  for (const shadow of shadows) {
+    const blur = Number.isFinite(shadow.blur) ? Math.max(0, shadow.blur) : 0;
+    if (blur <= 0 && shadow.offsetX === 0 && shadow.offsetY === 0) {
+      continue;
+    }
+
+    ctx.save();
+    ctx.shadowColor = shadow.color;
+    ctx.shadowBlur = blur * scale;
+    ctx.shadowOffsetX = shadow.offsetX * scale;
+    ctx.shadowOffsetY = shadow.offsetY * scale;
+    tracePath();
+    // The layer itself is drawn over this a moment later, so the fill is
+    // covered. It stays opaque so a low-alpha shadow is still cast at the
+    // alpha it asked for rather than at the fill's.
+    ctx.fillStyle = 'rgba(0, 0, 0, 1)';
+    ctx.fill();
+    ctx.restore();
+  }
+}
 
 function beginWebcamShapePath(
   ctx: Canvas2DContext,
@@ -39,7 +84,16 @@ export function drawVideoLayer(
   layout: VideoLayout,
   videoConfig: VideoConfig,
   source: FrameVideoSource,
+  zoomScale = 1,
 ): void {
+  // Under everything, and cast by the recording's own rectangle rather than the
+  // bordered one -- a thick border sits on top of the shadow's inner edge. That
+  // is the one place this does not look like a CSS box-shadow, and the engine
+  // makes the same choice so the two paths match.
+  drawShadowStack(ctx, videoConfig.shadows, zoomScale, () =>
+    roundRectPath(ctx, layout.x, layout.y, layout.width, layout.height, videoConfig.borderRadius),
+  );
+
   if (videoConfig.borderRadius > 0 || videoConfig.border.width > 0) {
     ctx.save();
 
@@ -73,28 +127,11 @@ function drawWebcamShadowLayers(
   layout: VideoLayout,
   webcamConfig: WebcamOverlayConfig,
 ): void {
-  if (!webcamConfig.shadows || webcamConfig.shadows.length === 0) {
-    return;
-  }
-
-  for (const shadow of webcamConfig.shadows) {
-    const blur = Number.isFinite(shadow.blur) ? Math.max(0, shadow.blur) : 0;
-    if (blur <= 0 && shadow.offsetX === 0 && shadow.offsetY === 0) {
-      continue;
-    }
-
-    ctx.save();
-    ctx.shadowColor = shadow.color;
-    ctx.shadowBlur = blur;
-    ctx.shadowOffsetX = shadow.offsetX;
-    ctx.shadowOffsetY = shadow.offsetY;
-    beginWebcamShapePath(ctx, layout, webcamConfig);
-    // The webcam layer is drawn immediately after this, so the fill is covered.
-    // Keep fill opaque so low-alpha shadows remain visible.
-    ctx.fillStyle = 'rgba(0, 0, 0, 1)';
-    ctx.fill();
-    ctx.restore();
-  }
+  // Scale 1: the camera is drawn in base space, so there is no zoom to
+  // compensate for.
+  drawShadowStack(ctx, webcamConfig.shadows, 1, () =>
+    beginWebcamShapePath(ctx, layout, webcamConfig),
+  );
 }
 
 export function drawWebcamLayer(

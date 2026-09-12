@@ -14,8 +14,8 @@ Built with Electron, React, and a native Rust capture engine.
 - **Timeline editing** — trim/cut sections out of a recording, scrub with a waveform-backed timeline, and preview changes live.
 - **Crash-safe recording** — recording metadata is persisted to a local SQLite database so in-progress recordings can be recovered after a crash.
 - **Project management** — recordings are saved as local projects with a recent-projects list for quickly resuming past work.
-- **Export pipeline** — a staged compositor/export pipeline (via [Mediabunny](https://www.npmjs.com/package/mediabunny)) renders the final video with backgrounds, zoom, cursor effects, and webcam overlay baked in.
-- **GPU video engine (parallel, not yet wired into the editor)** — hardware decode, colour grading and encode that keep frames on the GPU end to end, in the `velocity` crate. See [docs/ENGINE.md](docs/ENGINE.md).
+- **Native export pipeline** — the Rust `velocity` engine streams hardware decode, GPU composition, hardware encode, and file output without loading the recording into renderer memory.
+- **GPU video engine** — export and preview use the native render chain; preview imports its shared D3D11 texture through Electron without copying frames through JavaScript. See [docs/ENGINE.md](docs/ENGINE.md).
 - **System tray integration** — start/stop recordings and access the app from the system tray.
 - **Basic usage telemetry** — anonymous, opt-out-friendly telemetry to help understand feature usage (see `src/electron/services/telemetry`).
 
@@ -29,7 +29,7 @@ Built with Electron, React, and a native Rust capture engine.
 | State management               | [Zustand](https://github.com/pmndrs/zustand)                                                                                            |
 | Canvas rendering / compositing | [Pixi.js](https://pixijs.com/)                                                                                                          |
 | Animation                      | [motion](https://motion.dev/), [animejs](https://animejs.com/), [flubber](https://github.com/veltman/flubber) (shape morphing)          |
-| Media encode/decode            | [mediabunny](https://www.npmjs.com/package/mediabunny)                                                                                  |
+| Media encode/decode            | Media Foundation + D3D11 through the native `velocity` engine                                                                           |
 | Native capture engine          | Rust + [napi-rs](https://napi.rs/) (local `velocity` package)                                                                           |
 | Local storage                  | [better-sqlite3](https://github.com/WiseLibs/better-sqlite3)                                                                            |
 | Packaging                      | [electron-builder](https://www.electron.build/) (NSIS/APPX for Windows, DMG for macOS, AppImage/deb for Linux)                          |
@@ -126,12 +126,19 @@ Build configuration lives in [electron-builder.json](electron-builder.json).
 
 ## Other Scripts
 
-| Script                | Description                                                       |
-| --------------------- | ----------------------------------------------------------------- |
-| `pnpm cleanup:db`     | Runs the database cleanup script against the local SQLite store.  |
-| `pnpm rebuild:native` | Rebuilds native dependencies for the current Electron version.    |
-| `pnpm build:engine`   | Builds the `velocity` Rust addon, including the GPU video engine. |
-| `pnpm engine:check`   | Headless end-to-end check of the GPU video engine.                |
+| Script                      | Description                                                       |
+| --------------------------- | ----------------------------------------------------------------- |
+| `pnpm cleanup:db`           | Runs the database cleanup script against the local SQLite store.  |
+| `pnpm rebuild:native`       | Rebuilds native dependencies for the current Electron version.    |
+| `pnpm build:engine`         | Builds the `velocity` Rust addon, including the GPU video engine. |
+| `pnpm engine:check`         | Headless end-to-end check of the GPU video engine.                |
+| `pnpm check:webcam-preview` | Hardware check of native webcam preview and recording handoff.    |
+
+The webcam preview uses frames from the native camera owner, including during
+recording; it does not open a browser camera stream. The webcam preview check
+requires a local Windows webcam and the current `pnpm build:engine` build. It
+runs the recording screen in a hidden window, captures briefly, and removes
+its isolated test recordings and database afterwards.
 
 ## Documentation
 
