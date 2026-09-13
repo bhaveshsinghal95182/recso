@@ -1,4 +1,4 @@
-import { app, BrowserWindow, screen } from 'electron';
+import { app, BrowserWindow, ipcMain, screen } from 'electron';
 
 // APPX/MSIX Store apps launch with cwd = C:\WINDOWS\system32 (read-only).
 // Redirect to writable userData folder before anything else runs.
@@ -30,7 +30,30 @@ if (process.env.RECSO_ENGINE_GPU !== 'integrated') {
 }
 
 app.on('ready', () => {
-  initializeLogging({ mirrorConsole: isDevelopment() });
+  const exportProjectFlag = process.argv.indexOf('--export-project');
+  const exportProjectSync = process.argv.includes('--export-project-sync');
+  const exportProjectDumpRender = process.argv.includes('--export-project-dump-render');
+  if (exportProjectSync) {
+    process.env.RECSO_ENGINE_SYNC_GPU = '1';
+  }
+  const exportProjectArgument =
+    exportProjectFlag >= 0
+      ? process.argv
+          .slice(exportProjectFlag + 1)
+          .find((argument) => !argument.startsWith('--'))
+          ?.trim()
+      : undefined;
+  const headlessExportProject = exportProjectArgument
+    ? path.resolve(exportProjectArgument)
+    : undefined;
+  if (exportProjectDumpRender && headlessExportProject) {
+    process.env.RECSO_ENGINE_DUMP_RENDER_DIR = path.join(
+      headlessExportProject,
+      '.recso',
+      'render-dump',
+    );
+  }
+  initializeLogging({ mirrorConsole: isDevelopment() || exportProjectFlag >= 0 });
 
   // Initialize database first (for crash-safe recording metadata)
   initializeDatabase();
@@ -41,27 +64,80 @@ app.on('ready', () => {
   // Register all IPC handlers before creating window
   registerAllIpcHandlers();
 
+  if (exportProjectFlag >= 0 && !headlessExportProject) {
+    console.error('Usage: pnpm export:project "C:\\path\\to\\project-folder"');
+    app.exit(2);
+    return;
+  }
+
+  if (headlessExportProject) {
+    ipcMain.on('headless-export:log', (_event, message: string) => {
+      console.log(`[ProjectExport] ${message}`);
+    });
+    ipcMain.once(
+      'headless-export:complete',
+      (_event, result: { ok: boolean; outputPath?: string; error?: string }) => {
+        if (result.ok) {
+          console.log(`[ProjectExport] Complete: ${result.outputPath ?? 'unknown output'}`);
+          app.exit(0);
+        } else {
+          console.error(`[ProjectExport] Failed: ${result.error ?? 'unknown error'}`);
+          app.exit(1);
+        }
+      },
+    );
+  }
+
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
 
   const mainWindow = new BrowserWindow({
     width,
     height,
-    webPreferences: createMainWindowWebPreferences(getPreloadPath(), {
-      development: isDevelopment(),
-    }),
+    webPreferences: {
+      ...createMainWindowWebPreferences(
+        headlessExportProject
+          ? path.join(app.getAppPath(), 'dist-electron', 'preload.cjs')
+          : getPreloadPath(),
+        { development: isDevelopment() && !headlessExportProject },
+      ),
+      backgroundThrottling: !headlessExportProject,
+    },
     frame: false,
+    show: !headlessExportProject,
   });
 
-  mainWindow.maximize();
+  if (!headlessExportProject) {
+    mainWindow.maximize();
+  }
 
-  if (isDevelopment()) {
-    mainWindow.loadURL('http://localhost:5123');
+  if (headlessExportProject) {
+    console.log(`[ProjectExport] Starting hidden renderer for ${headlessExportProject}`);
+    mainWindow.webContents.on('preload-error', (_event, preloadPath, error) => {
+      console.error(`[ProjectExport] Preload failed: ${preloadPath}`, error);
+      app.exit(1);
+    });
+    const startupTimer = setTimeout(() => {
+      console.error('[ProjectExport] Renderer did not start within 30 seconds');
+      app.exit(1);
+    }, 30_000);
+    ipcMain.once('headless-export:log', () => clearTimeout(startupTimer));
+  }
+
+  if (isDevelopment() && !headlessExportProject) {
+    const url = new URL('http://localhost:5123');
+    if (headlessExportProject) {
+      url.searchParams.set('headlessExportProject', headlessExportProject);
+    }
+    mainWindow.loadURL(url.toString());
   } else {
-    mainWindow.loadFile(path.join(app.getAppPath(), 'dist-react/index.html'));
+    mainWindow.loadFile(path.join(app.getAppPath(), 'dist-react/index.html'), {
+      query: headlessExportProject ? { headlessExportProject } : undefined,
+    });
   }
 
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     console.error('[Main] Renderer process gone:', details);
+    if (headlessExportProject) app.exit(1);
   });
 
   mainWindow.webContents.on(
@@ -72,6 +148,7 @@ app.on('ready', () => {
         errorDescription,
         validatedURL,
       });
+      if (headlessExportProject) app.exit(1);
     },
   );
 
@@ -83,7 +160,9 @@ app.on('ready', () => {
   initializeWithWindow(mainWindow);
 
   // Create system tray
-  createTray(mainWindow);
+  if (!headlessExportProject) {
+    createTray(mainWindow);
+  }
 
   // Fire-and-forget: reports which adapter the engine and Chromium each landed
   // on, and warns if they diverge. Only meaningful once the GPU process is up.

@@ -799,6 +799,10 @@ impl RenderChain {
     (self.canvas_width, self.canvas_height)
   }
 
+  pub fn output_texture(&self) -> &ID3D11Texture2D {
+    &self.output
+  }
+
   /// Place the recording on the canvas.
   ///
   /// Pixel coordinates, resolved by the caller: the padding fraction, the scale

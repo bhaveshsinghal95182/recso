@@ -255,6 +255,7 @@ impl Encoder {
         gpu.context.Flush();
       }
     }
+    crate::engine::d3d::wait_for_gpu_if_requested()?;
 
     // Wrap the texture as an MF buffer. No copy to system memory happens here;
     // the encoder reads the surface directly.

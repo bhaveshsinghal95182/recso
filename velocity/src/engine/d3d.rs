@@ -4,6 +4,8 @@
 //! into Chromium's GPU process as a shared NT handle.
 
 use std::sync::{Mutex, OnceLock};
+use std::thread;
+use std::time::Duration;
 
 use windows::core::{Interface, Result};
 use windows::Win32::Foundation::{HANDLE, HMODULE};
@@ -48,6 +50,44 @@ static RENDER_LOCK: Mutex<()> = Mutex::new(());
 /// invariant that a panicking thread could have half-updated.
 pub fn render_lock() -> std::sync::MutexGuard<'static, ()> {
   RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Wait until commands submitted to the immediate context have completed.
+///
+/// This is intentionally opt-in: it is a diagnostic mode for detecting a
+/// producer/consumer race between render targets and Media Foundation surface
+/// buffers. `Flush` submits work but does not wait for the GPU to finish it.
+pub fn wait_for_gpu_if_requested() -> Result<()> {
+  if std::env::var_os("RECSO_ENGINE_SYNC_GPU").is_none() {
+    return Ok(());
+  }
+
+  let gpu = gpu()?;
+  let mut query: Option<ID3D11Query> = None;
+  unsafe {
+    gpu.device.CreateQuery(&D3D11_QUERY_DESC {
+      Query: D3D11_QUERY_EVENT,
+      MiscFlags: 0,
+    }, Some(&mut query))?;
+  }
+  let query = query.expect("D3D11 event query was not returned");
+  unsafe {
+    gpu.context.End(&query);
+    gpu.context.Flush();
+  }
+
+  loop {
+    let status = unsafe {
+      gpu.context.GetData(&query, None, 0, 0)
+    };
+    match status {
+      Ok(()) => return Ok(()),
+      Err(error) if error.code().0 == -2005532132 => {
+        thread::sleep(Duration::from_micros(50));
+      }
+      Err(error) => return Err(error),
+    }
+  }
 }
 
 /// One device for the whole process.

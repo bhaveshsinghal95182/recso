@@ -562,6 +562,10 @@ export interface EngineAPI {
 }
 
 interface ElectronAPI {
+  headlessExport: {
+    log: (message: string) => void;
+    complete: (result: { ok: boolean; outputPath?: string; error?: string }) => void;
+  };
   window: {
     close: () => void;
     minimize: () => void;

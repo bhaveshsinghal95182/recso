@@ -485,6 +485,8 @@ fn run(shared: &Arc<Shared>, options: Options) -> Result<()> {
     // Clone the COM reference so the borrow on the chain ends before the
     // encoder call; it is a refcount bump, not a copy.
     let encoded = chain.process_to_nv12(source, sample.subresource)?.clone();
+    dump_render_probe(&chain, pts_ms, shared.frames_done.load(Ordering::Relaxed))?;
+    crate::engine::d3d::wait_for_gpu_if_requested()?;
     let render_us = t_render.elapsed().as_micros() as u64;
 
     stage("encode write_texture");
@@ -551,6 +553,43 @@ fn run(shared: &Arc<Shared>, options: Options) -> Result<()> {
   // and a half-written file is more use than a corrupt one.
   stage("finalize");
   encoder.finish()?;
+  Ok(())
+}
+
+fn dump_render_probe(
+  chain: &RenderChain,
+  pts_ms: f64,
+  frame_index: u64,
+) -> Result<()> {
+  let Some(dir) = std::env::var_os("RECSO_ENGINE_DUMP_RENDER_DIR") else {
+    return Ok(());
+  };
+  if !(240_000.0..243_000.0).contains(&pts_ms) {
+    return Ok(());
+  }
+
+  let dir = std::path::PathBuf::from(dir);
+  std::fs::create_dir_all(&dir)
+    .map_err(|e| windows::core::Error::new(windows::core::HRESULT(-2147467259), e.to_string()))?;
+  let (width, height) = chain.output_size();
+  let pixels = crate::engine::d3d::read_bgra(chain.output_texture(), width, height)?;
+  let crop_x = 490u32.min(width.saturating_sub(160));
+  let crop_y = 342u32.min(height.saturating_sub(36));
+  let crop_w = 160u32.min(width - crop_x);
+  let crop_h = 36u32.min(height - crop_y);
+  let path = dir.join(format!("frame_{frame_index:06}.ppm"));
+  let mut file = std::fs::File::create(path)
+    .map_err(|e| windows::core::Error::new(windows::core::HRESULT(-2147467259), e.to_string()))?;
+  use std::io::Write;
+  write!(file, "P6\n{crop_w} {crop_h}\n255\n")
+    .map_err(|e| windows::core::Error::new(windows::core::HRESULT(-2147467259), e.to_string()))?;
+  for y in 0..crop_h as usize {
+    for x in 0..crop_w as usize {
+      let i = ((crop_y as usize + y) * width as usize + crop_x as usize + x) * 4;
+      file.write_all(&[pixels[i + 2], pixels[i + 1], pixels[i]])
+        .map_err(|e| windows::core::Error::new(windows::core::HRESULT(-2147467259), e.to_string()))?;
+    }
+  }
   Ok(())
 }
 

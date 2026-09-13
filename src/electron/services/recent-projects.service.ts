@@ -8,6 +8,8 @@
  *   clearRecentProjects()   → Remove all entries
  */
 
+import path from 'node:path';
+
 import { getDatabase } from './database.service.js';
 
 export interface RecentProjectRow {
@@ -41,9 +43,22 @@ export function upsertRecentProject(entry: {
       name = excluded.name,
       recording_id = excluded.recording_id,
       opened_at = excluded.opened_at
+    ON CONFLICT(id) DO UPDATE SET
+      name = excluded.name,
+      path = excluded.path,
+      recording_id = excluded.recording_id,
+      opened_at = excluded.opened_at
   `);
 
-  stmt.run(entry.id, entry.name, entry.path, entry.recordingId, entry.thumbnail ?? null, now, now);
+  stmt.run(
+    entry.id,
+    entry.name,
+    path.resolve(entry.path),
+    entry.recordingId,
+    entry.thumbnail ?? null,
+    now,
+    now,
+  );
 }
 
 /**

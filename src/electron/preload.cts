@@ -152,6 +152,11 @@ console.debug = (...args: unknown[]): void => {
 };
 
 electron.contextBridge.exposeInMainWorld('electron', {
+  headlessExport: {
+    log: (message: string) => electron.ipcRenderer.send('headless-export:log', message),
+    complete: (result: { ok: boolean; outputPath?: string; error?: string }) =>
+      electron.ipcRenderer.send('headless-export:complete', result),
+  },
   // Window controls
   window: {
     close: () => electron.ipcRenderer.send('close-window'),

@@ -22,6 +22,10 @@ pub struct DecodedFrame {
 
 /// A decoded frame still sitting in the decoder's own texture array.
 pub struct RawSample {
+  // The sample owns the decoder-pool lease for this array slice. A texture
+  // reference alone keeps the allocation alive but lets MF recycle its pixels
+  // before stage/copy_into runs. Keep the lease through the caller's GPU copy.
+  _sample: Option<IMFSample>,
   pub texture: Option<ID3D11Texture2D>,
   /// Which array slice of `texture` holds this frame.
   pub subresource: u32,
@@ -164,6 +168,7 @@ impl Decoder {
 
       if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
         return Ok(RawSample {
+          _sample: None,
           texture: None,
           subresource: 0,
           timestamp_100ns: timestamp,
@@ -191,6 +196,7 @@ impl Decoder {
 
       self.frames_decoded += 1;
       return Ok(RawSample {
+        _sample: Some(sample),
         texture,
         subresource,
         timestamp_100ns: timestamp,
@@ -560,5 +566,59 @@ mod guid_naming_scenarios {
   #[test]
   fn the_two_codec_subtypes_are_not_the_same_guid() {
     assert_ne!(h264_subtype(), hevc_subtype());
+  }
+}
+
+#[cfg(test)]
+// Manual GPU regression: requires the recording fixture and an output directory.
+// RECSO_TIMER_RELEASE_EARLY recreates the original lifetime bug for an A/B check.
+mod timer_diagnostic {
+  use super::*;
+  #[test]
+  #[ignore]
+  fn dump_timer_window() -> Result<()> {
+    let path = std::env::var("RECSO_TIMER_SOURCE").expect("source path");
+    let dir = std::env::var("RECSO_TIMER_OUT").expect("output directory");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut decoder = Decoder::open(&path)?;
+    let (w,h) = decoder.display_size();
+    let chain = crate::engine::render::RenderChain::new(decoder.coded_size(), (w,h), (w,h), 1)?;
+    decoder.seek(2_400_000_000)?;
+    let mut n = 0;
+    let mut crops: Vec<Vec<u8>> = Vec::new();
+    while n < 60 {
+      let mut sample = decoder.read_sample()?;
+      if sample.end_of_stream { break; }
+      if sample.timestamp_100ns < 2_400_000_000 { continue; }
+      if std::env::var_os("RECSO_TIMER_RELEASE_EARLY").is_some() { sample._sample.take(); }
+      if n % 3 == 0 { std::thread::sleep(std::time::Duration::from_millis(20)); }
+      chain.process_to_nv12(sample.texture.as_ref().unwrap(), sample.subresource)?;
+      let pixels = crate::engine::d3d::read_bgra(chain.output_texture(), w,h)?;
+      let mut rgb = Vec::new();
+      for y in 342..378usize { for x in 490..650usize {
+        let i = (y*w as usize+x)*4;
+        rgb.extend_from_slice(&[pixels[i+2],pixels[i+1],pixels[i]]);
+      }}
+      use std::io::Write;
+      let mut file = std::fs::File::create(format!("{dir}/frame_{n:03}.ppm")).unwrap();
+      file.write_all(b"P6\n160 36\n255\n").unwrap(); file.write_all(&rgb).unwrap();
+      crops.push(rgb);
+      n+=1;
+    }
+    assert_eq!(n,60);
+    // This fixture changes from 45s to 46s in this window. Classify each crop
+    // against the stable endpoints; small decoder colour differences are fine.
+    let distance = |a: &[u8], b: &[u8]| -> u64 {
+      a.iter().zip(b).map(|(x,y)| x.abs_diff(*y) as u64).sum()
+    };
+    let states: Vec<bool> = crops.iter().map(|crop| {
+      distance(crop, &crops[59]) < distance(crop, &crops[0])
+    }).collect();
+    let backwards: Vec<usize> = (1..states.len())
+      .filter(|&i| states[i-1] && !states[i]).collect();
+    assert!(backwards.is_empty(), "timer went backwards at frames {backwards:?}");
+    assert_eq!(states.iter().position(|&state| state), Some(51),
+      "decoded pixels no longer match the fixture timestamp");
+    Ok(())
   }
 }

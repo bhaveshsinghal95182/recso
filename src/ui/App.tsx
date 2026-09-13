@@ -1,13 +1,15 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { ExportProgressToast } from '@/components/export-progress-toast';
 import { Toaster } from '@/components/ui/sonner';
 import { RootLayout } from '@/layouts/root-layout';
 import { EditorScreen } from '@/screens/editor';
+import { planExport, runNativeExport } from '@/screens/editor/engine/export-pipeline';
 import { EngineHarnessScreen } from '@/screens/engine-harness';
 import ScreenRecorder from '@/screens/screen-recorder';
 import { WelcomeScreen } from '@/screens/welcome/welcome-screen';
+import type { ExportConfig, ExportProgress } from '@/types';
 
 type Screen = 'welcome' | 'recorder' | 'editor' | 'engine';
 
@@ -33,7 +35,87 @@ interface AppState {
   recordingId: string | null;
 }
 
-function App() {
+function HeadlessProjectExport({ projectFolder }: { projectFolder: string }) {
+  const startedRef = useRef(false);
+
+  useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+
+    void (async () => {
+      try {
+        window.electron.headlessExport.log(`Loading project folder: ${projectFolder}`);
+        const project = await window.electron.editor.loadProject(projectFolder);
+        if (!project) {
+          throw new Error(`No valid .recso/project.json found under ${projectFolder}`);
+        }
+
+        window.electron.headlessExport.log(
+          `Loaded project "${project.name}" (${project.recordingId})`,
+        );
+
+        const mouseEvents = (await window.electron.editor.getMouseEvents()) ?? [];
+        window.electron.headlessExport.log(`Loaded ${mouseEvents.length} cursor/mouse events`);
+        window.electron.headlessExport.log(
+          `Timeline: ${project.timeline.duration.toFixed(0)}ms, ${project.cuts.length} cuts, ` +
+            `${project.zoomRegionsBySource?.screen?.length ?? project.zoomRegions.length} screen zooms, ` +
+            `${project.zoomRegionsBySource?.webcam?.length ?? 0} webcam zooms`,
+        );
+
+        const config: ExportConfig = {
+          resolution: '1080p',
+          format: 'mp4',
+          quality: 'high',
+          backgroundColor: project.backgroundColor || '#000000',
+          glRenderer: 'angle',
+        };
+        const outputPath = await window.electron.exporter.resolveOutputPath(config);
+        if (!outputPath) {
+          throw new Error('Unable to resolve an output path for the loaded project');
+        }
+        window.electron.headlessExport.log(`Output: ${outputPath}`);
+        window.electron.headlessExport.log(
+          `Settings: ${config.resolution}, ${config.quality} quality, ${config.format.toUpperCase()}`,
+        );
+
+        const shared = {
+          project,
+          config,
+          screenZoomRegions: project.zoomRegionsBySource?.screen ?? project.zoomRegions ?? [],
+          webcamZoomRegions: project.zoomRegionsBySource?.webcam ?? [],
+          mouseEvents,
+          onProgress: (progress: ExportProgress) => {
+            if (progress.currentFrame % 120 === 0 || progress.percent >= 100) {
+              window.electron.headlessExport.log(
+                `${progress.percent.toFixed(1)}% (${progress.currentFrame}/${progress.totalFrames} frames, ` +
+                  `${progress.fps.toFixed(1)} fps, ETA ${progress.eta.toFixed(1)}s)`,
+              );
+            }
+          },
+        };
+
+        window.electron.headlessExport.log('Resolving saved composition and media assets');
+        const plan = await planExport(shared);
+        window.electron.headlessExport.log(
+          `Composition: ${plan.output.width}x${plan.output.height}, ` +
+            `${plan.compositionDurationMs.toFixed(0)}ms, webcam=${Boolean(plan.webcamSourcePath)}`,
+        );
+        window.electron.headlessExport.log('Starting native export');
+        const result = await runNativeExport({ ...shared, plan, outputPath });
+        window.electron.headlessExport.complete({ ok: true, outputPath: result.outputPath });
+      } catch (error) {
+        window.electron.headlessExport.complete({
+          ok: false,
+          error: error instanceof Error ? (error.stack ?? error.message) : String(error),
+        });
+      }
+    })();
+  }, [projectFolder]);
+
+  return null;
+}
+
+function InteractiveApp() {
   const [state, setState] = useState<AppState>({
     screen: initialScreen(),
     recordingId: null,
@@ -169,6 +251,18 @@ function App() {
         </RootLayout>
       );
   }
+}
+
+function App() {
+  const headlessExportProject = new URLSearchParams(window.location.search).get(
+    'headlessExportProject',
+  );
+
+  return headlessExportProject ? (
+    <HeadlessProjectExport projectFolder={headlessExportProject} />
+  ) : (
+    <InteractiveApp />
+  );
 }
 
 export default App;
