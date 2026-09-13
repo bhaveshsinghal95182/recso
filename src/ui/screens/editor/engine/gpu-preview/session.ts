@@ -57,6 +57,8 @@ export interface UseGpuPreviewOptions {
   isPlaying: boolean;
   /** Composition milliseconds the editor wants shown. */
   seekToMs: number | null;
+  /** Changes only for explicit user seeks, not for engine clock updates. */
+  seekRequestId: number;
   /** The camera sidecar, if the recording has one. */
   webcamPath?: string;
 }
@@ -106,6 +108,7 @@ export function useGpuPreview({
   canvasSize,
   isPlaying,
   seekToMs,
+  seekRequestId,
   webcamPath,
 }: UseGpuPreviewOptions): GpuPreviewState {
   const [state, setState] = useState<GpuPreviewState>({
@@ -118,6 +121,8 @@ export function useGpuPreview({
   });
 
   const openRef = useRef(false);
+  const seekToMsRef = useRef(seekToMs);
+  seekToMsRef.current = seekToMs;
   /**
    * `tick` is an IPC round trip. Without this a slow frame stacks calls until
    * the queue is the only thing the main process is doing.
@@ -236,11 +241,11 @@ export function useGpuPreview({
   }, [enabled, state.ready, isPlaying]);
 
   useEffect(() => {
-    if (!enabled || !state.ready || seekToMs === null) {
+    if (!enabled || !state.ready || seekToMsRef.current === null) {
       return;
     }
-    void window.electron.engine.player.seek(seekToMs, true);
-  }, [enabled, state.ready, seekToMs]);
+    void window.electron.engine.player.seek(seekToMsRef.current, true);
+  }, [enabled, state.ready, seekRequestId]);
 
   // ---- present -------------------------------------------------------------
 

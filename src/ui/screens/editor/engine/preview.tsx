@@ -28,7 +28,7 @@ const GPU_CANVAS_SELECTOR = '#gpu-preview-canvas';
 export function EnginePreview() {
   const { project, mouseEvents, updateWebcamOverlay } = useProjectStore();
   const { zoomRegions, zoomRegionsBySource, cuts, focus, updateZoom } = useTimelineStore();
-  const { isPlaying, currentTime, play, pause, finish } = usePlaybackStore();
+  const { isPlaying, currentTime, seekRequestId, play, pause, finish } = usePlaybackStore();
   const screenZoomRegions = zoomRegionsBySource.screen;
   const webcamZoomRegions = zoomRegionsBySource.webcam;
 
@@ -87,7 +87,7 @@ export function EnginePreview() {
   // Against the preference rather than what is driving, because the value feeds
   // the hook that produces the error the driving flag is derived from. Seeking a
   // player that failed to open costs nothing.
-  const gpuSeekMs = !isPlaying ? currentTime : null;
+  const gpuSeekMs = currentTime;
 
   const gpu = useGpuPreview({
     enabled: true,
@@ -98,6 +98,7 @@ export function EnginePreview() {
     canvasSize,
     isPlaying,
     seekToMs: gpuSeekMs,
+    seekRequestId,
     // Resolved, not read straight off the project: `sourcePath` is often unset
     // and the sidecar is found by naming convention beside the recording. The
     // export pipeline has always done this; reading the raw field meant the

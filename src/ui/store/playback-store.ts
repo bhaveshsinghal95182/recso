@@ -5,6 +5,7 @@ import type { FrameState } from '../types';
 interface PlaybackState {
   isPlaying: boolean;
   currentTime: number;
+  seekRequestId: number;
   duration: number;
   frameState: FrameState | null;
 
@@ -25,6 +26,7 @@ interface PlaybackState {
 export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   isPlaying: false,
   currentTime: 0,
+  seekRequestId: 0,
   duration: 0,
   frameState: null,
 
@@ -52,10 +54,13 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
 
   seek: (timeMs) => {
     const { duration } = get();
+
     // If duration is unknown (0), treat it as unbounded for seeking.
     const upperBound = duration > 0 ? duration : Number.POSITIVE_INFINITY;
-    const newTime = Math.max(0, Math.min(timeMs, upperBound));
-    set({ currentTime: newTime });
+    const currentTime = Math.max(0, Math.min(timeMs, upperBound));
+
+    // Seeking changes only the playhead. Playback intent remains untouched.
+    set((state) => ({ currentTime, seekRequestId: state.seekRequestId + 1 }));
   },
 
   setDuration: (duration) => set({ duration }),
@@ -82,6 +87,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     set({
       isPlaying: false,
       currentTime: 0,
+      seekRequestId: 0,
       duration: 0,
       frameState: null,
     }),

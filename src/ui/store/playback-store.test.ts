@@ -36,6 +36,15 @@ describe('seeking', () => {
     expect(usePlaybackStore.getState().currentTime).toBe(0);
   });
 
+  it('preserves playback intent when seeking, including the end', () => {
+    playingAt(3_000).seek(DURATION);
+
+    expect(usePlaybackStore.getState()).toMatchObject({
+      currentTime: DURATION,
+      isPlaying: true,
+    });
+  });
+
   it('treats an unknown duration as unbounded', () => {
     // Duration is 0 until the media loads, and seeking has to still work then.
     usePlaybackStore.setState({ duration: 0, currentTime: 0 });
