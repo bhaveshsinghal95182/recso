@@ -8,6 +8,7 @@ import { focusedZoomId, isEditingFocalPoint, useTimelineStore } from '@/store/ti
 import { resolveProjectWebcamSourcePath } from './export-pipeline/source-paths';
 import { useGpuPreview } from './gpu-preview/session';
 import { unsupportedFeatures } from './gpu-preview/unsupported';
+import { syncPreviewAudio } from './preview-runtime/audio-sync';
 import { resolveOverlayVideoLayout, resolvePreviewDisplaySize } from './preview-runtime/display';
 import { usePreviewViewportSize } from './preview-runtime/viewport';
 import { CropDialog } from '../crop-dialog';
@@ -173,24 +174,8 @@ export function EnginePreview() {
       return;
     }
 
-    if (!isPlaying) {
-      audio.pause();
-      return;
-    }
-
     const sourceSeconds = mapCompositionToSourceTimeMs(gpu.currentTimeMs, screenCuts) / 1000;
-    // A quarter of a second is past hearing it as anything but wrong, and well
-    // clear of the jitter of two clocks reading each other.
-    if (Math.abs(audio.currentTime - sourceSeconds) > 0.25) {
-      audio.currentTime = sourceSeconds;
-    }
-
-    if (audio.paused) {
-      void audio.play().catch(() => {
-        // Autoplay refused, or the file has no audio track. Neither is worth
-        // interrupting a silent preview over.
-      });
-    }
+    syncPreviewAudio(audio, sourceSeconds, isPlaying);
   }, [useGpuEngine, isPlaying, gpu.currentTimeMs, screenCuts]);
 
   const overlayVideoLayout = useMemo(
