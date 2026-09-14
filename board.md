@@ -20,12 +20,6 @@ _Anything filed in a hurry lands here. Sort it into Backlog when you next look._
 
 ## Backlog
 
-### pause button not working
-
-`bug`
-
-Pause button is not working incidentally if pause button doesnt work then that means there is no video recovery either or no way to start the video from where it was being recorded
-
 ### Recording FPS and compression settings are not reflected in the output
 
 `recorder` `bug` `quality`
@@ -191,11 +185,17 @@ backlog.
 
 _Move a card here when you start it. Nothing is claimed right now._
 
-### Solve the preview flickering issue
+### cuts dont work in editor
 
 `bug`
 
-when playing a video the editor isnt actually optimised such that the preview starts flickering back and forth. I dont know the exact amount but roughly it moves 1 frame forward and 2 frames backward which needs to be solved
+adding a cut section inside editor doesnt actually cut or trim the video
+
+### pause button not working (while recording)
+
+`bug`
+
+Pause button is not working incidentally if pause button doesnt work then that means there is no video recovery either or no way to start the video from where it was being recorded
 
 ## Parked
 
@@ -223,6 +223,12 @@ is recognisable, not because it is fixable. Those recordings still play through
 the editor's `<video>` path, which goes via Chromium.
 
 ## Done
+
+### Solve the preview flickering issue
+
+`bug`
+
+when playing a video the editor isnt actually optimised such that the preview starts flickering back and forth. I dont know the exact amount but roughly it moves 1 frame forward and 2 frames backward which needs to be solved
 
 ### Harden the shared-texture application renderer
 

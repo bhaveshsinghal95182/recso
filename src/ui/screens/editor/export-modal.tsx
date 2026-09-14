@@ -97,7 +97,7 @@ function ConfettiTrigger() {
 
 export function ExportModal({ open, onOpenChange }: ExportModalProps) {
   const { project, mouseEvents } = useProjectStore();
-  const { zoomRegionsBySource } = useTimelineStore();
+  const { cuts, zoomRegionsBySource } = useTimelineStore();
   const { phase, startExport, reportProgress, completeExport, failExport, setModalOpen, reset } =
     useExportStore();
 
@@ -178,7 +178,10 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
       }
 
       const shared = {
-        project,
+        // Cut edits are owned by the timeline store and are persisted
+        // asynchronously; the project object can therefore still contain the
+        // pre-edit snapshot when export is started.
+        project: { ...project, cuts },
         config,
         screenZoomRegions: zoomRegionsBySource.screen,
         webcamZoomRegions: zoomRegionsBySource.webcam,

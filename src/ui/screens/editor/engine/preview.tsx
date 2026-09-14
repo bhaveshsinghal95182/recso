@@ -149,7 +149,7 @@ export function EnginePreview() {
     // `currentTime` above `duration`, and the timeline positions the playhead at
     // `currentTime / duration` with no clamp of its own -- so it walked off the
     // right-hand edge. Going through the action clamps both to the same number.
-    usePlaybackStore.getState().seek(gpu.currentTimeMs);
+    usePlaybackStore.setState({ currentTime: gpu.currentTimeMs });
   }, [useGpuEngine, isPlaying, gpu.currentTimeMs, gpu.endOfStream, gpu.playing, finish]);
 
   /**

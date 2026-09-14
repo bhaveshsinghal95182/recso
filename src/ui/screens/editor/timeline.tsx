@@ -13,6 +13,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSpritesheets } from '@/hooks/useSpritesheets';
 import { cn } from '@/lib/utils';
 import { deriveCursorTimelineRegions } from '@/screens/editor/cursor-timeline-regions';
+import {
+  mapCompositionToSourceTimeMs,
+  mapSourceTimeToCompositionTimeMs,
+} from '@/screens/editor/engine/functions';
 import { TimelineFilmstrip } from '@/screens/editor/timeline-filmstrip';
 import {
   regionAccentText,
@@ -267,12 +271,13 @@ export function Timeline() {
   // Handle seeking via click or drag
   const startSeekDrag = useCallback(
     (clientX: number) => {
-      const time = clientXToTime(clientX);
-      seek(time);
+      const seekToTimelineTime = (timelineTime: number) =>
+        seek(mapSourceTimeToCompositionTimeMs(timelineTime, screenCuts));
+
+      seekToTimelineTime(clientXToTime(clientX));
 
       const handleMouseMove = (moveEvent: MouseEvent) => {
-        const newTime = clientXToTime(moveEvent.clientX);
-        seek(newTime);
+        seekToTimelineTime(clientXToTime(moveEvent.clientX));
       };
 
       const handleMouseUp = () => {
@@ -283,7 +288,7 @@ export function Timeline() {
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
     },
-    [clientXToTime, seek],
+    [clientXToTime, screenCuts, seek],
   );
 
   const handleTimelineMouseDown = useCallback(
@@ -763,7 +768,7 @@ export function Timeline() {
     updateTrackScrollbarWidth();
   }, [mode, counts.all, webcamTimelineEnabled, updateTrackScrollbarWidth]);
 
-  const playheadPercent = timeToPercent(currentTime);
+  const playheadPercent = timeToPercent(mapCompositionToSourceTimeMs(currentTime, screenCuts));
   const rulerWidthStyle =
     trackScrollbarWidth > 0 ? { width: `calc(100% - ${trackScrollbarWidth}px)` } : undefined;
   const cutSelectionBounds = cutSelectionDrag ? getSelectionBounds(cutSelectionDrag) : null;
