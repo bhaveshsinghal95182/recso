@@ -122,7 +122,10 @@ fn attach_webcam_stopper_if_requested(
     }
   };
 
-  match webcam_capture::start_webcam_sidecar_recording(output_path, source, target_fps) {
+  let screen_stats = stopper.screen_stats().ok_or_else(|| {
+    napi::Error::from_reason("screen capture clock is unavailable")
+  })?;
+  match webcam_capture::start_webcam_sidecar_recording(output_path, source, target_fps, screen_stats) {
     Ok(webcam_stopper) => {
       stopper.append(webcam_stopper);
       Ok(())

@@ -73,6 +73,10 @@ impl Stopper {
     }
   }
 
+  pub(crate) fn screen_stats(&self) -> Option<Arc<RecordingStats>> {
+    self.stats.first().cloned()
+  }
+
   pub(crate) fn append(&mut self, mut other: Stopper) {
     self.stop_txs.append(&mut other.stop_txs);
     self.done_rxs.append(&mut other.done_rxs);

@@ -137,6 +137,11 @@ impl RecordingStats {
     }
   }
 
+  /// The QPC origin used by the screen encoder, in 100ns units.
+  pub(crate) fn first_timestamp_100ns(&self) -> Option<i64> {
+    self.inner.lock().ok()?.first_timestamp_100ns
+  }
+
   /// Mark the moment capture was told to stop.
   ///
   /// Call this as the stop signal goes out, not after waiting for the encoder

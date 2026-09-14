@@ -1,6 +1,6 @@
 use super::desktop_capture::Stopper;
 use super::phone_camera;
-use crate::singular_clock::fps_to_period_100ns;
+use super::recording_info::RecordingStats;
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
 use image::{DynamicImage, ExtendedColorType, RgbImage};
@@ -12,7 +12,7 @@ use nokhwa::{query, Camera};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender, TryRecvError};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 use windows::Win32::System::Com::{
@@ -448,6 +448,64 @@ fn advance_stamp(current_100ns: i64, period_100ns: i64, elapsed_100ns: i64) -> i
     .max(elapsed_100ns)
 }
 
+// WGC SystemRelativeTime uses this same QPC domain, expressed in 100ns units.
+fn qpc_100ns() -> windows::core::Result<i64> {
+  use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
+  let mut counter = 0;
+  let mut frequency = 0;
+  unsafe {
+    QueryPerformanceFrequency(&mut frequency)?;
+    QueryPerformanceCounter(&mut counter)?;
+  }
+  Ok(((counter as i128 * 10_000_000) / frequency as i128) as i64)
+}
+
+/// Feed the transcoder a complete constant-rate timeline. Sparse samples let
+/// it backfill a gap with the *next* image, displaying speech before it happened.
+struct WebcamTimeline {
+  fps: u32,
+  next_frame: u64,
+  previous: Vec<u8>,
+}
+
+impl WebcamTimeline {
+  fn new(fps: u32, frame_bytes: usize) -> Self {
+    Self {
+      fps: fps.max(1),
+      next_frame: 0,
+      previous: vec![0; frame_bytes],
+    }
+  }
+
+  fn write_frame(
+    &mut self,
+    encoder: &mut VideoEncoder,
+    frame: &[u8],
+    received_100ns: i64,
+  ) -> Result<(), windows_capture::encoder::VideoEncoderError> {
+    // Round upward: a picture must not appear before it was received.
+    let target =
+      ((received_100ns.max(0) as u128 * self.fps as u128 + 9_999_999) / 10_000_000) as u64;
+    while self.next_frame <= target {
+      let timestamp = (self.next_frame as u128 * 10_000_000 / self.fps as u128) as i64;
+      let pixels = if self.next_frame == target {
+        frame
+      } else {
+        &self.previous
+      };
+      encoder.send_frame_buffer(pixels, timestamp)?;
+      self.next_frame += 1;
+    }
+    self.previous.clear();
+    self.previous.extend_from_slice(frame);
+    Ok(())
+  }
+}
+
+fn webcam_stamp(screen_origin: i64, received: i64, previous: i64) -> i64 {
+  advance_stamp(previous, 1, received.saturating_sub(screen_origin).max(0))
+}
+
 /// Open the camera a source names, ready to deliver frames.
 ///
 /// Called on the recording thread rather than handed one, because `nokhwa`'s
@@ -626,6 +684,7 @@ fn run_webcam_recording_loop(
   target_fps: Option<u32>,
   stop_rx: Receiver<()>,
   ready_tx: Sender<Result<(), String>>,
+  screen_stats: Arc<RecordingStats>,
 ) {
   let sidecar_path = camera_sidecar_path(&output_path);
   let requested_fps = target_webcam_fps(target_fps);
@@ -647,9 +706,6 @@ fn run_webcam_recording_loop(
   };
 
   let effective_fps = camera.effective_fps(requested_fps);
-  let frame_period_100ns = fps_to_period_100ns(effective_fps);
-
-  let mut frame_index_100ns: i64 = 0;
   let frame_period_nanos = (1_000_000_000u64 / effective_fps.max(1) as u64).max(1);
   let frame_period_duration = Duration::from_nanos(frame_period_nanos);
 
@@ -658,6 +714,7 @@ fn run_webcam_recording_loop(
   let mut latest_bgra: Option<Vec<u8>> = None;
   let mut expected_frame_width: usize = 0;
   let mut expected_frame_height: usize = 0;
+  let mut first_received_100ns = 0;
   let mut startup_error = String::from("no frame produced");
   let mut preview = PreviewPublisher::new();
 
@@ -672,6 +729,14 @@ fn run_webcam_recording_loop(
 
     match camera.next_bgra() {
       Ok((frame, frame_width, frame_height)) => {
+        first_received_100ns = match qpc_100ns() {
+          Ok(time) => time,
+          Err(error) => {
+            camera.close();
+            let _ = ready_tx.send(Err(error.to_string()));
+            return;
+          }
+        };
         preview.publish_if_due(&frame, frame_width, frame_height);
         latest_bgra = Some(frame);
         expected_frame_width = frame_width;
@@ -694,8 +759,23 @@ fn run_webcam_recording_loop(
     return;
   }
 
+  // The screen encoder subtracts the first WGC frame's QPC timestamp.
+  // Wait for that exact origin instead of creating a second time zero.
+  let screen_origin = loop {
+    if let Some(origin) = screen_stats.first_timestamp_100ns() {
+      break origin;
+    }
+    if Instant::now() >= startup_deadline || stop_rx.try_recv() != Err(TryRecvError::Empty) {
+      camera.close();
+      let _ = ready_tx.send(Err("screen capture did not establish a clock".to_string()));
+      return;
+    }
+    thread::sleep(Duration::from_millis(2));
+  };
+
   let mut encoder = match VideoEncoder::new(
     VideoSettingsBuilder::new(expected_frame_width as u32, expected_frame_height as u32)
+      .frame_rate(effective_fps)
       .bitrate(WEBCAM_DEFAULT_BITRATE)
       // windows-capture defaults to HEVC, and a stock Windows install has no
       // HEVC decoder MFT -- the sidecar would be undecodable by the engine even
@@ -713,8 +793,13 @@ fn run_webcam_recording_loop(
     }
   };
 
+  let mut timeline = WebcamTimeline::new(
+    effective_fps,
+    expected_frame_width * expected_frame_height * 4,
+  );
   if let Some(first_frame) = latest_bgra.as_ref() {
-    if let Err(error) = encoder.send_frame_buffer(first_frame, frame_index_100ns) {
+    let timestamp = webcam_stamp(screen_origin, first_received_100ns, 0);
+    if let Err(error) = timeline.write_frame(&mut encoder, first_frame, timestamp) {
       camera.close();
       let _ = encoder.finish();
       let _ = ready_tx.send(Err(format!(
@@ -727,10 +812,7 @@ fn run_webcam_recording_loop(
 
   let _ = ready_tx.send(Ok(()));
 
-  // Time zero is the first frame handed to the encoder, so every stamp below is
-  // measured from the same instant the track starts at.
-  let started = Instant::now();
-  frame_index_100ns = frame_index_100ns.saturating_add(frame_period_100ns);
+  // Stamp each completed read against the same origin, before encoding it.
   let mut mismatched_dimension_counter: u64 = 0;
   let mut starved: u64 = 0;
 
@@ -742,7 +824,15 @@ fn run_webcam_recording_loop(
 
     let frame_start = Instant::now();
 
-    match camera.next_bgra() {
+    let next_frame = camera.next_bgra();
+    let received_100ns = match qpc_100ns() {
+      Ok(time) => time,
+      Err(error) => {
+        eprintln!("[VelocityCapture] Webcam clock failed: {error}");
+        break;
+      }
+    };
+    match next_frame {
       Ok((frame, frame_width, frame_height)) => {
         if frame_width == expected_frame_width && frame_height == expected_frame_height {
           preview.publish_if_due(&frame, frame_width, frame_height);
@@ -774,17 +864,11 @@ fn run_webcam_recording_loop(
       }
     }
 
+    let timestamp = webcam_stamp(screen_origin, received_100ns, 0);
     if let Some(frame) = latest_bgra.as_ref() {
-      if let Err(error) = encoder.send_frame_buffer(frame, frame_index_100ns) {
+      if let Err(error) = timeline.write_frame(&mut encoder, frame, timestamp) {
         eprintln!("[VelocityCapture] Failed to encode webcam frame: {error}");
       }
-      // Advance even when the encode failed, so the two tracks end the same
-      // length -- but never past the clock, so they also end at the same time.
-      frame_index_100ns = advance_stamp(
-        frame_index_100ns,
-        frame_period_100ns,
-        (started.elapsed().as_nanos() / 100) as i64,
-      );
     } else {
       eprintln!("[VelocityCapture] Webcam frame unavailable and no fallback frame cached.");
       thread::sleep(Duration::from_millis(6));
@@ -805,6 +889,7 @@ pub(crate) fn start_webcam_sidecar_recording(
   output_path: &str,
   source: WebcamSource,
   target_fps: Option<u32>,
+  screen_stats: Arc<RecordingStats>,
 ) -> napi::Result<Stopper> {
   let (stop_tx, stop_rx) = channel();
   let (done_tx, done_rx) = channel();
@@ -812,7 +897,14 @@ pub(crate) fn start_webcam_sidecar_recording(
   let output_path = output_path.to_string();
 
   thread::spawn(move || {
-    run_webcam_recording_loop(output_path, source, target_fps, stop_rx, ready_tx);
+    run_webcam_recording_loop(
+      output_path,
+      source,
+      target_fps,
+      stop_rx,
+      ready_tx,
+      screen_stats,
+    );
     let _ = done_tx.send(());
   });
 
@@ -1367,5 +1459,88 @@ mod preview_frame_scenarios {
   #[test]
   fn an_empty_native_preview_frame_is_rejected() {
     assert!(preview_jpeg_from_bgra_bottom_up(&[], 0, 0).is_err());
+  }
+}
+
+#[cfg(test)]
+mod shared_capture_timeline_tests {
+  use super::*;
+
+  #[test]
+  fn camera_startup_is_preserved_instead_of_becoming_time_zero() {
+    assert_eq!(webcam_stamp(100_000_000, 107_500_000, 0), 7_500_000);
+  }
+
+  #[test]
+  fn a_slow_camera_read_is_stamped_after_it_completes() {
+    let origin = 100_000_000;
+    let first = webcam_stamp(origin, origin + 5_000_000, 0);
+    let after_stall = webcam_stamp(origin, origin + 8_000_000, first);
+    assert_eq!(after_stall, 8_000_000);
+  }
+
+  #[test]
+  fn repeated_clock_values_never_rewind_or_add_a_frame_period() {
+    assert_eq!(webcam_stamp(100, 110, 10), 11);
+    assert_eq!(webcam_stamp(100, 99, 0), 1);
+  }
+
+  #[test]
+  #[ignore = "requires Windows GPU and Media Foundation encoder"]
+  fn encoded_camera_keeps_its_startup_gap() -> Result<(), Box<dyn std::error::Error>> {
+    let _com = CameraThreadComGuard::initialize()?;
+    let path = std::env::var("RECSO_WEBCAM_TIMING_PROBE")?;
+    let mut encoder = VideoEncoder::new(
+      VideoSettingsBuilder::new(64, 64).sub_type(VideoSettingsSubType::H264),
+      AudioSettingsBuilder::default().disabled(true),
+      ContainerSettingsBuilder::default(),
+      &path,
+    )?;
+    let red: Vec<u8> = [0, 0, 255, 255].repeat(64 * 64);
+    let green: Vec<u8> = [0, 255, 0, 255].repeat(64 * 64);
+    let origin = 100_000_000;
+    let first = webcam_stamp(origin, origin + 5_000_000, 0);
+    let mut timeline = WebcamTimeline::new(60, red.len());
+    timeline.write_frame(&mut encoder, &red, first)?;
+    // No camera frame arrives between 500ms and 1s: hold red through the stall.
+    for tick in 10..=15 {
+      timeline.write_frame(
+        &mut encoder,
+        &green,
+        webcam_stamp(origin, origin + tick * 1_000_000, 0),
+      )?;
+    }
+    encoder.finish()?;
+
+    // Verify the actual file through an independent decoder; the encoder
+    // normalizes timestamps internally, so arithmetic-only tests miss this.
+    let decoded = std::process::Command::new("ffmpeg")
+      .args([
+        "-v", "error", "-i", &path, "-vf", "fps=60", "-pix_fmt", "rgb24", "-f", "rawvideo", "-",
+      ])
+      .output()?;
+    assert!(
+      decoded.status.success(),
+      "{}",
+      String::from_utf8_lossy(&decoded.stderr)
+    );
+    let frames: Vec<&[u8]> = decoded.stdout.chunks_exact(64 * 64 * 3).collect();
+    let first_red = frames
+      .iter()
+      .position(|frame| frame[(32 * 64 + 32) * 3] > 150)
+      .expect("camera marker was never encoded");
+    assert!(
+      (29..=31).contains(&first_red),
+      "camera marker appeared at frame {first_red}, expected 500ms / frame 30"
+    );
+    let first_green = frames
+      .iter()
+      .position(|frame| frame[(32 * 64 + 32) * 3 + 1] > 150)
+      .expect("second camera marker was never encoded");
+    assert!(
+      (59..=61).contains(&first_green),
+      "future image filled the capture stall: frame {first_green}, expected 1s / frame 60"
+    );
+    Ok(())
   }
 }
