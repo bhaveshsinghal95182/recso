@@ -6,18 +6,15 @@
 
 use windows::core::{Interface, Result, PCWSTR};
 use windows::Win32::Graphics::Direct3D11::*;
-use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_NV12;
 use windows::Win32::Media::MediaFoundation::*;
 
 use crate::engine::d3d::gpu;
 use crate::engine::mf::{device_manager, ensure_mf, wide};
 
-/// How many staging textures to rotate through.
-///
-/// The encoder holds a reference to a submitted frame until it has consumed it.
-/// Writing into a texture that is still queued corrupts the output, so we cycle
-/// through a small ring instead of reusing one.
-const RING: usize = 6;
+// Samples return to this pool only after the sink writer releases them.
+// A fixed texture ring cannot establish that an asynchronous encoder is done.
+const INITIAL_SAMPLES: u32 = 6;
+const MAX_SAMPLES: u32 = 32;
 
 fn pack(hi: u32, lo: u32) -> u64 {
   ((hi as u64) << 32) | lo as u64
@@ -61,8 +58,7 @@ pub struct Encoder {
   /// from. Counting rather than trusting a clock keeps the audio and the
   /// container's timeline exactly in step.
   audio_frames_written: u64,
-  ring: Vec<ID3D11Texture2D>,
-  next: usize,
+  allocator: IMFVideoSampleAllocatorEx,
   pub width: u32,
   pub height: u32,
   /// Kept as a rational. 29.97 is 30000/1001, and rounding it to 30 makes the
@@ -103,7 +99,6 @@ impl Encoder {
     audio: Option<AudioSpec>,
   ) -> Result<Self> {
     ensure_mf();
-    let gpu = gpu()?;
     let (manager, _token) = device_manager()?;
 
     let attrs = unsafe { create_attributes(4)? };
@@ -116,8 +111,7 @@ impl Encoder {
     }
 
     let url = wide(path);
-    let writer =
-      unsafe { MFCreateSinkWriterFromURL(PCWSTR(url.as_ptr()), None, &attrs)? };
+    let writer = unsafe { MFCreateSinkWriterFromURL(PCWSTR(url.as_ptr()), None, &attrs)? };
 
     // What lands in the file.
     let out = unsafe { MFCreateMediaType()? };
@@ -145,28 +139,20 @@ impl Encoder {
       writer.SetInputMediaType(stream, &input, None)?;
     }
 
-    // Staging textures the encoder reads from.
-
-    let mut ring = Vec::with_capacity(RING);
-    for _ in 0..RING {
-      let desc = D3D11_TEXTURE2D_DESC {
-        Width: width,
-        Height: height,
-        MipLevels: 1,
-        ArraySize: 1,
-        Format: DXGI_FORMAT_NV12,
-        SampleDesc: windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC {
-          Count: 1,
-          Quality: 0,
-        },
-        Usage: D3D11_USAGE_DEFAULT,
-        BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
-        CPUAccessFlags: 0,
-        MiscFlags: 0,
-      };
-      let mut tex: Option<ID3D11Texture2D> = None;
-      unsafe { gpu.device.CreateTexture2D(&desc, None, Some(&mut tex))? };
-      ring.push(tex.expect("staging texture"));
+    let mut allocator: Option<IMFVideoSampleAllocatorEx> = None;
+    unsafe {
+      MFCreateVideoSampleAllocatorEx(
+        &IMFVideoSampleAllocatorEx::IID,
+        &mut allocator as *mut _ as *mut *mut core::ffi::c_void,
+      )?;
+    }
+    let allocator = allocator.expect("video sample allocator");
+    let pool_attrs = unsafe { create_attributes(2)? };
+    unsafe {
+      allocator.SetDirectXManager(manager)?;
+      pool_attrs.SetUINT32(&MF_SA_D3D11_BINDFLAGS, D3D11_BIND_SHADER_RESOURCE.0 as u32)?;
+      pool_attrs.SetUINT32(&MF_SA_BUFFERS_PER_SAMPLE, 1)?;
+      allocator.InitializeSampleAllocatorEx(INITIAL_SAMPLES, MAX_SAMPLES, &pool_attrs, &input)?;
     }
 
     // ---- audio -------------------------------------------------------------
@@ -223,8 +209,7 @@ impl Encoder {
       audio_stream,
       audio: audio_spec,
       audio_frames_written: 0,
-      ring,
-      next: 0,
+      allocator,
       width,
       height,
       fps_num,
@@ -234,46 +219,61 @@ impl Encoder {
     })
   }
 
-  /// Copy a GPU texture into the ring and submit it to the encoder.
+  /// Copy into an allocator-owned surface and submit its sample to the encoder.
   ///
   /// `src_subresource` matters because decoder output is a texture array.
-  pub fn write_texture(
-    &mut self,
-    src: &ID3D11Texture2D,
-    src_subresource: u32,
-  ) -> Result<()> {
+  pub fn write_texture(&mut self, src: &ID3D11Texture2D, src_subresource: u32) -> Result<()> {
     let gpu = gpu()?;
-    let slot = self.ring[self.next].clone();
-    self.next = (self.next + 1) % RING;
+    // WriteSample queues work; neither returning from it nor flushing D3D
+    // permits overwriting its surface. Preserve the allocator's original sample
+    // so it can track when every downstream reference has been released.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let sample = loop {
+      match unsafe { self.allocator.AllocateSample() } {
+        Ok(sample) => break sample,
+        Err(error) if error.code() == MF_E_SAMPLEALLOCATOR_EMPTY => {
+          if std::time::Instant::now() >= deadline {
+            return Err(windows::core::Error::new(
+              MF_E_SAMPLEALLOCATOR_EMPTY,
+              "Timed out waiting for the encoder to release a video sample",
+            ));
+          }
+          std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        Err(error) => return Err(error),
+      }
+    };
+    let buffer = unsafe { sample.GetBufferByIndex(0)? };
+    let dxgi = buffer.cast::<IMFDXGIBuffer>()?;
+    let mut slot: Option<ID3D11Texture2D> = None;
+    unsafe {
+      dxgi.GetResource(
+        &ID3D11Texture2D::IID,
+        &mut slot as *mut _ as *mut *mut core::ffi::c_void,
+      )?;
+    }
+    let slot = slot.expect("allocator texture");
+    let subresource = unsafe { dxgi.GetSubresourceIndex()? };
 
     {
       let _guard = crate::engine::d3d::render_lock();
       unsafe {
         gpu
           .context
-          .CopySubresourceRegion(&slot, 0, 0, 0, 0, src, src_subresource, None);
+          .CopySubresourceRegion(&slot, subresource, 0, 0, 0, src, src_subresource, None);
         gpu.context.Flush();
       }
     }
     crate::engine::d3d::wait_for_gpu_if_requested()?;
-
-    // Wrap the texture as an MF buffer. No copy to system memory happens here;
-    // the encoder reads the surface directly.
-    let buffer: IMFMediaBuffer = unsafe {
-      MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &slot, 0, false)?
-    };
 
     // The buffer starts with length 0. An encoder handed a zero-length buffer
     // silently writes nothing, so this line is load-bearing.
     let len = unsafe { buffer.cast::<IMF2DBuffer>()?.GetContiguousLength()? };
     unsafe { buffer.SetCurrentLength(len)? };
 
-    let sample = unsafe { MFCreateSample()? };
     // 100ns units per frame, from the rational rate.
-    let ticks_per_frame =
-      (10_000_000i64 * self.fps_den as i64) / self.fps_num.max(1) as i64;
+    let ticks_per_frame = (10_000_000i64 * self.fps_den as i64) / self.fps_num.max(1) as i64;
     unsafe {
-      sample.AddBuffer(&buffer)?;
       sample.SetSampleTime(self.frames_written as i64 * ticks_per_frame)?;
       sample.SetSampleDuration(ticks_per_frame)?;
       self.writer.WriteSample(self.stream, &sample)?;
