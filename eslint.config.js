@@ -9,6 +9,8 @@ export default [
     ignores: [
       '.claude',
       'dist',
+      // Matches .gitignore: electron-builder drops outputs like dist-appx-debug.
+      'dist-*',
       'build',
       'out',
       'coverage',
