@@ -34,7 +34,11 @@ export async function checkGpuMatch(): Promise<void> {
     const lines = bindings.adapterInfo();
     const active = (lines.find((line) => line.startsWith('active:')) ?? '').replace('active: ', '');
 
-    const info = await app.getGPUInfo('complete');
+    // `complete` triggers additional driver probing. With Electron 40 in AppX,
+    // that loads vulkan-1.dll after GPU sandbox lockdown: Code Integrity 3033
+    // kills the GPU process and marks the whole package NeedsRemediation.
+    // Basic info reads Chromium's cached adapter data without that probe.
+    const info = await app.getGPUInfo('basic');
     const chromium =
       (info as { auxAttributes?: { glRenderer?: string } }).auxAttributes?.glRenderer ?? '';
 
