@@ -461,3 +461,233 @@ mod tests {
     assert!(payload.contains("\"windowUnderCursor\""));
   }
 }
+
+#[cfg(test)]
+mod wide_string_scenarios {
+  use super::*;
+
+  fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().collect()
+  }
+
+  #[test]
+  fn a_plain_string_comes_back_as_it_went_in() {
+    assert_eq!(wide_buf_to_string(&wide("Notepad")), "Notepad");
+  }
+
+  #[test]
+  fn an_empty_buffer_is_an_empty_string() {
+    assert_eq!(wide_buf_to_string(&[]), "");
+  }
+
+  #[test]
+  fn the_string_stops_at_the_first_null() {
+    // Win32 fills a fixed-size buffer and null-terminates; the rest is
+    // whatever was in the stack slot, and it is not part of the title.
+    let mut buffer = wide("Notepad");
+    buffer.push(0);
+    buffer.extend(wide("GARBAGE"));
+    assert_eq!(wide_buf_to_string(&buffer), "Notepad");
+  }
+
+  #[test]
+  fn a_buffer_that_is_all_nulls_is_an_empty_string() {
+    assert_eq!(wide_buf_to_string(&[0; 260]), "");
+  }
+
+  #[test]
+  fn a_buffer_with_no_null_uses_the_whole_thing() {
+    // Which is what a title that exactly fills the buffer looks like.
+    assert_eq!(wide_buf_to_string(&wide("abc")), "abc");
+  }
+
+  #[test]
+  fn a_null_at_the_very_start_is_an_empty_string() {
+    let mut buffer = vec![0u16];
+    buffer.extend(wide("ignored"));
+    assert_eq!(wide_buf_to_string(&buffer), "");
+  }
+
+  #[test]
+  fn a_title_with_spaces_and_punctuation_survives() {
+    let title = "recso - main.rs (Working Tree) - Visual Studio Code";
+    assert_eq!(wide_buf_to_string(&wide(title)), title);
+  }
+
+  #[test]
+  fn a_non_ascii_title_survives() {
+    // Window titles are UTF-16 and routinely are not ASCII.
+    for title in ["\u{7a97}\u{53e3}", "caf\u{e9}", "\u{41f}\u{440}\u{438}\u{432}\u{435}\u{442}"] {
+      assert_eq!(wide_buf_to_string(&wide(title)), title, "{title}");
+    }
+  }
+
+  #[test]
+  fn an_emoji_title_survives_its_surrogate_pair() {
+    let title = "build \u{1f680}";
+    assert_eq!(wide_buf_to_string(&wide(title)), title);
+  }
+
+  #[test]
+  fn an_unpaired_surrogate_is_replaced_rather_than_refused() {
+    // A truncated buffer can split a pair. Losing the character is fine;
+    // failing to list the window is not.
+    let broken = [0xD83Du16, 0x0041];
+    let out = wide_buf_to_string(&broken);
+    assert!(out.ends_with('A'), "{out:?}");
+  }
+
+  #[test]
+  fn the_result_never_contains_a_null() {
+    let mut buffer = wide("Title");
+    buffer.push(0);
+    buffer.push(0);
+    assert!(!wide_buf_to_string(&buffer).contains('\0'));
+  }
+
+  #[test]
+  fn a_long_title_is_not_truncated() {
+    let title = "x".repeat(500);
+    assert_eq!(wide_buf_to_string(&wide(&title)).len(), 500);
+  }
+
+  #[test]
+  fn the_epoch_clock_moves_forward() {
+    let first = now_epoch_ms();
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    assert!(now_epoch_ms() >= first);
+  }
+
+  #[test]
+  fn the_epoch_clock_is_a_plausible_wall_clock_time() {
+    // Milliseconds since 1970. Anything before 2020 means the conversion lost
+    // a factor somewhere.
+    assert!(now_epoch_ms() > 1_577_836_800_000, "{}", now_epoch_ms());
+  }
+}
+
+#[cfg(test)]
+mod wide_string_matrix {
+  use super::*;
+
+  /// Titles a real desktop produces, including the awkward ones.
+  const TITLES: [&str; 12] = [
+    "",
+    "a",
+    "Notepad",
+    "recso - main.rs - Visual Studio Code",
+    "Untitled - Paint",
+    "100% - Zoom",
+    "a b  c   d",
+    "\u{7a97}\u{53e3}",
+    "caf\u{e9}",
+    "\u{41f}\u{440}\u{438}\u{432}\u{435}\u{442}",
+    "build \u{1f680} ready",
+    "tab\tseparated",
+  ];
+
+  fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().collect()
+  }
+
+  #[test]
+  fn every_title_survives_a_round_trip() {
+    for title in TITLES {
+      assert_eq!(wide_buf_to_string(&wide(title)), title, "{title:?}");
+    }
+  }
+
+  #[test]
+  fn every_title_stops_at_its_terminator() {
+    // Win32 fills a fixed-size buffer and null-terminates; the rest is
+    // whatever was in the stack slot.
+    for title in TITLES {
+      let mut buffer = wide(title);
+      buffer.push(0);
+      buffer.extend(wide("GARBAGE\u{7a97}"));
+      assert_eq!(wide_buf_to_string(&buffer), title, "{title:?}");
+    }
+  }
+
+  #[test]
+  fn every_title_survives_a_buffer_padded_with_nulls() {
+    for title in TITLES {
+      let mut buffer = wide(title);
+      buffer.resize(260, 0);
+      assert_eq!(wide_buf_to_string(&buffer), title, "{title:?}");
+    }
+  }
+
+  #[test]
+  fn no_result_ever_contains_a_null() {
+    for title in TITLES {
+      let mut buffer = wide(title);
+      buffer.extend([0u16, 0, 0]);
+      assert!(!wide_buf_to_string(&buffer).contains('\0'), "{title:?}");
+    }
+  }
+
+  #[test]
+  fn a_null_at_the_start_always_gives_an_empty_string() {
+    for title in TITLES {
+      let mut buffer = vec![0u16];
+      buffer.extend(wide(title));
+      assert_eq!(wide_buf_to_string(&buffer), "", "{title:?}");
+    }
+  }
+
+  #[test]
+  fn an_all_null_buffer_is_empty_at_every_length() {
+    for len in [0usize, 1, 2, 64, 260, 1_024] {
+      assert_eq!(wide_buf_to_string(&vec![0u16; len]), "", "len {len}");
+    }
+  }
+
+  #[test]
+  fn a_buffer_with_no_terminator_uses_all_of_it() {
+    // Which is what a title that exactly fills the buffer looks like.
+    for title in TITLES {
+      assert_eq!(wide_buf_to_string(&wide(title)), title, "{title:?}");
+    }
+  }
+
+  #[test]
+  fn a_truncated_surrogate_pair_is_replaced_rather_than_refused() {
+    // A fixed buffer can split a pair. Losing the character is fine; failing
+    // to list the window is not.
+    let broken = [0xD83Du16, 0x0041];
+    let out = wide_buf_to_string(&broken);
+    assert!(out.ends_with('A'), "{out:?}");
+    assert!(!out.is_empty());
+  }
+
+  #[test]
+  fn a_long_title_is_never_truncated() {
+    for len in [100usize, 500, 2_000] {
+      let title = "x".repeat(len);
+      assert_eq!(wide_buf_to_string(&wide(&title)).len(), len, "len {len}");
+    }
+  }
+
+  #[test]
+  fn conversion_is_deterministic_for_every_title() {
+    for title in TITLES {
+      let buffer = wide(title);
+      assert_eq!(
+        wide_buf_to_string(&buffer),
+        wide_buf_to_string(&buffer),
+        "{title:?}"
+      );
+    }
+  }
+
+  #[test]
+  fn the_epoch_clock_is_monotonic_and_plausible() {
+    let first = now_epoch_ms();
+    // Milliseconds since 1970; anything before 2020 means a lost factor.
+    assert!(first > 1_577_836_800_000, "{first}");
+    for _ in 0..50 {
+      assert!(now_epoch_ms() >= first);
+    }
+  }
+}

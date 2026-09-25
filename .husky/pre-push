@@ -1,0 +1,10 @@
+# Everything lint-staged cannot see at commit time.
+#
+# The pre-commit hook lints the files you staged. This runs the checks that only
+# make sense against the whole tree: the renderer typecheck, the main process
+# typecheck (which nothing else covers -- tsconfig.app.json excludes
+# src/electron), and the tests.
+#
+# Around 12s on a warm cache, and it stops at the first failure.
+# `git push --no-verify` skips it.
+pnpm verify

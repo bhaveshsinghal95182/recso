@@ -1,4 +1,5 @@
-import fs from 'fs';
+import { requireEngineBindings } from './engine/native.js';
+import { normalizeMediaPath } from './engine/paths.js';
 
 export interface VideoMetadata {
   duration: number;
@@ -8,34 +9,18 @@ export interface VideoMetadata {
 }
 
 /**
- * Probe basic video metadata with MediaBunny.
- *
- * Note: This uses BlobSource and currently reads the file into memory first.
+ * Probe basic video metadata through the same native decoder used by preview
+ * and export. Opening the decoder reads container metadata without loading the
+ * recording into renderer or main-process memory.
  */
 export async function probeVideoMetadata(filePath: string): Promise<VideoMetadata> {
-  const { ALL_FORMATS, BlobSource, Input } = await import('mediabunny');
-
-  const fileBuffer = await fs.promises.readFile(filePath);
-  const sourceBlob = new Blob([fileBuffer]);
-
-  const input = new Input({
-    source: new BlobSource(sourceBlob),
-    formats: ALL_FORMATS,
-  });
-
-  const [duration, primaryVideoTrack] = await Promise.all([
-    input.computeDuration(),
-    input.getPrimaryVideoTrack(),
-  ]);
-
-  const width = primaryVideoTrack?.displayWidth || primaryVideoTrack?.codedWidth || 1920;
-  const height = primaryVideoTrack?.displayHeight || primaryVideoTrack?.codedHeight || 1080;
+  const decoder = new (requireEngineBindings().VideoDecoder)(normalizeMediaPath(filePath));
+  const info = decoder.info();
 
   return {
-    duration: Number.isFinite(duration) ? duration : 0,
-    width,
-    height,
-    // MediaBunny metadata in this flow does not currently expose a guaranteed FPS field.
-    fps: 30,
+    duration: Number.isFinite(info.duration) ? info.duration / 1000 : 0,
+    width: info.width || info.codedWidth || 1920,
+    height: info.height || info.codedHeight || 1080,
+    fps: Number.isFinite(info.fps) && info.fps > 0 ? info.fps : 30,
   };
 }

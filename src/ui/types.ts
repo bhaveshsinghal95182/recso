@@ -43,7 +43,13 @@ export interface RecordedMouseEvent {
 }
 
 export interface RecorderState {
-  status: 'idle' | 'recording' | 'paused';
+  /**
+   * `stopping` covers the finalize pass — flushing the native capture and
+   * muxing desktop audio — which runs for seconds on a long take. It is a
+   * distinct phase rather than a lingering `recording` so the UI can say so
+   * instead of looking unresponsive.
+   */
+  status: 'idle' | 'recording' | 'paused' | 'stopping';
   recordingId: string | null;
   duration: number;
   bytesWritten: number;
@@ -76,6 +82,13 @@ export interface RecordingOptions {
   audioBitrate?: number;
 }
 
+/** A capture device enumerated by Velocity rather than the browser. */
+export interface NativeCaptureDevice {
+  id: string;
+  label: string;
+  isDefault: boolean;
+}
+
 export interface RecordingConfig {
   sourceId: string;
   outputDir: string;
@@ -88,16 +101,29 @@ export interface RecordingConfig {
   recordCamera?: boolean;
   /** Whether to record microphone audio (embedded into video files) */
   recordMic?: boolean;
-  /** Specific camera device ID (defaults to system default) */
+  /** Native webcam ID from `listWebcamDevices` (defaults to the native default). */
   cameraDeviceId?: string;
+  /**
+   * Where the camera picture comes from. Defaults to a camera on this machine.
+   *
+   * `'phone'` needs a phone already paired and sending. There is no renderer
+   * fallback for it, so starting a recording without one fails rather than
+   * quietly using the laptop's own webcam instead.
+   */
+  cameraSource?: 'local' | 'phone';
   /** Specific microphone device ID (defaults to system default) */
   micDeviceId?: string;
-  /** Recording engine mode. Defaults to legacy hybrid capture. */
-  nativeCaptureMode?: 'legacy' | 'native-singular-clock';
+  /**
+   * The microphone as WASAPI knows it, from `listAudioCaptureDevices`.
+   *
+   * Separate from `micDeviceId` because that one comes from the browser's
+   * `enumerateDevices`, whose ids are salted per origin and mean nothing to the
+   * native recorder -- which is why a microphone chosen in the UI used to be
+   * ignored and whatever Windows called default got recorded instead.
+   */
+  nativeMicDeviceId?: string;
   /** Target fps for native singular-clock capture path. */
   targetFps?: 30 | 60;
-  /** Optional native webcam device id used by velocity v2 path. */
-  nativeWebcamDeviceId?: string;
   options?: RecordingOptions;
 }
 
@@ -107,6 +133,9 @@ export interface StartRecordingResult {
   tempPath?: string;
   /** True when webcam capture is handled fully in native velocity path. */
   nativeWebcamHandled?: boolean;
+  /** True when that audio went into the recording's own track. */
+  nativeSystemAudioHandled?: boolean;
+  nativeMicrophoneHandled?: boolean;
   error?: string;
 }
 
@@ -190,7 +219,14 @@ export interface Timeline {
   tracks: TimelineTrack[];
 }
 
+/** Which of a recording's two video files a sheet was built from. */
+export type SpritesheetSource = 'screen' | 'webcam';
+
 export interface SpritesheetMeta {
+  source: SpritesheetSource;
+  /** Size and mtime of the source video when the sheet was built. */
+  sourceSizeBytes: number;
+  sourceModifiedMs: number;
   frameCount: number;
   intervalMs: number;
   frameWidth: number;
@@ -200,6 +236,12 @@ export interface SpritesheetMeta {
   totalDurationMs: number;
   imagePath: string;
 }
+
+/**
+ * The sheets a project has, by source. A source is absent until its sheet has
+ * finished generating, which is why every reader has to cope with a missing one.
+ */
+export type SpritesheetsBySource = Partial<Record<SpritesheetSource, SpritesheetMeta>>;
 
 /** A region of the video to be cut (excluded) from export */
 export interface CutRegion {
@@ -322,7 +364,8 @@ export interface Project {
   cursorConfig: CursorConfig;
   cursorRegionOverrides?: CursorRegionOverride[];
   zoomConfig: ZoomConfig;
-  spritesheetMeta: SpritesheetMeta | null;
+  /** Timeline thumbnail sheets, keyed by source. Empty until generated. */
+  spritesheets: SpritesheetsBySource;
   backgroundPath?: string;
   backgroundColor: string;
   backgroundPattern?: BackgroundPatternConfig | null;
@@ -368,9 +411,6 @@ export type ExportFormat = 'mp4';
 /** Quality presets */
 export type ExportQuality = 'low' | 'medium' | 'high' | 'lossless';
 
-/** Supported frame rates */
-export type ExportFPS = 24 | 30 | 60;
-
 /** GL renderer backends for GPU acceleration */
 export type GLRenderer =
   | null
@@ -393,8 +433,6 @@ export interface ExportConfig {
   format: ExportFormat;
   /** Quality preset */
   quality: ExportQuality;
-  /** Target frame rate */
-  fps: ExportFPS;
   /** Background color from editor (hex) */
   backgroundColor: string;
   /** Optional explicit output folder path */
@@ -421,6 +459,23 @@ export interface ExportProgress {
   stage: 'composition' | 'export';
   /** Progress percentage of the current stage (0-100) */
   stagePercent: number;
+  /**
+   * What is happening right now, for the user rather than for arithmetic.
+   *
+   * The last third of an export is a handful of operations that cannot report
+   * their own progress -- rendering the mixed audio in one shot, writing the
+   * container -- so the percentage sits still through them. A number that has
+   * stopped moving reads as a hang; a label saying "Mixing audio" reads as
+   * work.
+   */
+  phase: string;
+  /**
+   * True while the current phase cannot report incremental progress.
+   *
+   * The bar should animate rather than sit at a number it is not actually
+   * making its way towards.
+   */
+  indeterminate: boolean;
 }
 
 /** Export result */

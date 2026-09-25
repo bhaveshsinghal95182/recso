@@ -31,3 +31,5 @@ resources/chrome
 */target/*
 */*.lock
 */*.node
+# Artifact left behind by velocity/scripts/pipeline-check.mjs when run directly.
+velocity/scripts/pipeline-check.mp4

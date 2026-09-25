@@ -10,19 +10,31 @@ import { MousePointer2, Scissors, Video, ZoomIn } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { useSpritesheets } from '@/hooks/useSpritesheets';
 import { cn } from '@/lib/utils';
 import { deriveCursorTimelineRegions } from '@/screens/editor/cursor-timeline-regions';
+import {
+  mapCompositionToSourceTimeMs,
+  mapSourceTimeToCompositionTimeMs,
+} from '@/screens/editor/engine/functions';
+import { TimelineFilmstrip } from '@/screens/editor/timeline-filmstrip';
 import {
   regionAccentText,
   type RegionVariant,
   TimelineRegion,
 } from '@/screens/editor/timeline-region';
+import { timeToPercent as toTimelinePercent } from '@/screens/editor/timeline-scale';
 import { TimelineWaveform } from '@/screens/editor/timeline-waveform';
 import { usePlaybackStore } from '@/store/playback-store';
 import { useProjectStore } from '@/store/project-store';
-import { useTimelineStore } from '@/store/timeline-store';
+import {
+  focusedCursorRegionId,
+  focusedCutId,
+  focusedZoomId,
+  useTimelineStore,
+} from '@/store/timeline-store';
 import { useUIStore } from '@/store/ui-store';
-import type { CutRegion, ZoomSource } from '@/types';
+import type { CutRegion, SpritesheetMeta, ZoomSource } from '@/types';
 
 /** Width of the fixed label column that fronts the ruler and every lane. */
 const LANE_GUTTER_PX = 112;
@@ -83,6 +95,8 @@ interface LaneConfig {
   label: string;
   kind: RegionVariant;
   videoPath: string | null;
+  /** The lane's thumbnail sheet, absent until one has been generated. */
+  sheet?: SpritesheetMeta;
   regionCount: number;
   regions: ReactNode;
   emptyHint: string;
@@ -172,20 +186,19 @@ export function Timeline() {
   const { duration, currentTime, seek } = usePlaybackStore();
   const {
     cuts,
-    selectedCutId,
+    focus,
     addCut,
     updateCut,
     removeCut,
-    setSelectedCut,
+    focusCut,
     zoomRegionsBySource,
     setZoomSource,
-    selectedZoomId,
     addZoom,
     updateZoom,
     removeZoom,
-    setSelectedZoom,
-    selectedCursorRegionId,
-    setSelectedCursorRegion,
+    focusZoom,
+    focusCursorRegion,
+    clearFocus,
   } = useTimelineStore();
   const { setActivePropertiesTab } = useUIStore();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -202,6 +215,9 @@ export function Timeline() {
     project?.webcamOverlay?.enabled && project?.webcamOverlay?.sourcePath,
   );
   const webcamVideoPath = project?.webcamOverlay?.sourcePath ?? null;
+  // Arrives after the editor does -- a fresh recording's sheets are still
+  // decoding while the timeline is already interactive.
+  const spritesheets = useSpritesheets();
   const screenVideoPath = project?.rawVideoPath ?? null;
   const screenCuts = useMemo(() => cuts.filter((cut) => hasCutOnLane(cut, 'screen')), [cuts]);
   const webcamCuts = useMemo(() => cuts.filter((cut) => hasCutOnLane(cut, 'webcam')), [cuts]);
@@ -238,7 +254,7 @@ export function Timeline() {
   }, [duration, majorInterval, minorInterval]);
 
   // Convert time to percentage position
-  const timeToPercent = (time: number) => (duration > 0 ? (time / duration) * 100 : 0);
+  const timeToPercent = (time: number) => toTimelinePercent(time, duration);
 
   // Convert clientX to time
   const clientXToTime = useCallback(
@@ -255,12 +271,13 @@ export function Timeline() {
   // Handle seeking via click or drag
   const startSeekDrag = useCallback(
     (clientX: number) => {
-      const time = clientXToTime(clientX);
-      seek(time);
+      const seekToTimelineTime = (timelineTime: number) =>
+        seek(mapSourceTimeToCompositionTimeMs(timelineTime, screenCuts));
+
+      seekToTimelineTime(clientXToTime(clientX));
 
       const handleMouseMove = (moveEvent: MouseEvent) => {
-        const newTime = clientXToTime(moveEvent.clientX);
-        seek(newTime);
+        seekToTimelineTime(clientXToTime(moveEvent.clientX));
       };
 
       const handleMouseUp = () => {
@@ -271,7 +288,7 @@ export function Timeline() {
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
     },
-    [clientXToTime, seek],
+    [clientXToTime, screenCuts, seek],
   );
 
   const handleTimelineMouseDown = useCallback(
@@ -317,10 +334,8 @@ export function Timeline() {
     setSelectedZoomIds([]);
     setSelectedCursorRegionIds([]);
     setCutSelectionDrag(null);
-    setSelectedCut(null);
-    setSelectedZoom(null);
-    setSelectedCursorRegion(null);
-  }, [setSelectedCut, setSelectedCursorRegion, setSelectedZoom]);
+    clearFocus();
+  }, [clearFocus]);
 
   const handleModeChange = useCallback(
     (nextMode: TimelineMode) => {
@@ -350,11 +365,9 @@ export function Timeline() {
       setSelectedZoomIds([]);
       setSelectedCursorRegionIds([]);
       setCutSelectionDrag(null);
-      setSelectedCut(cutId);
-      setSelectedZoom(null);
-      setSelectedCursorRegion(null);
+      focusCut(cutId);
     },
-    [setSelectedCut, setSelectedCursorRegion, setSelectedZoom],
+    [focusCut],
   );
 
   const handleSelectZoom = useCallback(
@@ -363,20 +376,12 @@ export function Timeline() {
       setSelectedZoomIds([zoomId]);
       setSelectedCursorRegionIds([]);
       setCutSelectionDrag(null);
-      setSelectedCut(null);
-      setSelectedZoom(zoomId);
-      setSelectedCursorRegion(null);
+      focusZoom(zoomId);
       void setZoomSource(source);
       // Webcam regions are edited in the webcam panel, screen regions in the zoom panel.
       setActivePropertiesTab(source === 'webcam' ? 'webcam' : 'zoom');
     },
-    [
-      setSelectedCut,
-      setSelectedCursorRegion,
-      setSelectedZoom,
-      setZoomSource,
-      setActivePropertiesTab,
-    ],
+    [focusZoom, setZoomSource, setActivePropertiesTab],
   );
 
   const handleSelectCursor = useCallback(
@@ -385,12 +390,10 @@ export function Timeline() {
       setSelectedZoomIds([]);
       setSelectedCursorRegionIds([regionId]);
       setCutSelectionDrag(null);
-      setSelectedCut(null);
-      setSelectedZoom(null);
-      setSelectedCursorRegion(regionId);
+      focusCursorRegion(regionId);
       setActivePropertiesTab('cursor');
     },
-    [setSelectedCut, setSelectedCursorRegion, setSelectedZoom, setActivePropertiesTab],
+    [focusCursorRegion, setActivePropertiesTab],
   );
 
   const handleDeleteCutForLane = useCallback(
@@ -477,31 +480,45 @@ export function Timeline() {
       setSelectedCutIds(nextSelectedCutIds);
       setSelectedZoomIds(nextSelectedZoomIds);
       setSelectedCursorRegionIds(nextSelectedCursorRegionIds);
-      setSelectedCut(nextSelectedCutIds.length === 1 ? nextSelectedCutIds[0] : null);
+
+      // A marquee in 'all' mode can span several region types, but the
+      // properties panel edits exactly one region. Only take focus when the
+      // drag landed on a single region overall — anything else is ambiguous,
+      // so leave the marquee selection alone and drop focus.
+      const totalMatched =
+        nextSelectedCutIds.length + nextSelectedZoomIds.length + nextSelectedCursorRegionIds.length;
+
+      if (totalMatched !== 1) {
+        clearFocus();
+        return;
+      }
+
+      if (nextSelectedCutIds.length === 1) {
+        focusCut(nextSelectedCutIds[0]);
+        return;
+      }
 
       if (nextSelectedZoomIds.length === 1) {
         const zoomId = nextSelectedZoomIds[0];
-        setSelectedZoom(zoomId);
+        focusZoom(zoomId);
         if (screenZoomRegions.some((zoom) => zoom.id === zoomId)) {
           void setZoomSource('screen');
         } else if (webcamZoomRegions.some((zoom) => zoom.id === zoomId)) {
           void setZoomSource('webcam');
         }
-      } else {
-        setSelectedZoom(null);
+        return;
       }
 
-      setSelectedCursorRegion(
-        nextSelectedCursorRegionIds.length === 1 ? nextSelectedCursorRegionIds[0] : null,
-      );
+      focusCursorRegion(nextSelectedCursorRegionIds[0]);
     },
     [
       mode,
       screenZoomRegions,
       webcamZoomRegions,
-      setSelectedCut,
-      setSelectedCursorRegion,
-      setSelectedZoom,
+      focusCut,
+      focusZoom,
+      focusCursorRegion,
+      clearFocus,
       setZoomSource,
     ],
   );
@@ -533,9 +550,7 @@ export function Timeline() {
       setSelectedCutIds([]);
       setSelectedZoomIds([]);
       setSelectedCursorRegionIds([]);
-      setSelectedCut(null);
-      setSelectedZoom(null);
-      setSelectedCursorRegion(null);
+      clearFocus();
 
       const initialDrag: CutSelectionDrag = {
         startX,
@@ -586,10 +601,8 @@ export function Timeline() {
     [
       applyRegionSelectionDrag,
       clearRegionSelections,
-      setSelectedCut,
+      clearFocus,
       setSelectedCutIds,
-      setSelectedCursorRegion,
-      setSelectedZoom,
       setSelectedZoomIds,
       setSelectedCursorRegionIds,
     ],
@@ -623,17 +636,17 @@ export function Timeline() {
   }, [updateTrackScrollbarWidth]);
 
   const isCutSelected = useCallback(
-    (cutId: string) => selectedCutId === cutId || selectedCutIds.includes(cutId),
-    [selectedCutId, selectedCutIds],
+    (cutId: string) => focusedCutId(focus) === cutId || selectedCutIds.includes(cutId),
+    [focus, selectedCutIds],
   );
   const isZoomSelected = useCallback(
-    (zoomId: string) => selectedZoomId === zoomId || selectedZoomIds.includes(zoomId),
-    [selectedZoomId, selectedZoomIds],
+    (zoomId: string) => focusedZoomId(focus) === zoomId || selectedZoomIds.includes(zoomId),
+    [focus, selectedZoomIds],
   );
   const isCursorSelected = useCallback(
     (cursorId: string) =>
-      selectedCursorRegionId === cursorId || selectedCursorRegionIds.includes(cursorId),
-    [selectedCursorRegionId, selectedCursorRegionIds],
+      focusedCursorRegionId(focus) === cursorId || selectedCursorRegionIds.includes(cursorId),
+    [focus, selectedCursorRegionIds],
   );
 
   const cutLaneCount = screenCuts.length + (webcamTimelineEnabled ? webcamCuts.length : 0);
@@ -655,6 +668,7 @@ export function Timeline() {
       label: lane === 'screen' ? 'Screen' : 'Webcam',
       kind: 'cut',
       videoPath: lane === 'screen' ? screenVideoPath : webcamVideoPath,
+      sheet: spritesheets[lane],
       regionCount: laneCuts.length,
       emptyHint: 'Double-click to add a cut',
       onDoubleClick: (event) => handleAddCutAtTime(clientXToTime(event.clientX), lane),
@@ -754,7 +768,7 @@ export function Timeline() {
     updateTrackScrollbarWidth();
   }, [mode, counts.all, webcamTimelineEnabled, updateTrackScrollbarWidth]);
 
-  const playheadPercent = timeToPercent(currentTime);
+  const playheadPercent = timeToPercent(mapCompositionToSourceTimeMs(currentTime, screenCuts));
   const rulerWidthStyle =
     trackScrollbarWidth > 0 ? { width: `calc(100% - ${trackScrollbarWidth}px)` } : undefined;
   const cutSelectionBounds = cutSelectionDrag ? getSelectionBounds(cutSelectionDrag) : null;
@@ -905,6 +919,8 @@ export function Timeline() {
                       style={{ height: LANE_HEIGHT_PX }}
                       onDoubleClick={lane.onDoubleClick}
                     >
+                      <TimelineFilmstrip sheet={lane.sheet} durationMs={duration} />
+
                       {lane.videoPath ? <TimelineWaveform videoPath={lane.videoPath} /> : null}
 
                       {lane.regionCount === 0 ? (

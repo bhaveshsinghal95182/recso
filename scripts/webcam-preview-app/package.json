@@ -1,0 +1,6 @@
+{
+  "name": "recso-webcam-preview-check",
+  "private": true,
+  "type": "module",
+  "main": "main.mjs"
+}

@@ -8,7 +8,7 @@ import {
   resolveCursorRegionKey,
 } from '@/screens/editor/cursor-timeline-regions';
 import { useProjectStore } from '@/store/project-store';
-import { useTimelineStore } from '@/store/timeline-store';
+import { focusedCursorRegionId, useTimelineStore } from '@/store/timeline-store';
 import type { CursorRegionOverride } from '@/types';
 
 import {
@@ -87,7 +87,7 @@ export function CursorPanel() {
     replaceCursorRegionOverrides,
     removeCursorRegionOverride,
   } = useProjectStore();
-  const { selectedCursorRegionId } = useTimelineStore();
+  const selectedCursorRegionId = focusedCursorRegionId(useTimelineStore((s) => s.focus));
   const [packAssignments, setPackAssignments] = useState<Record<string, string>>({});
   const [isApplyingPack, setIsApplyingPack] = useState(false);
 

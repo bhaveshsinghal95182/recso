@@ -12,9 +12,6 @@ export type ExportFormat = 'mp4';
 /** Quality presets */
 export type ExportQuality = 'low' | 'medium' | 'high' | 'lossless';
 
-/** Supported frame rates */
-export type ExportFPS = 24 | 30 | 60;
-
 /**
  * GL renderer backends for Chromium/Remotion video rendering.
  *
@@ -66,8 +63,6 @@ export interface ExportConfig {
   format: ExportFormat;
   /** Quality preset */
   quality: ExportQuality;
-  /** Target frame rate */
-  fps: ExportFPS;
   /** Background color from editor (hex) */
   backgroundColor: string;
   /** Optional explicit output folder path */
@@ -101,6 +96,23 @@ export interface ExportProgress {
   stage: 'composition' | 'export';
   /** Progress percentage of the current stage (0-100) */
   stagePercent: number;
+  /**
+   * What is happening right now, for the user rather than for arithmetic.
+   *
+   * The last third of an export is a handful of operations that cannot report
+   * their own progress -- rendering the mixed audio in one shot, writing the
+   * container -- so the percentage sits still through them. A number that has
+   * stopped moving reads as a hang; a label saying "Mixing audio" reads as
+   * work.
+   */
+  phase: string;
+  /**
+   * True while the current phase cannot report incremental progress.
+   *
+   * The bar should animate rather than sit at a number it is not actually
+   * making its way towards.
+   */
+  indeterminate: boolean;
 }
 
 /** Export result */
@@ -145,7 +157,6 @@ export const DEFAULT_EXPORT_CONFIG: ExportConfig = {
   resolution: '1080p',
   format: 'mp4',
   quality: 'high',
-  fps: 30,
   backgroundColor: '#000000',
   glRenderer: 'angle', // Use GPU acceleration (ANGLE backend for best performance with NVIDIA)
 };

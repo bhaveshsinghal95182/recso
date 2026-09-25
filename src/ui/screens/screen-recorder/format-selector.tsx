@@ -18,7 +18,7 @@ interface FormatItem {
 }
 
 export function FormatSelector({ value, onChange }: FormatSelectorProps) {
-  // All formats are supported via mediabunny (no MediaRecorder dependency)
+  // The native recorder owns format support; this control has no browser-codec gate.
   const supportedFormats = React.useMemo<FormatItem[]>(() => {
     return formats.map((f) => ({
       ...f,

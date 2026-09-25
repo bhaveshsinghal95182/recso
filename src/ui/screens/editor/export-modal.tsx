@@ -5,7 +5,7 @@
  * - Resolution selection (720p, 1080p, 4K, Custom)
  * - Format selection (MP4)
  * - Quality presets (Low, Medium, High, Lossless)
- * - FPS selection (24, 30, 60)
+ * - Source-matched frame rate export
  * - Real-time progress tracking
  */
 
@@ -31,12 +31,12 @@ import { useTimelineStore } from '@/store/timeline-store';
 import type {
   ExportConfig,
   ExportFormat,
-  ExportFPS,
+  ExportProgress,
   ExportQuality,
   ExportResolution,
 } from '@/types';
 
-import { runEngineCanvasExport } from './engine/export-pipeline';
+import { planExport, runNativeExport } from './engine/export-pipeline';
 
 interface ExportModalProps {
   open: boolean;
@@ -57,12 +57,6 @@ const QUALITY_OPTIONS: { value: ExportQuality; label: string }[] = [
   { value: 'medium', label: 'Medium' },
   { value: 'high', label: 'High (recommended)' },
   { value: 'lossless', label: 'Lossless (largest file)' },
-];
-
-const FPS_OPTIONS: { value: ExportFPS; label: string }[] = [
-  { value: 24, label: '24 fps (cinematic)' },
-  { value: 30, label: '30 fps (standard)' },
-  { value: 60, label: '60 fps (smooth)' },
 ];
 
 /**
@@ -103,27 +97,23 @@ function ConfettiTrigger() {
 
 export function ExportModal({ open, onOpenChange }: ExportModalProps) {
   const { project, mouseEvents } = useProjectStore();
-  const { zoomRegionsBySource } = useTimelineStore();
-  const {
-    state: exportState,
-    progress,
-    result,
-    setExportState,
-    setProgress,
-    setResult,
-    setModalOpen,
-    reset,
-  } = useExportStore();
+  const { cuts, zoomRegionsBySource } = useTimelineStore();
+  const { phase, startExport, reportProgress, completeExport, failExport, setModalOpen, reset } =
+    useExportStore();
 
-  // Map export store state to modal step
+  // Map export phase to modal step
   const step: ExportStep =
-    exportState === 'idle'
+    phase.kind === 'idle'
       ? 'configure'
-      : exportState === 'exporting'
+      : phase.kind === 'exporting'
         ? 'exporting'
-        : exportState === 'complete'
+        : phase.kind === 'complete'
           ? 'complete'
           : 'error';
+
+  const progress = phase.kind === 'exporting' ? phase.progress : null;
+  const result = phase.kind === 'complete' ? phase.result : null;
+  const errorMessage = phase.kind === 'error' ? phase.message : null;
 
   // Export configuration state
   const [resolution, setResolution] = useState<ExportResolution>('1080p');
@@ -131,7 +121,6 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
   const [customHeight, setCustomHeight] = useState(1080);
   const format: ExportFormat = 'mp4'; // Only MP4 is currently supported
   const [quality, setQuality] = useState<ExportQuality>('high');
-  const [fps, setFps] = useState<ExportFPS>(30);
   const [fileName, setFileName] = useState<string>('');
   const [outputFolder, setOutputFolder] = useState<string>('');
   const exportCancelRef = useRef<(() => void) | null>(null);
@@ -145,7 +134,7 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
   const prevOpenRef = useRef(false);
 
   // Reset state and pause playback when modal first opens (closed→open transition).
-  // We intentionally do NOT react to exportState changes here — doing so would
+  // We intentionally do NOT react to phase changes here — doing so would
   // reset the 'complete'/'error' states before the user sees them.
   useEffect(() => {
     const wasOpen = prevOpenRef.current;
@@ -153,7 +142,7 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
 
     if (open && !wasOpen) {
       // Only reset if not currently exporting
-      if (exportState !== 'exporting') {
+      if (phase.kind !== 'exporting') {
         reset();
       }
       // Pause playback to prevent high-frequency re-renders from currentTime updates
@@ -163,7 +152,7 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
         pause();
       }
     }
-  }, [open, exportState, reset]);
+  }, [open, phase.kind, reset]);
 
   const handleExport = useCallback(async () => {
     if (!project) return;
@@ -174,23 +163,13 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
       customHeight: resolution === 'custom' ? customHeight : undefined,
       format,
       quality,
-      fps,
       backgroundColor: project.backgroundColor || '#000000',
       outputFolder: outputFolder || undefined,
       outputFilename: fileName || undefined,
       glRenderer: 'angle', // Enable GPU acceleration
     };
 
-    setExportState('exporting');
-    setProgress({
-      percent: 0,
-      currentFrame: 0,
-      totalFrames: 0,
-      fps: 0,
-      eta: 0,
-      stage: 'composition',
-      stagePercent: 0,
-    });
+    startExport();
 
     try {
       const outputPath = await window.electron.exporter.resolveOutputPath(config);
@@ -198,35 +177,34 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
         throw new Error('Unable to resolve export output path');
       }
 
-      const rendered = await runEngineCanvasExport({
-        project,
+      const shared = {
+        // Cut edits are owned by the timeline store and are persisted
+        // asynchronously; the project object can therefore still contain the
+        // pre-edit snapshot when export is started.
+        project: { ...project, cuts },
         config,
         screenZoomRegions: zoomRegionsBySource.screen,
         webcamZoomRegions: zoomRegionsBySource.webcam,
         mouseEvents,
-        onProgress: (nextProgress) => {
-          setProgress(nextProgress);
+        onProgress: (nextProgress: ExportProgress) => {
+          reportProgress(nextProgress);
         },
-        onCancelReady: (cancel) => {
+        onCancelReady: (cancel: () => void) => {
           exportCancelRef.current = cancel;
         },
-      });
+      };
 
-      const writeResult = await window.electron.exporter.writeOutputFile(
-        outputPath,
-        rendered.buffer,
-      );
-      if (!writeResult.success || !writeResult.outputPath) {
-        throw new Error(writeResult.error || 'Failed to save exported file');
-      }
+      const plan = await planExport(shared);
 
-      setResult({
-        success: true,
-        outputPath: writeResult.outputPath,
+      // The engine writes the file itself. Nothing comes back through the
+      // renderer, so recording size is not bounded by renderer memory.
+      const rendered = await runNativeExport({ ...shared, plan, outputPath });
+
+      completeExport({
+        outputPath: rendered.outputPath,
         duration: rendered.durationSeconds,
-        fileSize: writeResult.fileSize ?? rendered.fileSize,
+        fileSize: await window.electron.exporter.fileSize(rendered.outputPath),
       });
-      setExportState('complete');
 
       // Trigger confetti
       confetti({
@@ -243,11 +221,7 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
         return;
       }
 
-      setResult({
-        success: false,
-        error: message,
-      });
-      setExportState('error');
+      failExport(message);
     } finally {
       exportCancelRef.current = null;
     }
@@ -258,13 +232,13 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
     customHeight,
     format,
     quality,
-    fps,
     fileName,
     outputFolder,
     zoomRegionsBySource,
-    setExportState,
-    setProgress,
-    setResult,
+    startExport,
+    reportProgress,
+    completeExport,
+    failExport,
     reset,
   ]);
 
@@ -412,21 +386,9 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
               {/* Frame Rate */}
               <div className="space-y-2">
                 <Label>Frame Rate</Label>
-                <Select
-                  value={fps.toString()}
-                  onValueChange={(val) => val && setFps(parseInt(val) as ExportFPS)}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {FPS_OPTIONS.map((opt) => (
-                      <SelectItem key={opt.value} value={opt.value.toString()}>
-                        {opt.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <p className="text-sm text-muted-foreground">
+                  Matches the recorded video frame rate.
+                </p>
               </div>
 
               {/* Output Folder and Filename */}
@@ -465,14 +427,26 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
               <div className="space-y-2">
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">
-                    {progress.stage === 'composition' ? 'Compositing...' : 'Finalizing...'}
+                    {progress.phase ||
+                      (progress.stage === 'composition' ? 'Compositing...' : 'Finalizing...')}
                   </span>
-                  <span className="font-medium">{progress.percent}%</span>
+                  {/*
+                    Hidden while the current step cannot report progress. The
+                    percentage would simply stop moving, which reads as a hang
+                    -- the label and the sweeping bar say "working" honestly.
+                  */}
+                  {!progress.indeterminate && (
+                    <span className="font-medium">{progress.percent}%</span>
+                  )}
                 </div>
                 <div className="h-2 bg-muted rounded-full overflow-hidden">
                   <div
-                    className="h-full bg-primary transition-all duration-300 ease-out"
-                    style={{ width: `${progress.percent}%` }}
+                    className={
+                      progress.indeterminate
+                        ? 'h-full w-1/3 bg-primary animate-[export-indeterminate_1.2s_ease-in-out_infinite]'
+                        : 'h-full bg-primary transition-all duration-300 ease-out'
+                    }
+                    style={progress.indeterminate ? undefined : { width: `${progress.percent}%` }}
                   />
                 </div>
               </div>
@@ -485,7 +459,9 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
                 </div>
                 <div className="bg-muted/50 rounded-lg p-3">
                   <div className="text-muted-foreground text-xs mb-1">Time Remaining</div>
-                  <div className="font-medium">{formatETA(progress.eta)}</div>
+                  <div className="font-medium">
+                    {progress.indeterminate ? 'Almost there' : formatETA(progress.eta)}
+                  </div>
                 </div>
               </div>
 
@@ -602,7 +578,7 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
           )}
 
           {/* Error Step */}
-          {step === 'error' && result && (
+          {step === 'error' && errorMessage && (
             <div className="space-y-4">
               <div className="flex items-center justify-center py-4">
                 <div className="size-16 bg-destructive/10 rounded-full flex items-center justify-center">
@@ -612,7 +588,7 @@ export function ExportModal({ open, onOpenChange }: ExportModalProps) {
 
               <div className="text-center space-y-1">
                 <p className="font-medium text-destructive">Export Failed</p>
-                <p className="text-sm text-muted-foreground">{result.error || 'Unknown error'}</p>
+                <p className="text-sm text-muted-foreground">{errorMessage}</p>
               </div>
 
               <Button onClick={() => reset()} className="w-full">

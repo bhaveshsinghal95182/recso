@@ -24,7 +24,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { quality } from '@/constants';
 import { cn, formatBytes, formatDuration } from '@/lib/utils';
-import type { DesktopSource } from '@/types';
+import type { DesktopSource, NativeCaptureDevice } from '@/types';
+
+import { PhoneCameraPanel } from './phone-camera-panel';
 
 type ToolbarPanel = 'sources' | 'microphone' | 'camera' | 'settings';
 type SourceFilter = 'all' | 'screen' | 'window';
@@ -41,6 +43,7 @@ interface FloatingRecorderToolbarProps {
   isLoading: boolean;
   isRecording: boolean;
   isPaused: boolean;
+  isStopping: boolean;
   isStarting: boolean;
   duration: number;
   bytesWritten: number;
@@ -51,9 +54,7 @@ interface FloatingRecorderToolbarProps {
   recordCamera: boolean;
   recordSystemAudio: boolean;
   cameraDeviceId: string | null;
-  micDeviceId: string | null;
-  cameras: MediaDeviceInfo[];
-  microphones: MediaDeviceInfo[];
+  cameras: NativeCaptureDevice[];
   onSourceSelect: (id: string) => void;
   onRefreshSources: () => Promise<DesktopSource[]> | DesktopSource[] | void;
   setIsLoading: (loading: boolean) => void;
@@ -64,7 +65,13 @@ interface FloatingRecorderToolbarProps {
   onRecordCameraChange: (enabled: boolean) => void;
   onRecordSystemAudioChange: (enabled: boolean) => void;
   onCameraDeviceChange: (deviceId: string) => void;
-  onMicDeviceChange: (deviceId: string) => void;
+  /** Where the camera picture comes from: this machine, or a paired phone. */
+  cameraSource: 'local' | 'phone';
+  onCameraSourceChange: (source: 'local' | 'phone') => void;
+  /** Microphones as the native recorder sees them; its ids are what it opens. */
+  nativeMicrophones: NativeCaptureDevice[];
+  nativeMicDeviceId: string | null;
+  onNativeMicDeviceChange: (deviceId: string) => void;
   onStart: () => void;
   onStop: () => void;
   onPause: () => void;
@@ -78,6 +85,7 @@ export function FloatingRecorderToolbar({
   isLoading,
   isRecording,
   isPaused,
+  isStopping,
   isStarting,
   duration,
   bytesWritten,
@@ -88,9 +96,7 @@ export function FloatingRecorderToolbar({
   recordCamera,
   recordSystemAudio,
   cameraDeviceId,
-  micDeviceId,
   cameras,
-  microphones,
   onSourceSelect,
   onRefreshSources,
   setIsLoading,
@@ -101,7 +107,11 @@ export function FloatingRecorderToolbar({
   onRecordCameraChange,
   onRecordSystemAudioChange,
   onCameraDeviceChange,
-  onMicDeviceChange,
+  cameraSource,
+  onCameraSourceChange,
+  nativeMicrophones,
+  nativeMicDeviceId,
+  onNativeMicDeviceChange,
   onStart,
   onStop,
   onPause,
@@ -112,7 +122,7 @@ export function FloatingRecorderToolbar({
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
   const [isOutputValid, setIsOutputValid] = useState(true);
 
-  const isCaptureActive = isRecording || isPaused;
+  const isCaptureActive = isRecording || isPaused || isStopping;
   const controlsLocked = isCaptureActive || isStarting;
   const selectedQuality = useMemo(
     () => quality.find((option) => option.value === videoBitrate) ?? quality[1],
@@ -193,16 +203,19 @@ export function FloatingRecorderToolbar({
   const toggleMic = () => {
     const next = !recordMic;
     onRecordMicChange(next);
-    if (next && !micDeviceId && microphones[0]) {
-      onMicDeviceChange(microphones[0].deviceId);
+    if (next && !nativeMicDeviceId && nativeMicrophones[0]) {
+      onNativeMicDeviceChange(nativeMicrophones[0].id);
     }
   };
 
   const toggleCamera = () => {
-    const next = !recordCamera;
+    // The switch on the local device list. Turning it on also claims the source
+    // back from a paired phone, since only one camera reaches the recording.
+    const next = !(recordCamera && cameraSource === 'local');
+    onCameraSourceChange('local');
     onRecordCameraChange(next);
     if (next && !cameraDeviceId && cameras[0]) {
-      onCameraDeviceChange(cameras[0].deviceId);
+      onCameraDeviceChange(cameras[0].id);
     }
   };
 
@@ -239,35 +252,49 @@ export function FloatingRecorderToolbar({
             <DevicePanel
               title="Microphone"
               enabled={recordMic}
-              devices={microphones}
-              selectedDeviceId={micDeviceId}
+              devices={nativeMicrophones}
+              selectedDeviceId={nativeMicDeviceId}
               emptyLabel="No microphones found"
               fallbackLabel="Default microphone"
               activeIcon={<Mic size={18} />}
               inactiveIcon={<MicOff size={18} />}
               onToggle={toggleMic}
               onDeviceSelect={(deviceId) => {
-                onMicDeviceChange(deviceId);
+                onNativeMicDeviceChange(deviceId);
                 onRecordMicChange(true);
               }}
             />
           )}
           {openPanel === 'camera' && (
-            <DevicePanel
-              title="Webcam"
-              enabled={recordCamera}
-              devices={cameras}
-              selectedDeviceId={cameraDeviceId}
-              emptyLabel="No webcams found"
-              fallbackLabel="Default webcam"
-              activeIcon={<Video size={18} />}
-              inactiveIcon={<VideoOff size={18} />}
-              onToggle={toggleCamera}
-              onDeviceSelect={(deviceId) => {
-                onCameraDeviceChange(deviceId);
-                onRecordCameraChange(true);
-              }}
-            />
+            <div className="flex flex-col gap-4">
+              <DevicePanel
+                title="Webcam"
+                enabled={recordCamera && cameraSource === 'local'}
+                devices={cameras}
+                selectedDeviceId={cameraDeviceId}
+                emptyLabel="No webcams found"
+                fallbackLabel="Default webcam"
+                activeIcon={<Video size={18} />}
+                inactiveIcon={<VideoOff size={18} />}
+                onToggle={toggleCamera}
+                onDeviceSelect={(deviceId) => {
+                  onCameraDeviceChange(deviceId);
+                  onCameraSourceChange('local');
+                  onRecordCameraChange(true);
+                }}
+              />
+              <PhoneCameraPanel
+                active={recordCamera && cameraSource === 'phone'}
+                onActivate={() => {
+                  onCameraSourceChange('phone');
+                  onRecordCameraChange(true);
+                }}
+                onDeactivate={() => {
+                  onCameraSourceChange('local');
+                  onRecordCameraChange(false);
+                }}
+              />
+            </div>
           )}
           {openPanel === 'settings' && (
             <SettingsPanel
@@ -293,6 +320,7 @@ export function FloatingRecorderToolbar({
         {isCaptureActive ? (
           <RecordingBar
             isPaused={isPaused}
+            isStopping={isStopping}
             duration={duration}
             bytesWritten={bytesWritten}
             onPause={onPause}
@@ -315,7 +343,7 @@ export function FloatingRecorderToolbar({
 
             <ToolbarButton
               label="Mic"
-              value={recordMic ? deviceName(microphones, micDeviceId, 'On') : 'Off'}
+              value={recordMic ? deviceName(nativeMicrophones, nativeMicDeviceId, 'On') : 'Off'}
               icon={recordMic ? <Mic size={18} /> : <MicOff size={18} />}
               active={recordMic}
               isOpen={openPanel === 'microphone'}
@@ -384,6 +412,7 @@ export function FloatingRecorderToolbar({
 
 function RecordingBar({
   isPaused,
+  isStopping,
   duration,
   bytesWritten,
   onPause,
@@ -391,6 +420,7 @@ function RecordingBar({
   onStop,
 }: {
   isPaused: boolean;
+  isStopping: boolean;
   duration: number;
   bytesWritten: number;
   onPause: () => void;
@@ -400,13 +430,17 @@ function RecordingBar({
   return (
     <div className="flex w-full items-center gap-2">
       <div className="flex min-w-0 flex-1 items-center gap-3 rounded-[18px] border border-white/10 bg-black/25 px-4 py-3.5 text-[13px] text-white/60">
-        <span
-          className={cn(
-            'h-2 w-2 flex-none rounded-full bg-red-500 shadow-[0_0_0_4px_rgba(239,68,68,0.14)]',
-            isPaused && 'bg-yellow-400',
-          )}
-        />
-        <span>{isPaused ? 'Paused' : 'Recording'}</span>
+        {isStopping ? (
+          <Loader2 size={14} className="flex-none animate-spin text-white/70" />
+        ) : (
+          <span
+            className={cn(
+              'h-2 w-2 flex-none rounded-full bg-red-500 shadow-[0_0_0_4px_rgba(239,68,68,0.14)]',
+              isPaused && 'bg-yellow-400',
+            )}
+          />
+        )}
+        <span>{isStopping ? 'Finishing up' : isPaused ? 'Paused' : 'Recording'}</span>
         <strong className="font-mono text-[22px] font-[750] tabular-nums text-white">
           {formatDuration(duration)}
         </strong>
@@ -414,8 +448,9 @@ function RecordingBar({
       </div>
       <button
         type="button"
-        className={iconButtonBase}
+        className={cn(iconButtonBase, isStopping && 'pointer-events-none opacity-40')}
         onClick={isPaused ? onResume : onPause}
+        disabled={isStopping}
         title={isPaused ? 'Resume recording' : 'Pause recording'}
         aria-label={isPaused ? 'Resume recording' : 'Pause recording'}
       >
@@ -423,12 +458,22 @@ function RecordingBar({
       </button>
       <button
         type="button"
-        className="grid h-14 w-14 flex-none cursor-pointer place-items-center rounded-[19px] bg-[linear-gradient(180deg,#fb7185,#e11d48)] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.32),0_12px_30px_rgba(225,29,72,0.34)] transition duration-150 hover:-translate-y-[1px] hover:brightness-110"
+        className={cn(
+          'grid h-14 w-14 flex-none place-items-center rounded-[19px] bg-[linear-gradient(180deg,#fb7185,#e11d48)] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.32),0_12px_30px_rgba(225,29,72,0.34)] transition duration-150',
+          isStopping
+            ? 'cursor-default opacity-60'
+            : 'cursor-pointer hover:-translate-y-[1px] hover:brightness-110',
+        )}
         onClick={onStop}
-        title="Stop recording"
-        aria-label="Stop recording"
+        disabled={isStopping}
+        title={isStopping ? 'Finishing up…' : 'Stop recording'}
+        aria-label={isStopping ? 'Finishing up' : 'Stop recording'}
       >
-        <Square size={17} fill="currentColor" />
+        {isStopping ? (
+          <Loader2 size={18} className="animate-spin" />
+        ) : (
+          <Square size={17} fill="currentColor" />
+        )}
       </button>
     </div>
   );
@@ -620,7 +665,7 @@ function DevicePanel({
 }: {
   title: string;
   enabled: boolean;
-  devices: MediaDeviceInfo[];
+  devices: NativeCaptureDevice[];
   selectedDeviceId: string | null;
   emptyLabel: string;
   fallbackLabel: string;
@@ -659,18 +704,17 @@ function DevicePanel({
           </div>
         ) : (
           devices.map((device, index) => {
-            const isSelected =
-              selectedDeviceId === device.deviceId || (!selectedDeviceId && index === 0);
+            const isSelected = selectedDeviceId === device.id || (!selectedDeviceId && index === 0);
 
             return (
               <button
-                key={device.deviceId || `${title}-${index}`}
+                key={device.id || `${title}-${index}`}
                 type="button"
                 className={cn(
                   'grid grid-cols-[24px_minmax(0,1fr)_18px] items-center gap-2.5 rounded-[14px] border border-white/10 bg-white/[0.045] px-3 py-2.5 text-left text-white/70 transition duration-150 cursor-pointer hover:border-[#5eead4]/35 hover:bg-emerald-500/15 hover:text-[#ccfbf1]',
                   enabled && isSelected && 'border-[#5eead4]/35 bg-emerald-500/15 text-[#ccfbf1]',
                 )}
-                onClick={() => onDeviceSelect(device.deviceId)}
+                onClick={() => onDeviceSelect(device.id)}
               >
                 <span>{enabled ? activeIcon : inactiveIcon}</span>
                 <strong className="truncate text-[13px] font-[650]">
@@ -801,9 +845,13 @@ function FilterButton({
   );
 }
 
-function deviceName(devices: MediaDeviceInfo[], selectedDeviceId: string | null, fallback: string) {
+function deviceName(
+  devices: NativeCaptureDevice[],
+  selectedDeviceId: string | null,
+  fallback: string,
+) {
   const selectedDevice = selectedDeviceId
-    ? devices.find((device) => device.deviceId === selectedDeviceId)
+    ? devices.find((device) => device.id === selectedDeviceId)
     : devices[0];
 
   return selectedDevice?.label || fallback;

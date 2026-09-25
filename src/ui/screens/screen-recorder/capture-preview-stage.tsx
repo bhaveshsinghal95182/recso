@@ -11,8 +11,13 @@ interface CapturePreviewStageProps {
   isLoading: boolean;
   isRecording: boolean;
   isPaused: boolean;
+  isStopping: boolean;
   recordCamera: boolean;
-  cameraDeviceId: string | null;
+  cameraDeviceId?: string | null;
+  cameraDeviceLabel: string | null;
+  /** Where the camera picture comes from: this machine, or a paired phone. */
+  cameraSource?: 'local' | 'phone';
+  cameraPreviewError?: string | null;
   onRefresh: () => void;
 }
 
@@ -21,11 +26,15 @@ export function CapturePreviewStage({
   isLoading,
   isRecording,
   isPaused,
+  isStopping,
   recordCamera,
   cameraDeviceId,
+  cameraDeviceLabel,
+  cameraSource = 'local',
+  cameraPreviewError,
   onRefresh,
 }: CapturePreviewStageProps) {
-  const isActive = isRecording || isPaused;
+  const isActive = isRecording || isPaused || isStopping;
   const cornerBase =
     'absolute h-7 w-7 border-[#5eead4] drop-shadow-[0_0_12px_rgba(94,234,212,0.55)]';
 
@@ -106,8 +115,11 @@ export function CapturePreviewStage({
                 )}
               />
               <CameraPreview
-                deviceId={cameraDeviceId}
+                key={`${cameraSource}:${cameraDeviceId}:${recordCamera}`}
+                deviceLabel={cameraDeviceLabel}
                 isActive={recordCamera}
+                source={cameraSource}
+                error={cameraPreviewError}
                 className="absolute bottom-[clamp(14px,2.2vw,28px)] right-[clamp(14px,2.2vw,28px)] z-[3] w-[clamp(92px,12vw,156px)] border-white/35"
               />
             </div>

@@ -1,2 +1,4 @@
-export { runEngineCanvasExport } from './run-engine-canvas-export';
-export type { EngineCanvasExportOptions, EngineCanvasExportResult } from './types';
+export type { ExportPlan } from './plan';
+export { planExport } from './plan';
+export { runNativeExport } from './run-native-export';
+export type { ExportRequestOptions } from './types';

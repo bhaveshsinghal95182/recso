@@ -1,9 +1,9 @@
 /**
  * RecorderService
  *
- * Hybrid recording pipeline:
- * - Velocity native capture for screen/window video
- * - Electron-managed auxiliary streams (camera / mic / desktop-audio)
+ * Native recording pipeline:
+ * - Velocity owns screen/window, webcam, microphone and system-audio capture.
+ * - Electron selects devices, controls the session and persists the outputs.
  */
 
 import { createRequire } from 'node:module';
@@ -17,20 +17,50 @@ import path from 'path';
 import type {
   DesktopSource,
   RecordingConfig,
+  RecordingMediaInfo,
   RecordingState,
   RecordingStateEvent,
   StartRecordingResult,
   StopRecordingResult,
 } from '../types/recorder.types.js';
 import { completeRecording, createRecording, getRecording } from './database.service.js';
+import { phoneCameraState } from './phone-camera.service.js';
 import { initProjectFolder } from './project-storage.service.js';
+import {
+  nativeWebcamStartProblem,
+  phoneCameraProblem,
+  planNativeAudio,
+} from './recorder-capture-plan.js';
 
 interface VelocityStopper {
-  stop(): void;
+  /**
+   * Stops every capture and describes what was written -- one entry per
+   * capture, so a v2 recording with the webcam enabled reports two.
+   *
+   * Returns undefined on a velocity build predating media reporting, which is
+   * why every caller treats the result as optional.
+   */
+  stop(): RecordingMediaInfo[] | undefined;
 }
 
 interface VelocityBindings {
+  VideoDecoder: new (path: string) => {
+    info(): { duration: number };
+  };
   listWebcamDevices?(): Array<{
+    id: string;
+    label: string;
+    isDefault: boolean;
+  }>;
+  startWebcamPreview?(deviceId?: string): VelocityStopper;
+  webcamPreviewFrame?(): {
+    jpeg: Buffer;
+    width: number;
+    height: number;
+    sequence: number;
+  } | null;
+  clearWebcamPreviewFrame?(): void;
+  listAudioCaptureDevices?(): Array<{
     id: string;
     label: string;
     isDefault: boolean;
@@ -44,26 +74,18 @@ interface VelocityBindings {
     width: number;
     height: number;
   }>;
-  startMonitorRecording(
-    outputPath: string,
-    bitrate: number,
-    includeSystemAudio?: boolean,
-  ): VelocityStopper;
-  startWindowRecording(
-    windowTitle: string,
-    outputPath: string,
-    bitrate: number,
-    includeSystemAudio?: boolean,
-  ): VelocityStopper;
-  startMonitorRecordingV2?: (options: {
+  startMonitorRecordingV2: (options: {
     outputPath: string;
     bitrate: number;
     includeSystemAudio?: boolean;
     targetFps?: number;
     enableWebcam?: boolean;
     webcamDeviceId?: string;
+    webcamSource?: 'local' | 'phone';
+    includeMicrophone?: boolean;
+    microphoneDeviceId?: string;
   }) => VelocityStopper;
-  startWindowRecordingV2?: (options: {
+  startWindowRecordingV2: (options: {
     windowTitle: string;
     outputPath: string;
     bitrate: number;
@@ -71,27 +93,28 @@ interface VelocityBindings {
     targetFps?: number;
     enableWebcam?: boolean;
     webcamDeviceId?: string;
+    webcamSource?: 'local' | 'phone';
+    includeMicrophone?: boolean;
+    microphoneDeviceId?: string;
   }) => VelocityStopper;
 }
 
 interface NativeClockOptions {
-  useSingularClock: boolean;
   targetFps: 30 | 60;
   enableWebcam: boolean;
   webcamDeviceId?: string;
+  /** Which camera the native side should open. Omitted means a local one. */
+  webcamSource?: 'local' | 'phone';
+  /** Capture the microphone natively, into the video's own audio track. */
+  includeMicrophone?: boolean;
+  /** Which microphone, as an id from `listAudioCaptureDevices`. */
+  microphoneDeviceId?: string;
 }
 
 interface NativeWebcamCapability {
   supported: boolean;
   selectedDeviceId?: string;
   reason?: string;
-}
-
-interface AuxStreamState {
-  streamId: string;
-  tempPath: string;
-  fd: number;
-  bytesWritten: number;
 }
 
 interface ActiveRecording {
@@ -106,7 +129,11 @@ interface ActiveRecording {
   startedAt: number;
   wallClockStartMs: number;
   stopper: VelocityStopper;
-  auxStreams: Record<string, AuxStreamState>;
+}
+
+interface ActiveWebcamPreview {
+  deviceId?: string;
+  stopper: VelocityStopper;
 }
 
 interface SourceCaptureBounds {
@@ -124,6 +151,17 @@ interface SourceMeta {
 }
 
 let activeRecording: ActiveRecording | null = null;
+let activeWebcamPreview: ActiveWebcamPreview | null = null;
+
+/**
+ * Finalize passes that are currently running, keyed by recording id.
+ *
+ * Finalizing is slow — waiting on the native capture to flush, then muxing
+ * desktop audio into the video — and `final_path` is only written to the
+ * database once it completes. Anything that needs a finished recording awaits
+ * the entry here instead of reading a half-written row.
+ */
+const finalizingRecordings = new Map<string, Promise<StopRecordingResult>>();
 let velocityBindingsCache: VelocityBindings | null = null;
 let sourceMetaById = new Map<string, SourceMeta>();
 
@@ -180,33 +218,133 @@ function getVelocityBindings(): VelocityBindings {
   throw new Error(`Velocity bindings not found. Tried: ${candidatePaths.join(', ')}`);
 }
 
+/** Every microphone the native recorder can open. Empty on a build without it. */
+export function listNativeAudioCaptureDevices(): Array<{
+  id: string;
+  label: string;
+  isDefault: boolean;
+}> {
+  try {
+    return getVelocityBindings().listAudioCaptureDevices?.() ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** Every webcam the native recorder can open. Empty on a build without it. */
+export function listNativeWebcamDevices(): Array<{
+  id: string;
+  label: string;
+  isDefault: boolean;
+}> {
+  try {
+    return getVelocityBindings().listWebcamDevices?.() ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export interface NativeWebcamPreviewStartResult {
+  success: boolean;
+  error?: string;
+}
+
+export interface NativeWebcamPreviewFrame {
+  jpeg: Buffer;
+  width: number;
+  height: number;
+  sequence: number;
+}
+
+/**
+ * Open the selected webcam for setup preview.
+ *
+ * Recording owns the camera once it starts and publishes into the same frame
+ * slot, so an active recording is already a successful preview owner.
+ */
+export function startNativeWebcamPreview(deviceId?: string): NativeWebcamPreviewStartResult {
+  if (activeRecording) {
+    return { success: true };
+  }
+
+  if (activeWebcamPreview && activeWebcamPreview.deviceId === deviceId) {
+    return { success: true };
+  }
+
+  stopNativeWebcamPreview();
+
+  try {
+    const velocity = getVelocityBindings();
+    if (typeof velocity.startWebcamPreview !== 'function') {
+      return {
+        success: false,
+        error: 'Native webcam preview is unavailable in this Velocity build.',
+      };
+    }
+
+    activeWebcamPreview = {
+      deviceId,
+      stopper: velocity.startWebcamPreview(deviceId),
+    };
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to start native webcam preview.',
+    };
+  }
+}
+
+/** Release only the setup preview owner; this never stops an active recording. */
+export function stopNativeWebcamPreview(): void {
+  const current = activeWebcamPreview;
+  activeWebcamPreview = null;
+
+  if (current) {
+    try {
+      current.stopper.stop();
+    } catch (error) {
+      console.warn('[RecorderService] Failed to stop native webcam preview:', error);
+    }
+  }
+
+  if (!activeRecording) {
+    try {
+      getVelocityBindings().clearWebcamPreviewFrame?.();
+    } catch {
+      // The preview is already stopped. A stale thumbnail is preferable to
+      // turning teardown into an application error on an older native build.
+    }
+  }
+}
+
+/** The newest small JPEG emitted by whichever native owner currently has the camera. */
+export function nativeWebcamPreviewFrame(): NativeWebcamPreviewFrame | null {
+  try {
+    return getVelocityBindings().webcamPreviewFrame?.() ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function startVelocityMonitorRecording(
   velocity: VelocityBindings,
   outputPath: string,
   bitrate: number,
   includeSystemAudio: boolean,
-  nativeClockOptions?: NativeClockOptions,
+  nativeClockOptions: NativeClockOptions,
 ): VelocityStopper {
-  if (
-    nativeClockOptions?.useSingularClock &&
-    typeof velocity.startMonitorRecordingV2 === 'function'
-  ) {
-    return velocity.startMonitorRecordingV2({
-      outputPath,
-      bitrate,
-      includeSystemAudio,
-      targetFps: nativeClockOptions.targetFps,
-      enableWebcam: nativeClockOptions.enableWebcam,
-      webcamDeviceId: nativeClockOptions.webcamDeviceId,
-    });
-  }
-
-  try {
-    return velocity.startMonitorRecording(outputPath, bitrate, includeSystemAudio);
-  } catch {
-    // Backward compatibility for older prebuilt binaries with the two-argument signature.
-    return velocity.startMonitorRecording(outputPath, bitrate);
-  }
+  return velocity.startMonitorRecordingV2({
+    outputPath,
+    bitrate,
+    includeSystemAudio,
+    targetFps: nativeClockOptions.targetFps,
+    enableWebcam: nativeClockOptions.enableWebcam,
+    webcamDeviceId: nativeClockOptions.webcamDeviceId,
+    webcamSource: nativeClockOptions.webcamSource,
+    includeMicrophone: nativeClockOptions.includeMicrophone,
+    microphoneDeviceId: nativeClockOptions.microphoneDeviceId,
+  });
 }
 
 function startVelocityWindowRecording(
@@ -215,37 +353,20 @@ function startVelocityWindowRecording(
   outputPath: string,
   bitrate: number,
   includeSystemAudio: boolean,
-  nativeClockOptions?: NativeClockOptions,
+  nativeClockOptions: NativeClockOptions,
 ): VelocityStopper {
-  if (
-    nativeClockOptions?.useSingularClock &&
-    typeof velocity.startWindowRecordingV2 === 'function'
-  ) {
-    return velocity.startWindowRecordingV2({
-      windowTitle,
-      outputPath,
-      bitrate,
-      includeSystemAudio,
-      targetFps: nativeClockOptions.targetFps,
-      enableWebcam: nativeClockOptions.enableWebcam,
-      webcamDeviceId: nativeClockOptions.webcamDeviceId,
-    });
-  }
-
-  try {
-    return velocity.startWindowRecording(windowTitle, outputPath, bitrate, includeSystemAudio);
-  } catch {
-    // Backward compatibility for older prebuilt binaries with the two-argument signature.
-    return velocity.startWindowRecording(windowTitle, outputPath, bitrate);
-  }
-}
-
-function shouldUseNativeSingularClock(config: RecordingConfig): boolean {
-  if (config.nativeCaptureMode === 'native-singular-clock') {
-    return true;
-  }
-
-  return process.env.RECSO_NATIVE_SINGULAR_CLOCK === '1';
+  return velocity.startWindowRecordingV2({
+    windowTitle,
+    outputPath,
+    bitrate,
+    includeSystemAudio,
+    targetFps: nativeClockOptions.targetFps,
+    enableWebcam: nativeClockOptions.enableWebcam,
+    webcamDeviceId: nativeClockOptions.webcamDeviceId,
+    webcamSource: nativeClockOptions.webcamSource,
+    includeMicrophone: nativeClockOptions.includeMicrophone,
+    microphoneDeviceId: nativeClockOptions.microphoneDeviceId,
+  });
 }
 
 function resolveNativeWebcamCapability(
@@ -477,44 +598,6 @@ function inferNativeCameraSidecarPath(videoPath: string): string {
   return path.join(parsed.dir, `${parsed.name}_camera${parsed.ext || '.mp4'}`);
 }
 
-function openAuxStream(
-  tempDir: string,
-  recordingId: string,
-  streamId: string,
-  ext: string,
-): AuxStreamState {
-  const tempPath = path.join(tempDir, `rec_aux_${recordingId}_${streamId}.${ext}`);
-  const fd = fs.openSync(tempPath, 'w');
-  return {
-    streamId,
-    tempPath,
-    fd,
-    bytesWritten: 0,
-  };
-}
-
-function closeAuxStreams(auxStreams: Record<string, AuxStreamState>): void {
-  Object.values(auxStreams).forEach((stream) => {
-    try {
-      fs.closeSync(stream.fd);
-    } catch {
-      // ignored
-    }
-  });
-}
-
-function cleanupAuxTempFiles(auxStreams: Record<string, AuxStreamState>): void {
-  Object.values(auxStreams).forEach((stream) => {
-    try {
-      if (fs.existsSync(stream.tempPath)) {
-        fs.unlinkSync(stream.tempPath);
-      }
-    } catch {
-      // ignored
-    }
-  });
-}
-
 const NATIVE_FINALIZE_POLL_MS = 250;
 const NATIVE_FINALIZE_STABLE_SAMPLES = 2;
 const NATIVE_FINALIZE_TIMEOUT_MS = 120_000;
@@ -523,25 +606,50 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Pick the screen capture out of what the recorder reported.
+ *
+ * A v2 recording with the webcam enabled reports two entries. Match on the
+ * output path rather than trusting order, and fall back to the role so an
+ * older build that only reports one still works.
+ */
+/**
+ * The recorder reports the temp path it wrote to; by the time anyone consumes
+ * this, the file has been moved into the recording folder.
+ */
+function mediaAtFinalPath(
+  media: RecordingMediaInfo | null,
+  finalPath: string,
+): RecordingMediaInfo | undefined {
+  if (!media) {
+    return undefined;
+  }
+  return { ...media, outputPath: finalPath };
+}
+
+function findScreenMedia(
+  reported: RecordingMediaInfo[] | undefined,
+  tempPath: string,
+): RecordingMediaInfo | null {
+  if (!reported?.length) {
+    return null;
+  }
+
+  const normalize = (value: string) => path.resolve(value).toLowerCase();
+  const wanted = normalize(tempPath);
+
+  return (
+    reported.find((info) => normalize(info.outputPath) === wanted) ??
+    reported.find((info) => info.role === 'screen') ??
+    null
+  );
+}
+
 async function hasReadableVideoTrack(filePath: string): Promise<boolean> {
-  const { ALL_FORMATS, FilePathSource, Input } = await import('mediabunny');
-
-  const input = new Input({
-    source: new FilePathSource(filePath),
-    formats: ALL_FORMATS,
-  });
-
   try {
-    const videoTrack = await input.getPrimaryVideoTrack();
-    if (!videoTrack) {
-      return false;
-    }
-
-    return (await videoTrack.computeDuration()) > 0;
+    return new (getVelocityBindings().VideoDecoder)(filePath).info().duration > 0;
   } catch {
     return false;
-  } finally {
-    input.dispose();
   }
 }
 
@@ -588,261 +696,20 @@ async function waitForNativeRecordingFile(filePath: string): Promise<boolean> {
 }
 
 /**
- * Reports whether a file carries *usable* audio.
- *
- * The presence of an audio track is not enough: windows-capture (the crate behind velocity) always
- * registers an audio stream on its encoder, even when audio capture is disabled, so every
- * video-only native recording contains an AAC track with zero samples. Treating that stub as real
- * audio would make the caller throw away the desktop-audio sidecar and ship a silent recording.
- */
-async function hasPrimaryAudioTrack(filePath: string): Promise<boolean> {
-  const { ALL_FORMATS, FilePathSource, Input } = await import('mediabunny');
-
-  const input = new Input({
-    source: new FilePathSource(filePath),
-    formats: ALL_FORMATS,
-  });
-
-  try {
-    const audioTrack = await input.getPrimaryAudioTrack();
-    if (!audioTrack) {
-      return false;
-    }
-
-    return (await audioTrack.computeDuration()) > 0;
-  } catch {
-    return false;
-  } finally {
-    input.dispose();
-  }
-}
-
-async function muxDesktopAudioIntoVideo(
-  videoPath: string,
-  audioPath: string,
-  fileExtension: 'mp4' | 'mkv',
-): Promise<boolean> {
-  const ext = `.${fileExtension}`;
-  const videoDir = path.dirname(videoPath);
-  const videoBaseName = path.basename(videoPath, ext);
-  const muxedOutputPath = path.join(videoDir, `${videoBaseName}_muxed${ext}`);
-
-  const {
-    ALL_FORMATS,
-    EncodedAudioPacketSource,
-    EncodedPacketSink,
-    EncodedVideoPacketSource,
-    FilePathSource,
-    FilePathTarget,
-    Input,
-    MkvOutputFormat,
-    Mp4OutputFormat,
-    Output,
-  } = await import('mediabunny');
-
-  const videoInput = new Input({
-    source: new FilePathSource(videoPath),
-    formats: ALL_FORMATS,
-  });
-
-  const audioInput = new Input({
-    source: new FilePathSource(audioPath),
-    formats: ALL_FORMATS,
-  });
-
-  let output: any = null;
-
-  try {
-    const videoTrack = await videoInput.getPrimaryVideoTrack();
-    const audioTrack = await audioInput.getPrimaryAudioTrack();
-
-    if (!videoTrack || !audioTrack || !videoTrack.codec || !audioTrack.codec) {
-      console.warn('[RecorderService] Unable to mux desktop audio: missing compatible tracks.');
-      return false;
-    }
-
-    const format =
-      fileExtension === 'mkv'
-        ? new MkvOutputFormat()
-        : new Mp4OutputFormat({ fastStart: 'in-memory' });
-
-    output = new Output({
-      format,
-      target: new FilePathTarget(muxedOutputPath),
-    });
-
-    const videoSource = new EncodedVideoPacketSource(videoTrack.codec);
-    output.addVideoTrack(videoSource);
-
-    const audioSource = new EncodedAudioPacketSource(audioTrack.codec);
-    output.addAudioTrack(audioSource);
-
-    const videoSink = new EncodedPacketSink(videoTrack);
-    const audioSink = new EncodedPacketSink(audioTrack);
-
-    const videoDecoderConfig = await videoTrack.getDecoderConfig();
-    const audioDecoderConfig = await audioTrack.getDecoderConfig();
-    const videoMeta = videoDecoderConfig ? { decoderConfig: videoDecoderConfig } : undefined;
-    const audioMeta = audioDecoderConfig ? { decoderConfig: audioDecoderConfig } : undefined;
-
-    const videoStartTimestamp = await videoTrack.getFirstTimestamp();
-    const audioStartTimestamp = await audioTrack.getFirstTimestamp();
-
-    // Base offset calculation from file timestamps. Mediabunny reports timestamps in seconds.
-    let audioTimestampOffset = videoStartTimestamp - audioStartTimestamp;
-
-    // Detect and compensate for audio initialization delay.
-    // The audio stream opens after native video capture is already running, but both are stopped
-    // together — so the device warm-up shows up as audio being shorter than the video, and the
-    // audio has to be pushed later by that difference to line up with the picture.
-    const videoDuration = await videoInput.computeDuration();
-    const audioDuration = await audioInput.computeDuration();
-
-    if (Number.isFinite(videoDuration) && Number.isFinite(audioDuration) && videoDuration > 0) {
-      const audioInitDelaySeconds = videoDuration - audioDuration;
-
-      // Typical audio device init is well under a second; anything larger is not a warm-up delay
-      // (e.g. a truncated sidecar) and is left uncorrected.
-      if (audioInitDelaySeconds > 0.05 && audioInitDelaySeconds <= 3) {
-        audioTimestampOffset += audioInitDelaySeconds;
-
-        console.log(
-          '[RecorderService] Audio sync fix: detected',
-          (audioInitDelaySeconds * 1000).toFixed(0),
-          'ms init delay, adjusting offset from',
-          (videoStartTimestamp - audioStartTimestamp).toFixed(3),
-          's to',
-          audioTimestampOffset.toFixed(3),
-          's',
-        );
-      }
-    }
-
-    await output.start();
-
-    let videoPacket = await videoSink.getFirstPacket();
-    let audioPacket = await audioSink.getFirstPacket();
-
-    let wroteVideo = false;
-    let wroteAudio = false;
-    let videoPacketCount = 0;
-    let audioPacketCount = 0;
-
-    while (videoPacket || audioPacket) {
-      const shouldWriteAudio =
-        audioPacket !== null &&
-        (videoPacket === null ||
-          audioPacket.timestamp + audioTimestampOffset <= videoPacket.timestamp);
-
-      if (shouldWriteAudio && audioPacket) {
-        const shiftedTimestamp = audioPacket.timestamp + audioTimestampOffset;
-        const shiftedEndTimestamp = shiftedTimestamp + audioPacket.duration;
-
-        if (shiftedEndTimestamp > 0) {
-          const shiftedPacket = audioPacket.clone({ timestamp: shiftedTimestamp });
-          await audioSource.add(shiftedPacket, wroteAudio ? undefined : audioMeta);
-          wroteAudio = true;
-          audioPacketCount += 1;
-        }
-
-        audioPacket = await audioSink.getNextPacket(audioPacket);
-        continue;
-      }
-
-      if (videoPacket) {
-        await videoSource.add(videoPacket, wroteVideo ? undefined : videoMeta);
-        wroteVideo = true;
-        videoPacketCount += 1;
-        videoPacket = await videoSink.getNextPacket(videoPacket);
-      }
-    }
-
-    if (!wroteVideo || !wroteAudio) {
-      console.warn(
-        `[RecorderService] Desktop audio mux aborted: no usable ${wroteVideo ? 'desktop audio' : 'video'} packets.`,
-      );
-      await output.cancel();
-      output = null;
-      if (fs.existsSync(muxedOutputPath)) {
-        fs.unlinkSync(muxedOutputPath);
-      }
-      return false;
-    }
-
-    console.log(
-      `[RecorderService] Desktop audio mux packet summary: video=${videoPacketCount}, audio=${audioPacketCount}, baseOffset=${(videoStartTimestamp - audioStartTimestamp).toFixed(3)}s, appliedOffset=${audioTimestampOffset.toFixed(3)}s`,
-    );
-
-    await output.finalize();
-    output = null;
-
-    if (!fs.existsSync(muxedOutputPath)) {
-      return false;
-    }
-
-    const validationInput = new Input({
-      source: new FilePathSource(muxedOutputPath),
-      formats: ALL_FORMATS,
-    });
-
-    try {
-      const validationVideoTrack = await validationInput.getPrimaryVideoTrack();
-      const validationAudioTrack = await validationInput.getPrimaryAudioTrack();
-      const validationDuration = await validationInput.computeDuration();
-
-      const validOutput =
-        Boolean(validationVideoTrack) &&
-        Boolean(validationAudioTrack) &&
-        Number.isFinite(validationDuration) &&
-        validationDuration > 0;
-
-      if (!validOutput) {
-        console.warn('[RecorderService] Desktop audio mux produced invalid output file.');
-        fs.unlinkSync(muxedOutputPath);
-        return false;
-      }
-    } finally {
-      validationInput.dispose();
-    }
-
-    fs.unlinkSync(videoPath);
-    fs.renameSync(muxedOutputPath, videoPath);
-    return true;
-  } catch (error) {
-    console.error('[RecorderService] Mediabunny desktop audio mux failed:', error);
-
-    try {
-      if (output && output.state !== 'finalized' && output.state !== 'canceled') {
-        await output.cancel();
-      }
-    } catch {
-      // ignored
-    }
-
-    if (fs.existsSync(muxedOutputPath)) {
-      fs.unlinkSync(muxedOutputPath);
-    }
-
-    return false;
-  } finally {
-    videoInput.dispose();
-    audioInput.dispose();
-  }
-}
-
-/**
  * Start a new recording session.
  *
- * Native screen/window video starts in velocity.
- * Camera/mic/system-audio streams are written by renderer via writeChunk.
+ * Velocity owns screen/window video, webcam, microphone and system audio.
+ * The renderer only selects native device ids and controls the session.
  */
 export function startRecording(config: RecordingConfig): StartRecordingResult {
   if (activeRecording) {
     return { success: false, error: 'A recording is already in progress' };
   }
 
+  // Release the setup owner before recording opens the same physical camera.
+  stopNativeWebcamPreview();
+
   let stopper: VelocityStopper | null = null;
-  const auxStreams: Record<string, AuxStreamState> = {};
 
   try {
     const velocity = getVelocityBindings();
@@ -854,15 +721,6 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
     }
     const fileExt: 'mp4' = 'mp4';
     const bitrate = config.options?.videoBitrate || 8_000_000;
-    const nativeSystemAudioEnabled =
-      process.platform === 'win32' && process.env.RECSO_ENABLE_NATIVE_SYSTEM_AUDIO === '1';
-    const useNativeSystemAudio = Boolean(config.recordSystemAudio) && nativeSystemAudioEnabled;
-
-    if (config.recordSystemAudio && !useNativeSystemAudio) {
-      console.log(
-        '[RecorderService] Native system audio disabled; using desktop audio sidecar + mux fallback.',
-      );
-    }
     const tempDir = ensureTempDir();
     const tempPath = path.join(tempDir, `rec_vel_${recordingId}.${fileExt}`);
 
@@ -871,34 +729,73 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
     const isScreenSource = selectedSourceMeta
       ? selectedSourceMeta.isScreen
       : selectedSourceId.startsWith('screen:') || selectedSourceId === 'screen';
-    const useNativeSingularClock = shouldUseNativeSingularClock(config);
+    const usePhoneCamera = config.cameraSource === 'phone';
+
+    // Checked before anything else, and outside the native-path branch below.
+    // A phone that is not sending has to fail here rather than fall through to
+    // a take with no camera track in it. A selected camera is part of the native
+    // recording contract, so there is no screen-only retry downstream.
+    const phoneProblem = phoneCameraProblem(config, phoneCameraState()?.live ?? false);
+    if (phoneProblem) {
+      return { success: false, error: phoneProblem };
+    }
+
+    // Audio goes into the video's own track when the native path is running, so
+    // there is no second clock to reconcile afterwards. See `planNativeAudio`.
+    const nativeAudio = planNativeAudio({
+      recordSystemAudio: config.recordSystemAudio,
+      recordMic: config.recordMic,
+      platform: process.platform,
+    });
+    const useNativeSystemAudio = nativeAudio.systemAudio;
+
+    if (config.recordSystemAudio && !useNativeSystemAudio) {
+      console.log(
+        '[RecorderService] Native system audio unavailable; using desktop audio sidecar + mux fallback.',
+      );
+    }
+
     const nativeClockOptions: NativeClockOptions = {
-      useSingularClock: useNativeSingularClock,
+      includeMicrophone: nativeAudio.microphone,
+      // Only meaningful to the native path: a browser device id would not
+      // resolve to a WASAPI endpoint.
+      microphoneDeviceId: config.nativeMicDeviceId,
       targetFps: config.targetFps === 30 ? 30 : 60,
       enableWebcam: Boolean(config.recordCamera),
-      webcamDeviceId: config.nativeWebcamDeviceId || config.cameraDeviceId,
+      webcamDeviceId: config.cameraDeviceId,
+      webcamSource: usePhoneCamera ? 'phone' : 'local',
     };
     let useNativeWebcam = false;
     let nativeWebcamDeviceId = nativeClockOptions.webcamDeviceId;
 
-    if (nativeClockOptions.useSingularClock && nativeClockOptions.enableWebcam) {
-      const webcamCapability = resolveNativeWebcamCapability(
-        velocity,
-        nativeClockOptions.webcamDeviceId,
-      );
-
-      if (webcamCapability.supported) {
+    if (nativeClockOptions.enableWebcam) {
+      if (usePhoneCamera) {
+        // Liveness was already checked above. Skipping the local capability
+        // probe on purpose: it asks what cameras this machine has, which says
+        // nothing about a phone and would reject one on a laptop with no
+        // built-in webcam.
         useNativeWebcam = true;
-        nativeWebcamDeviceId = webcamCapability.selectedDeviceId || nativeWebcamDeviceId;
-        if (webcamCapability.reason) {
-          console.warn(
-            `[RecorderService] Native webcam selection note: ${webcamCapability.reason}.`,
-          );
-        }
+        nativeWebcamDeviceId = undefined;
       } else {
-        console.warn(
-          `[RecorderService] Native webcam capture unavailable; falling back to renderer camera sidecar (${webcamCapability.reason || 'unknown reason'}).`,
+        const webcamCapability = resolveNativeWebcamCapability(
+          velocity,
+          nativeClockOptions.webcamDeviceId,
         );
+
+        if (webcamCapability.supported) {
+          useNativeWebcam = true;
+          nativeWebcamDeviceId = webcamCapability.selectedDeviceId || nativeWebcamDeviceId;
+          if (webcamCapability.reason) {
+            console.warn(
+              `[RecorderService] Native webcam selection note: ${webcamCapability.reason}.`,
+            );
+          }
+        } else {
+          return {
+            success: false,
+            error: `Native webcam capture is unavailable: ${webcamCapability.reason || 'unknown reason'}.`,
+          };
+        }
       }
     }
 
@@ -908,11 +805,14 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
       webcamDeviceId: useNativeWebcam ? nativeWebcamDeviceId : undefined,
     };
 
-    if (nativeClockOptions.useSingularClock) {
+    {
       console.log('[RecorderService] Native singular-clock capture mode enabled', {
         targetFps: nativeClockOptions.targetFps,
         webcamEnabled: useNativeWebcam,
         webcamRequested: nativeClockOptions.enableWebcam,
+        // Named because a phone that records nothing looks identical to one
+        // that was never selected, and this is the line that tells them apart.
+        webcamSource: nativeClockOptions.webcamSource,
       });
     }
 
@@ -934,21 +834,14 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
           effectiveNativeClockOptions,
         );
       } catch (error) {
-        if (!useNativeWebcam) {
+        const webcamProblem = useNativeWebcam
+          ? nativeWebcamStartProblem(error, usePhoneCamera)
+          : null;
+        if (!webcamProblem) {
           throw error;
         }
 
-        console.warn(
-          '[RecorderService] Native webcam start failed; falling back to renderer camera sidecar.',
-          error,
-        );
-
-        useNativeWebcam = false;
-        stopper = startVelocityMonitorRecording(velocity, tempPath, bitrate, useNativeSystemAudio, {
-          ...effectiveNativeClockOptions,
-          enableWebcam: false,
-          webcamDeviceId: undefined,
-        });
+        return { success: false, error: webcamProblem };
       }
     } else {
       const windowTitle = selectedSourceMeta?.name;
@@ -969,42 +862,15 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
           effectiveNativeClockOptions,
         );
       } catch (error) {
-        if (!useNativeWebcam) {
+        const webcamProblem = useNativeWebcam
+          ? nativeWebcamStartProblem(error, usePhoneCamera)
+          : null;
+        if (!webcamProblem) {
           throw error;
         }
 
-        console.warn(
-          '[RecorderService] Native webcam start failed; falling back to renderer camera sidecar.',
-          error,
-        );
-
-        useNativeWebcam = false;
-        stopper = startVelocityWindowRecording(
-          velocity,
-          windowTitle,
-          tempPath,
-          bitrate,
-          useNativeSystemAudio,
-          {
-            ...effectiveNativeClockOptions,
-            enableWebcam: false,
-            webcamDeviceId: undefined,
-          },
-        );
+        return { success: false, error: webcamProblem };
       }
-    }
-
-    if (config.recordCamera && !useNativeWebcam) {
-      auxStreams.camera = openAuxStream(tempDir, recordingId, 'camera', fileExt);
-    }
-
-    const shouldWriteStandaloneMic = config.recordMic && (!config.recordCamera || useNativeWebcam);
-    if (shouldWriteStandaloneMic) {
-      auxStreams.mic = openAuxStream(tempDir, recordingId, 'mic', fileExt);
-    }
-
-    if (config.recordSystemAudio) {
-      auxStreams['desktop-audio'] = openAuxStream(tempDir, recordingId, 'desktop-audio', fileExt);
     }
 
     createRecording({
@@ -1012,6 +878,8 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
       status: 'recording',
       tempPath,
       finalPath: null,
+      // Not knowable until the recorder stops and reports.
+      mediaInfo: null,
       outputDir: config.outputDir,
       fileName: config.fileName,
       sourceId: config.sourceId,
@@ -1031,20 +899,17 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
       startedAt: Date.now(),
       wallClockStartMs: Date.now(),
       stopper,
-      auxStreams,
     };
 
-    console.log(
-      '[RecorderService] Started hybrid recording:',
-      recordingId,
-      `aux=${Object.keys(auxStreams).join(',') || 'none'}`,
-    );
+    console.log('[RecorderService] Started recording:', recordingId);
 
     return {
       success: true,
       recordingId,
       tempPath,
       nativeWebcamHandled: useNativeWebcam,
+      nativeSystemAudioHandled: nativeAudio.systemAudio,
+      nativeMicrophoneHandled: nativeAudio.microphone,
     };
   } catch (error) {
     if (stopper) {
@@ -1055,12 +920,9 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
       }
     }
 
-    closeAuxStreams(auxStreams);
-    cleanupAuxTempFiles(auxStreams);
-
     const safeError = getSafeStartRecordingError(error, config.sourceId);
 
-    console.error('[RecorderService] Failed to start hybrid recording:', error);
+    console.error('[RecorderService] Failed to start native recording:', error);
     return {
       success: false,
       error: safeError,
@@ -1069,46 +931,13 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
 }
 
 /**
- * Legacy sequential append API (unused in hybrid flow).
- */
-export function appendChunk(recordingId: string, _chunk: Buffer): boolean {
-  return Boolean(activeRecording && activeRecording.id === recordingId);
-}
-
-/**
- * Write a chunk at a specific byte offset to an auxiliary stream.
- */
-export function writeChunk(
-  recordingId: string,
-  streamId: string,
-  position: number,
-  chunk: Buffer,
-): boolean {
-  if (!activeRecording || activeRecording.id !== recordingId) {
-    console.warn('[RecorderService] No active recording for writeChunk:', recordingId);
-    return false;
-  }
-
-  const stream = activeRecording.auxStreams[streamId];
-  if (!stream) {
-    console.warn('[RecorderService] Unknown aux stream for writeChunk:', streamId);
-    return false;
-  }
-
-  try {
-    fs.writeSync(stream.fd, chunk, 0, chunk.length, position);
-    stream.bytesWritten = Math.max(stream.bytesWritten, position + chunk.length);
-    return true;
-  } catch (error) {
-    console.error('[RecorderService] Failed to write aux stream chunk:', streamId, error);
-    return false;
-  }
-}
-
-/**
  * Stop active recording and persist outputs.
+ *
+ * Never call this directly — go through `stopRecording`, which makes the pass
+ * shareable so concurrent callers join it rather than starting a second one.
  */
-export async function stopRecording(recordingId: string): Promise<StopRecordingResult> {
+
+async function finalizeRecording(recordingId: string): Promise<StopRecordingResult> {
   if (!activeRecording || activeRecording.id !== recordingId) {
     return { success: false, error: 'No active recording with this ID' };
   }
@@ -1116,7 +945,29 @@ export async function stopRecording(recordingId: string): Promise<StopRecordingR
   const currentRecording = activeRecording;
 
   try {
-    currentRecording.stopper.stop();
+    // The recorder describes what it wrote. This is the only place that
+    // information exists without reopening the file, so hold on to it: it
+    // answers duration, geometry, frame count, real fps and whether the audio
+    // track carries anything, all of which used to cost a demux pass.
+    const reported = currentRecording.stopper.stop();
+    const screenMedia = findScreenMedia(reported, currentRecording.tempPath);
+
+    if (screenMedia) {
+      // `frames` counts what Windows Graphics Capture handed over, and it only
+      // hands over a frame when the screen changed -- so a low rate on a mostly
+      // still desktop is the API working, not the capture struggling. The file
+      // is written at `configuredFps` regardless, holding the last frame across
+      // the gaps. Saying "measured (asked for 60)" read like a shortfall and
+      // sent more than one person looking for a bug that was not there.
+      console.log(
+        `[RecorderService] Recorder reported ${screenMedia.frames} frames, ` +
+          `${screenMedia.width}x${screenMedia.height}, ` +
+          `${(screenMedia.durationMs / 1000).toFixed(2)}s, ` +
+          `${screenMedia.fps.toFixed(2)} fps delivered on change ` +
+          `(file is ${screenMedia.configuredFps}fps), ` +
+          `audio=${screenMedia.hasAudio}`,
+      );
+    }
 
     // Wait for the native capture loop to flush and close its output file before touching it.
     const finalizeStartedAtMs = Date.now();
@@ -1124,8 +975,6 @@ export async function stopRecording(recordingId: string): Promise<StopRecordingR
     console.log(
       `[RecorderService] Native capture finalize took ${Date.now() - finalizeStartedAtMs}ms (ready=${nativeFileReady})`,
     );
-
-    closeAuxStreams(currentRecording.auxStreams);
 
     if (!nativeFileReady) {
       // Leaving the temp file and the incomplete database row in place lets the recovery flow
@@ -1187,74 +1036,14 @@ export async function stopRecording(recordingId: string): Promise<StopRecordingR
       }
     }
 
-    const desktopAudioStream = currentRecording.auxStreams['desktop-audio'];
-
-    Object.values(currentRecording.auxStreams).forEach((stream) => {
-      if (stream.streamId === 'desktop-audio') {
-        return;
-      }
-
-      if (!fs.existsSync(stream.tempPath)) {
-        return;
-      }
-
-      const stats = fs.statSync(stream.tempPath);
-      if (stats.size === 0) {
-        fs.unlinkSync(stream.tempPath);
-        return;
-      }
-
-      const finalAuxPath = path.join(
-        recordingFolderPath,
-        `${folderName}_${stream.streamId}.${currentRecording.fileExtension}`,
-      );
-      fs.renameSync(stream.tempPath, finalAuxPath);
-    });
-
-    if (desktopAudioStream && fs.existsSync(desktopAudioStream.tempPath)) {
-      const desktopAudioStats = fs.statSync(desktopAudioStream.tempPath);
-      if (desktopAudioStats.size === 0) {
-        fs.unlinkSync(desktopAudioStream.tempPath);
-      } else {
-        const nativeAudioAvailable = currentRecording.nativeSystemAudioRequested
-          ? await hasPrimaryAudioTrack(finalScreenPath)
-          : false;
-
-        if (nativeAudioAvailable) {
-          fs.unlinkSync(desktopAudioStream.tempPath);
-          console.log('[RecorderService] Native system audio was embedded by velocity.');
-          completeRecording(recordingId, finalScreenPath);
-          activeRecording = null;
-          return { success: true, filePath: finalScreenPath };
-        }
-
-        const muxed = await muxDesktopAudioIntoVideo(
-          finalScreenPath,
-          desktopAudioStream.tempPath,
-          currentRecording.fileExtension,
-        );
-
-        if (muxed) {
-          fs.unlinkSync(desktopAudioStream.tempPath);
-          console.log('[RecorderService] Embedded desktop audio into main recording file.');
-        } else {
-          const finalDesktopAudioPath = path.join(
-            recordingFolderPath,
-            `${folderName}_${desktopAudioStream.streamId}.${currentRecording.fileExtension}`,
-          );
-          fs.renameSync(desktopAudioStream.tempPath, finalDesktopAudioPath);
-          console.warn(
-            '[RecorderService] Failed to embed desktop audio. Saved sidecar file instead:',
-            finalDesktopAudioPath,
-          );
-        }
-      }
-    }
-
-    completeRecording(recordingId, finalScreenPath);
+    completeRecording(recordingId, finalScreenPath, mediaAtFinalPath(screenMedia, finalScreenPath));
     activeRecording = null;
 
-    return { success: true, filePath: finalScreenPath };
+    return {
+      success: true,
+      filePath: finalScreenPath,
+      media: mediaAtFinalPath(screenMedia, finalScreenPath),
+    };
   } catch (error) {
     console.error('[RecorderService] Failed to stop recording:', error);
     return {
@@ -1265,14 +1054,64 @@ export async function stopRecording(recordingId: string): Promise<StopRecordingR
 }
 
 /**
- * Pause the active recording (state marker; render-side streams are paused in UI hook).
+ * Stop the active recording and wait for its outputs to be written.
+ *
+ * Calling this while a finalize is already running returns that same pass, so
+ * a second stop trigger resolves when the real work finishes instead of
+ * reporting a success the recording has not reached yet.
+ */
+export function stopRecording(recordingId: string): Promise<StopRecordingResult> {
+  const inFlight = finalizingRecordings.get(recordingId);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const pass = finalizeRecording(recordingId).finally(() => {
+    finalizingRecordings.delete(recordingId);
+  });
+
+  finalizingRecordings.set(recordingId, pass);
+  return pass;
+}
+
+/**
+ * Resolve once `recordingId` is no longer being finalized.
+ *
+ * Returns immediately when nothing is in flight — either the recording already
+ * finished or it was never being finalized here (say, after a restart). Callers
+ * still have to check what they actually need afterwards; this only guarantees
+ * they are not reading the database mid-write.
+ */
+export async function whenFinalized(recordingId: string): Promise<void> {
+  const inFlight = finalizingRecordings.get(recordingId);
+  if (!inFlight) {
+    return;
+  }
+
+  // Worth a line: reaching here means something asked for this recording while
+  // it was still being written, which is the race this registry exists to
+  // absorb. Silence would make it look like it never happened.
+  const waitStartedAtMs = Date.now();
+  console.log('[RecorderService] Waiting on in-flight finalize for:', recordingId);
+
+  // A failed finalize is still a finished one. Whatever went wrong is reported
+  // to whoever called stopRecording; here we only care that writing is over.
+  await inFlight.catch(() => undefined);
+
+  console.log(
+    `[RecorderService] Finalize wait for ${recordingId} took ${Date.now() - waitStartedAtMs}ms`,
+  );
+}
+
+/**
+ * Pause the active recording. Native capture currently has no pause operation.
  */
 export function pauseRecording(recordingId: string): boolean {
   if (!activeRecording || activeRecording.id !== recordingId) {
     return false;
   }
 
-  console.warn('[RecorderService] Pause is not supported for hybrid velocity capture; continuing.');
+  console.warn('[RecorderService] Pause is not supported for native velocity capture; continuing.');
   return false;
 }
 
@@ -1285,7 +1124,7 @@ export function resumeRecording(recordingId: string): boolean {
   }
 
   console.warn(
-    '[RecorderService] Resume is not supported for hybrid velocity capture; continuing.',
+    '[RecorderService] Resume is not supported for native velocity capture; continuing.',
   );
   return false;
 }
@@ -1312,11 +1151,6 @@ export function getState(): RecordingStateEvent {
   } catch {
     // ignore
   }
-
-  bytesWritten += Object.values(activeRecording.auxStreams).reduce(
-    (sum, stream) => sum + stream.bytesWritten,
-    0,
-  );
 
   return {
     state: activeRecording.state,

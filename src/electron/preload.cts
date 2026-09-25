@@ -1,5 +1,67 @@
 const electron = require('electron');
 import type { IpcRendererEvent } from 'electron';
+import type { engineBridge as EngineBridge } from './preload-engine.cjs';
+
+/**
+ * The GPU engine bridge, or a stub if it could not load.
+ *
+ * Kept in its own module because it installs the shared-texture receiver at
+ * load time and paints frames inside the isolated world -- see that file's
+ * header. Loaded defensively on purpose: it is an optional path, and an
+ * exception escaping it here would take the whole `window.electron` bridge
+ * down with it, breaking recording and editing along with the preview.
+ */
+function loadEngineBridge(): typeof EngineBridge {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const bridge = require('./preload-engine.cjs').engineBridge as typeof EngineBridge;
+    console.info('[engine-debug] engine bridge loaded');
+    return bridge;
+  } catch (error) {
+    const message = 'engine bridge failed to load: ' + (error as Error).message;
+    console.error('[engine-debug] engine bridge failed to load', error);
+    const unavailable = () => Promise.reject(new Error(message));
+    const invoke = electron.ipcRenderer.invoke.bind(electron.ipcRenderer);
+
+    return {
+      // A sandboxed preload cannot receive shared textures, so the preview is
+      // unavailable. Plain IPC still works: diagnostics and native export stay
+      // usable without giving the application renderer Node privileges.
+      status: async () => {
+        const status = await invoke('engine:status');
+        return { ...status, available: false, error: message };
+      },
+      diagnostics: () => invoke('engine:diagnostics'),
+      probe: (path: string) => invoke('engine:probe', path),
+      probeAudio: (path: string) => invoke('engine:probe-audio', path),
+      gpuMemory: () => invoke('engine:gpu-memory'),
+      bindFrameSink: () => false,
+      unbindFrameSink: () => {},
+      frameInfo: () => ({ frame: null, painted: 0 }),
+      inspectFrameSink: () => ({ error: message }),
+      player: {
+        open: unavailable,
+        close: unavailable,
+        warm: unavailable,
+        play: unavailable,
+        pause: unavailable,
+        setRate: unavailable,
+        seek: unavailable,
+        tick: unavailable,
+        setEffects: unavailable,
+        stats: unavailable,
+      },
+      export: {
+        start: (input: string, options: Record<string, unknown>) =>
+          invoke('engine:export:start', input, options),
+        progress: () => invoke('engine:export:progress'),
+        cancel: () => invoke('engine:export:cancel'),
+      },
+    } as unknown as typeof EngineBridge;
+  }
+}
+
+const engineBridge = loadEngineBridge();
 import type {
   DesktopSource,
   RecordingConfig,
@@ -90,6 +152,11 @@ console.debug = (...args: unknown[]): void => {
 };
 
 electron.contextBridge.exposeInMainWorld('electron', {
+  headlessExport: {
+    log: (message: string) => electron.ipcRenderer.send('headless-export:log', message),
+    complete: (result: { ok: boolean; outputPath?: string; error?: string }) =>
+      electron.ipcRenderer.send('headless-export:complete', result),
+  },
   // Window controls
   window: {
     close: () => electron.ipcRenderer.send('close-window'),
@@ -101,23 +168,56 @@ electron.contextBridge.exposeInMainWorld('electron', {
       createSubscription('window-maximized', callback),
   },
 
+  // A phone's camera, over the local network
+  phoneCamera: {
+    /** Start serving the pairing page. Idempotent: returns the running session. */
+    start: (): Promise<{ url: string; urls: string[]; port: number }> =>
+      electron.ipcRenderer.invoke('phone-camera:start'),
+    stop: (): Promise<void> => electron.ipcRenderer.invoke('phone-camera:stop'),
+    /** Null when nothing is paired. Poll it while the panel is open. */
+    state: (): Promise<{
+      url: string;
+      urls: string[];
+      port: number;
+      live: boolean;
+      framesReceived: number;
+      framesDropped: number;
+      width: number;
+      height: number;
+      lastError?: string;
+    } | null> => electron.ipcRenderer.invoke('phone-camera:state'),
+    /** The newest JPEG from the phone, for showing its picture on the desktop. */
+    frame: (): Promise<ArrayBuffer | null> => electron.ipcRenderer.invoke('phone-camera:frame'),
+  },
+
   // Recording
   recorder: {
     getSources: (): Promise<DesktopSource[]> => electron.ipcRenderer.invoke('recorder:get-sources'),
 
+    /** Microphones as the native recorder sees them, for when it is capturing. */
+    listAudioCaptureDevices: (): Promise<
+      Array<{ id: string; label: string; isDefault: boolean }>
+    > => electron.ipcRenderer.invoke('recorder:list-audio-capture-devices'),
+
+    /** Webcams as the native recorder sees them. */
+    listWebcamDevices: (): Promise<Array<{ id: string; label: string; isDefault: boolean }>> =>
+      electron.ipcRenderer.invoke('recorder:list-webcam-devices'),
+
+    /** Open/release the native setup-preview owner. Recording takes ownership at start. */
+    startWebcamPreview: (deviceId?: string): Promise<{ success: boolean; error?: string }> =>
+      electron.ipcRenderer.invoke('recorder:start-webcam-preview', deviceId),
+    stopWebcamPreview: (): Promise<void> =>
+      electron.ipcRenderer.invoke('recorder:stop-webcam-preview'),
+    /** Latest small JPEG from the native setup or recording camera owner. */
+    webcamPreviewFrame: (): Promise<{
+      jpeg: ArrayBuffer;
+      width: number;
+      height: number;
+      sequence: number;
+    } | null> => electron.ipcRenderer.invoke('recorder:webcam-preview-frame'),
+
     start: (config: RecordingConfig): Promise<StartRecordingResult> =>
       electron.ipcRenderer.invoke('recorder:start', config),
-
-    appendChunk: (recordingId: string, chunk: ArrayBuffer): Promise<boolean> =>
-      electron.ipcRenderer.invoke('recorder:append-chunk', recordingId, chunk),
-
-    writeChunk: (
-      recordingId: string,
-      streamId: string,
-      position: number,
-      chunk: ArrayBuffer,
-    ): Promise<boolean> =>
-      electron.ipcRenderer.invoke('recorder:write-chunk', recordingId, streamId, position, chunk),
 
     stop: (recordingId: string): Promise<StopRecordingResult> =>
       electron.ipcRenderer.invoke('recorder:stop', recordingId),
@@ -266,13 +366,12 @@ electron.contextBridge.exposeInMainWorld('electron', {
     projectExists: (recordingDir: string): Promise<boolean> =>
       electron.ipcRenderer.invoke('editor:project-exists', recordingDir),
 
-    getSpritesheetMeta: () => electron.ipcRenderer.invoke('editor:get-spritesheet-meta'),
+    /** Timeline thumbnail sheets by source. Usually empty right after open. */
+    getSpritesheets: () => electron.ipcRenderer.invoke('editor:get-spritesheets'),
 
-    getSpritesheetPath: (): Promise<string | null> =>
-      electron.ipcRenderer.invoke('editor:get-spritesheet-path'),
-
-    generateSpritesheet: (intervalMs?: number) =>
-      electron.ipcRenderer.invoke('editor:generate-spritesheet', intervalMs),
+    /** Fires when a sheet finishes generating. Returns an unsubscribe. */
+    onSpritesheetsUpdated: (callback: (sheets: unknown) => void) =>
+      createSubscription('editor:spritesheets-updated', callback),
 
     /** Get all cut regions */
     getCuts: () => electron.ipcRenderer.invoke('editor:get-cuts'),
@@ -488,6 +587,9 @@ electron.contextBridge.exposeInMainWorld('electron', {
       electron.ipcRenderer.invoke('exporter:resolve-output-path', config),
 
     /** Persist renderer-produced output bytes to disk */
+    fileSize: (filePath: string): Promise<number> =>
+      electron.ipcRenderer.invoke('exporter:file-size', filePath),
+
     writeOutputFile: (
       outputPath: string,
       data: ArrayBuffer,
@@ -532,6 +634,9 @@ electron.contextBridge.exposeInMainWorld('electron', {
     error: (...args: unknown[]): void => writeRendererLog('error', ...args),
     debug: (...args: unknown[]): void => writeRendererLog('debug', ...args),
   },
+
+  // GPU video engine. Optional: check `engine.status().available` first.
+  engine: engineBridge,
 });
 
 // Helper to create a subscription that returns an unsubscribe function

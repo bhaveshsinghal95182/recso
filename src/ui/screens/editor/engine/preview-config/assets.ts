@@ -1,25 +1,9 @@
 import type React from 'react';
 
-import type { BackgroundMode, Project } from '@/types';
+import type { Project } from '@/types';
 
+import { resolveBackgroundMode } from '../background-raster';
 import { toFileUrl } from '../export-pipeline/source-paths';
-
-function resolveBackgroundMode(project: Project | null): BackgroundMode {
-  if (project?.backgroundMode === 'color') return 'color';
-  if (project?.backgroundMode === 'pattern') return 'pattern';
-  if (project?.backgroundMode === 'image') return 'image';
-
-  if (project?.backgroundPath) {
-    return 'image';
-  }
-
-  const hasPattern = Boolean(project?.backgroundPattern && project.backgroundPattern.id !== 'none');
-  if (hasPattern) {
-    return 'pattern';
-  }
-
-  return 'color';
-}
 
 export interface PreviewAssetSources {
   videoSrc: string;

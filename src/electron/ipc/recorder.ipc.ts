@@ -25,18 +25,21 @@ export function setRecorderMainWindow(window: BrowserWindow): void {
     if (mainWindowRef === window) {
       mainWindowRef = null;
       stopStatePolling(false);
+      RecorderService.stopNativeWebcamPreview();
     }
   });
 
   window.webContents.on('render-process-gone', () => {
     if (mainWindowRef === window) {
       stopStatePolling(false);
+      RecorderService.stopNativeWebcamPreview();
     }
   });
 
   window.webContents.once('destroyed', () => {
     if (mainWindowRef === window) {
       stopStatePolling(false);
+      RecorderService.stopNativeWebcamPreview();
     }
   });
 }
@@ -46,6 +49,38 @@ export function setRecorderMainWindow(window: BrowserWindow): void {
  */
 export function registerRecorderHandlers(): void {
   // Get available sources (screens/windows)
+  // Microphones as WASAPI sees them. The browser's own list cannot be used for
+  // native capture: its ids are salted per origin and resolve to nothing here.
+  ipcMain.handle('recorder:list-audio-capture-devices', () =>
+    RecorderService.listNativeAudioCaptureDevices(),
+  );
+
+  // Webcams as Media Foundation sees them. These ids are the only ids the
+  // native recorder accepts; renderer-originated device ids are deliberately
+  // not part of this interface.
+  ipcMain.handle('recorder:list-webcam-devices', () => RecorderService.listNativeWebcamDevices());
+
+  ipcMain.handle('recorder:start-webcam-preview', (_event, deviceId?: string) =>
+    RecorderService.startNativeWebcamPreview(deviceId),
+  );
+  ipcMain.handle('recorder:stop-webcam-preview', () => RecorderService.stopNativeWebcamPreview());
+  ipcMain.handle('recorder:webcam-preview-frame', () => {
+    const frame = RecorderService.nativeWebcamPreviewFrame();
+    if (!frame) {
+      return null;
+    }
+
+    return {
+      jpeg: frame.jpeg.buffer.slice(
+        frame.jpeg.byteOffset,
+        frame.jpeg.byteOffset + frame.jpeg.byteLength,
+      ),
+      width: frame.width,
+      height: frame.height,
+      sequence: frame.sequence,
+    };
+  });
+
   ipcMain.handle('recorder:get-sources', async () => {
     return RecorderService.getSources();
   });
@@ -72,24 +107,6 @@ export function registerRecorderHandlers(): void {
   });
 
   // Append a video chunk (legacy sequential append)
-  ipcMain.handle(
-    'recorder:append-chunk',
-    async (_event, recordingId: string, chunk: ArrayBuffer) => {
-      const buffer = Buffer.from(chunk);
-      return RecorderService.appendChunk(recordingId, buffer);
-    },
-  );
-
-  // Write a chunk at a specific byte offset to a specific stream (mediabunny StreamTarget)
-  ipcMain.handle(
-    'recorder:write-chunk',
-    async (_event, recordingId: string, streamId: string, position: number, chunk: ArrayBuffer) => {
-      const buffer = Buffer.from(chunk);
-      return RecorderService.writeChunk(recordingId, streamId, position, buffer);
-    },
-  );
-
-  // Stop recording
   ipcMain.handle('recorder:stop', async (_event, recordingId: string) => {
     stopStatePolling();
 

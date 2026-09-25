@@ -51,7 +51,7 @@ function parseCursorHandleHex(cursorHandleHex: string | undefined): number | nul
   return null;
 }
 
-function isIBeamCursorHandle(cursorHandleHex: string | undefined): boolean {
+export function isIBeamCursorHandle(cursorHandleHex: string | undefined): boolean {
   const value = parseCursorHandleHex(cursorHandleHex);
   if (value === null) {
     return false;
@@ -258,7 +258,7 @@ function resolveCursorSample(
   };
 }
 
-function drawArrowCursor(
+export function drawArrowCursor(
   ctx: Canvas2DContext,
   x: number,
   y: number,
@@ -285,7 +285,12 @@ function drawArrowCursor(
   ctx.restore();
 }
 
-function drawCrosshairCursor(ctx: Canvas2DContext, x: number, y: number, size: number): void {
+export function drawCrosshairCursor(
+  ctx: Canvas2DContext,
+  x: number,
+  y: number,
+  size: number,
+): void {
   const radius = size * 0.5;
   const arm = radius * 1.5;
 
@@ -315,7 +320,7 @@ function drawCrosshairCursor(ctx: Canvas2DContext, x: number, y: number, size: n
   ctx.restore();
 }
 
-function drawIBeamCursor(ctx: Canvas2DContext, x: number, y: number, size: number): void {
+export function drawIBeamCursor(ctx: Canvas2DContext, x: number, y: number, size: number): void {
   const stemHeight = size * 1.9;
   const stemWidth = Math.max(2, size * 0.16);
   const capWidth = Math.max(stemWidth * 2.6, size * 0.64);

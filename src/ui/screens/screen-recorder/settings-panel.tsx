@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
+import type { NativeCaptureDevice } from '@/types';
 
 import { QualitySelector } from './quality-selector';
 
@@ -27,8 +28,8 @@ interface SettingsPanelProps {
   recordSystemAudio: boolean;
   cameraDeviceId: string | null;
   micDeviceId: string | null;
-  cameras: MediaDeviceInfo[];
-  microphones: MediaDeviceInfo[];
+  cameras: NativeCaptureDevice[];
+  microphones: NativeCaptureDevice[];
   onOutputDirChange: (path: string) => void;
   onFileNameChange: (name: string) => void;
   onVideoBitrateChange: (bitrate: number) => void;
@@ -149,7 +150,7 @@ export function SettingsPanel({
           </div>
           {recordMic && microphones.length > 0 && (
             <Select
-              value={micDeviceId || microphones[0]?.deviceId}
+              value={micDeviceId || microphones[0]?.id}
               onValueChange={(val) => val && onMicDeviceChange(val)}
             >
               <SelectTrigger className="h-8 w-50 text-xs shadow-s">
@@ -157,7 +158,7 @@ export function SettingsPanel({
               </SelectTrigger>
               <SelectContent className="w-full">
                 {microphones.map((mic) => (
-                  <SelectItem key={mic.deviceId} value={mic.deviceId}>
+                  <SelectItem key={mic.id} value={mic.id}>
                     {mic.label || 'Default Microphone'}
                   </SelectItem>
                 ))}
@@ -182,7 +183,7 @@ export function SettingsPanel({
           </div>
           {recordCamera && cameras.length > 0 && (
             <Select
-              value={cameraDeviceId || cameras[0]?.deviceId}
+              value={cameraDeviceId || cameras[0]?.id}
               onValueChange={(val) => val && onCameraDeviceChange(val)}
             >
               <SelectTrigger className="h-8 w-50 text-xs shadow-s">
@@ -190,7 +191,7 @@ export function SettingsPanel({
               </SelectTrigger>
               <SelectContent className="w-full">
                 {cameras.map((cam) => (
-                  <SelectItem key={cam.deviceId} value={cam.deviceId}>
+                  <SelectItem key={cam.id} value={cam.id}>
                     {cam.label || 'Default Camera'}
                   </SelectItem>
                 ))}

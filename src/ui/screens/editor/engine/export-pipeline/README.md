@@ -1,59 +1,22 @@
-# Engine Export Pipeline
+# Native Export Pipeline
 
-This folder contains the staged export pipeline used by `runEngineCanvasExport`.
+Exports have one path: the renderer resolves the project into an engine
+composition, then the native `velocity` exporter streams, composites, encodes,
+mixes audio, and writes the MP4.
 
-## Stage Boundaries
+## Boundaries
 
-1. Source resolution
-   - File: `source-paths.ts`
-   - Responsibility: normalize source paths (`toFileUrl`), resolve webcam source fallback path.
+1. `plan.ts` resolves output dimensions, layout, duration, and the composition.
+   It rejects any feature reported by `unsupportedFeatures`; there is no
+   best-effort export or hidden fallback.
+2. `config-to-engine.ts` is shared with preview and translates that composition
+   into native layout, background, crop, webcam, cursor, zoom, cut, and layer
+   options.
+3. `run-native-export.ts` discovers audio inputs, aligns legacy sidecars using
+   native audio metadata, starts the export through IPC, and reports progress.
+4. `export.service.ts` normalises structured-clone values at the process
+   boundary and creates `velocity.VideoExporter`.
 
-2. Output + encoding settings
-   - File: `settings.ts`
-   - Responsibility: output dimensions and bitrate policy from export config.
-
-3. Layout resolution
-   - File: `layout-resolver.ts`
-   - Responsibility: compositor layout lookups with deterministic fallback layout math.
-
-4. Background precomposition
-   - File: `background-layer.ts`
-   - Responsibility: build one static background layer (color/pattern/image) before frame processing.
-
-5. Composition/effects mapping
-   - File: `composition-config.ts`
-   - Responsibility: map project state into `CompositionConfig` used by `CompositionEngine`.
-
-6. Webcam frame source prep
-   - File: `webcam-source.ts`
-   - Responsibility: decode webcam frames in timestamp order and expose a frame source.
-
-7. Video/audio conversion
-   - File: `conversion.ts`
-   - Responsibility: drive Mediabunny conversion, apply timeline cuts and render each frame.
-
-8. Webcam audio remux/mix
-   - File: `webcam-audio.ts`
-   - Responsibility: map webcam audio through cut timeline and merge into exported output.
-
-9. Orchestration
-   - File: `run-engine-canvas-export.ts`
-   - Responsibility: wire all stages, cancellation, and progress reporting.
-
-## Effect Order (Per Video Sample)
-
-1. Skip sample if source timestamp is inside a cut region.
-2. Map source timestamp to composition timestamp (cut-aware timeline).
-3. Start frame with precomposed background layer (if present).
-4. Sync webcam frame source to source timestamp.
-5. Render composition frame through `CompositionEngine`.
-   - Video placement/layout
-   - Zoom regions / legacy zoom fallback
-   - Cursor effects (style, click animation, motion blur)
-   - Webcam overlay (layout, opacity, border radius, border, shadows)
-
-## Preview vs Export Concerns
-
-- Preview mapping remains in `preview-config-mapper.ts`.
-- Export mapping is isolated in this folder.
-- Shared defaults/path normalization are reused by preview and export so behavior stays aligned.
+The source recording and output never cross into renderer memory. Background
+and cursor bitmaps are the only pixel buffers sent through IPC, and both are
+bounded composition assets.

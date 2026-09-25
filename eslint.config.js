@@ -7,7 +7,10 @@ export default [
   // Global ignores
   {
     ignores: [
+      '.claude',
       'dist',
+      // Matches .gitignore: electron-builder drops outputs like dist-appx-debug.
+      'dist-*',
       'build',
       'out',
       'coverage',
@@ -28,6 +31,9 @@ export default [
       parserOptions: {
         ecmaVersion: 'latest',
         sourceType: 'module',
+        // Type-aware linting — required by switch-exhaustiveness-check below.
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
       },
     },
     plugins: {
@@ -38,6 +44,14 @@ export default [
     rules: {
       // ✅ Prettier runs as a lint rule
       'prettier/prettier': 'error',
+
+      // ✅ Discriminated unions stay exhaustive: add a variant and every switch
+      // that fails to handle it becomes a lint error. This is the guarantee
+      // Rust's `match` gives for free; TypeScript needs it turned on.
+      '@typescript-eslint/switch-exhaustiveness-check': [
+        'error',
+        { considerDefaultExhaustiveForUnions: true },
+      ],
 
       // ✅ TS hygiene
       '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],

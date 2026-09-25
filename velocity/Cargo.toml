@@ -14,17 +14,39 @@ image = { version = "0.25", default-features = false, features = [
   "jpeg",
   "png",
 ] }
-napi = "3.0.0"
+napi = { version = "3.0.0", features = ["napi6"] }
 napi-derive = "3.0.0"
 nokhwa = { version = "0.10", features = ["input-msmf"] }
+rcgen = { version = "0.14.10", default-features = false, features = [
+  "pem",
+  "ring",
+] }
 serde_json = "1.0"
+time = { version = "0.3.55", default-features = false, features = ["std"] }
 tokio = { version = "1.49.0", features = ["rt", "macros"] }
 wasapi = "0.23.0"
 windows = { version = "0.62.2", features = [
+  # capture / cursor / window
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
   "Win32_UI_WindowsAndMessaging",
   "Win32_Graphics_Dwm",
+  # engine: D3D11 device, shared textures, shader compilation
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D_Fxc",
+  "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common",
+  # engine: Media Foundation decode / encode
+  "Win32_Media_MediaFoundation",
+  "Win32_System_Com",
+  "Win32_System_Performance",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_Variant",
+  "Win32_Security",
+  # capture: asking Windows to drop the yellow capture border
+  "Graphics_Capture",
+  "Security_Authorization_AppCapabilityAccess",
 ] }
 windows-capture = "2.0.0"
 

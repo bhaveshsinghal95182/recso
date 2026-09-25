@@ -8,7 +8,7 @@
  * - Spritesheet metadata access
  */
 
-import { dialog, ipcMain } from 'electron';
+import { type BrowserWindow, dialog, ipcMain } from 'electron';
 
 import * as editorService from '../services/editor.service.js';
 import { mouseTrackerService } from '../services/mouse-tracker.service.js';
@@ -25,6 +25,46 @@ import type {
   ZoomSource,
 } from '../types/project.types.js';
 import type { ZoomRegion } from '../types/zoom.types.js';
+
+let mainWindowRef: BrowserWindow | null = null;
+let unsubscribeSpritesheets: (() => void) | null = null;
+
+/**
+ * Give the editor a window to push spritesheet updates to.
+ *
+ * Sheets finish long after the IPC handlers are registered -- a decode pass
+ * behind an already-open editor -- so there has to be a push channel as well
+ * as the pull one. The service raises the event; this forwards it.
+ */
+export function setEditorMainWindow(window: BrowserWindow): void {
+  mainWindowRef = window;
+
+  unsubscribeSpritesheets?.();
+  unsubscribeSpritesheets = editorService.onSpritesheetsUpdated((sheets) => {
+    if (!mainWindowRef || mainWindowRef.isDestroyed()) {
+      return;
+    }
+
+    const webContents = mainWindowRef.webContents;
+    if (webContents.isDestroyed() || webContents.isCrashed()) {
+      return;
+    }
+
+    try {
+      webContents.send('editor:spritesheets-updated', sheets);
+    } catch (error) {
+      console.warn('[EditorIPC] Failed to push spritesheets:', error);
+    }
+  });
+
+  window.once('closed', () => {
+    if (mainWindowRef === window) {
+      mainWindowRef = null;
+      unsubscribeSpritesheets?.();
+      unsubscribeSpritesheets = null;
+    }
+  });
+}
 
 /**
  * Register all editor IPC handlers
@@ -142,36 +182,13 @@ export function registerEditorHandlers(): void {
     return projectStorage.projectExists(recordingDir);
   });
 
-  // Get spritesheet metadata
-  ipcMain.handle('editor:get-spritesheet-meta', async () => {
-    const project = editorService.getActiveProject();
-    return project?.spritesheetMeta ?? null;
-  });
-
-  // Get spritesheet image path
-  ipcMain.handle('editor:get-spritesheet-path', async () => {
-    const project = editorService.getActiveProject();
-    if (!project) return null;
-    return projectStorage.getSpritesheetImagePath(project.projectFolderPath);
-  });
-
-  // Generate spritesheet (stub - requires FFmpeg)
-  ipcMain.handle('editor:generate-spritesheet', async (_event, intervalMs: number = 1000) => {
-    const project = editorService.getActiveProject();
-    if (!project) return null;
-
-    const meta = await projectStorage.generateSpritesheet(
-      project.rawVideoPath,
-      project.projectFolderPath,
-      intervalMs,
-    );
-
-    // Update project with new spritesheet meta
-    if (meta) {
-      // TODO: Update project.spritesheetMeta and save
-    }
-
-    return meta;
+  // The active project's timeline thumbnail sheets, keyed by source.
+  //
+  // Returns whatever exists right now, which on a freshly opened project is
+  // usually nothing -- generation runs behind the editor and announces itself
+  // on 'editor:spritesheets-updated'. Callers subscribe as well as ask.
+  ipcMain.handle('editor:get-spritesheets', async () => {
+    return editorService.getSpritesheets();
   });
 
   // Get all cut regions
