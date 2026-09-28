@@ -906,6 +906,19 @@ export interface SharedTextureInfo {
   pixelFormat: string
   /** Microseconds, surfaced on the resulting `VideoFrame`. */
   timestamp: number
+  /**
+   * Linux only: the frame as a single-plane DMA-BUF, for Electron's
+   * `nativePixmap` import. `handle` is unused there. Absent on Windows.
+   */
+  dmabufFd?: number
+  dmabufStride?: number
+  dmabufOffset?: number
+  dmabufSize?: number
+  /**
+   * The GBM format modifier, as a decimal string: it is a u64, which a JS
+   * number cannot hold exactly.
+   */
+  dmabufModifier?: string
 }
 
 /**

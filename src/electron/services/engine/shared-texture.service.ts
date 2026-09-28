@@ -3,6 +3,7 @@ import { sharedTexture } from 'electron';
 import type { WebFrameMain } from 'electron';
 
 import type { SharedTextureInfo } from '../../types/engine.types.js';
+import { textureHandle } from './texture-handle.js';
 
 /**
  * Electron wants the NT handle as bytes, but a texture pool only has a handful
@@ -64,7 +65,7 @@ export async function sendTextureToFrame(
 ): Promise<void> {
   const imported = sharedTexture.importSharedTexture({
     textureInfo: {
-      handle: { ntHandle: handleBuffer(info.handle) },
+      handle: textureHandle(info, handleBuffer),
       codedSize: { width: info.width, height: info.height },
       // Decoders pad to macroblock alignment, so the visible area is often
       // smaller than the allocation. Getting this wrong shows up as a green

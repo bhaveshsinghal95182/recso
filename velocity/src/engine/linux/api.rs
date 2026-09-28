@@ -13,8 +13,11 @@ pub fn engine_version() -> String {
   format!("{} velocity-linux-software", env!("CARGO_PKG_VERSION"))
 }
 
-/// Shape retained for callers that also run on Windows; Linux returns no texture.
+/// The same shape as on Windows, so the typings are identical. On Linux a
+/// frame travels as a single-plane DMA-BUF: `handle` is unused and the
+/// `dmabuf_*` fields describe it for Electron's `nativePixmap` import.
 #[napi(object)]
+#[derive(Default)]
 pub struct SharedTextureInfo {
   pub handle: f64,
   pub width: u32,
@@ -23,6 +26,12 @@ pub struct SharedTextureInfo {
   pub visible_height: u32,
   pub pixel_format: String,
   pub timestamp: f64,
+  pub dmabuf_fd: Option<i32>,
+  pub dmabuf_stride: Option<u32>,
+  pub dmabuf_offset: Option<u32>,
+  pub dmabuf_size: Option<u32>,
+  /// The GBM format modifier as a decimal string; a u64 does not fit a JS number.
+  pub dmabuf_modifier: Option<String>,
 }
 
 #[napi(object)]

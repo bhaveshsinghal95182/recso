@@ -24,6 +24,7 @@ pub fn engine_version() -> String {
 /// the process that created it -- which is the Electron main process, because
 /// that is where this addon is loaded.
 #[napi(object)]
+#[derive(Default)]
 pub struct SharedTextureInfo {
   /// Raw NT HANDLE as a number.
   ///
@@ -43,6 +44,15 @@ pub struct SharedTextureInfo {
   pub pixel_format: String,
   /// Microseconds, surfaced on the resulting `VideoFrame`.
   pub timestamp: f64,
+  /// Linux only: the frame as a single-plane DMA-BUF, for Electron's
+  /// `nativePixmap` import. `handle` is unused there. Absent on Windows.
+  pub dmabuf_fd: Option<i32>,
+  pub dmabuf_stride: Option<u32>,
+  pub dmabuf_offset: Option<u32>,
+  pub dmabuf_size: Option<u32>,
+  /// The GBM format modifier, as a decimal string: it is a u64, which a JS
+  /// number cannot hold exactly.
+  pub dmabuf_modifier: Option<String>,
 }
 
 #[cfg(windows)]
@@ -61,6 +71,7 @@ impl SharedTextureInfo {
       visible_height: tex.height,
       pixel_format: tex.pixel_format_name().to_string(),
       timestamp: timestamp_micros,
+      ..Default::default()
     }
   }
 }
@@ -217,6 +228,7 @@ impl VideoDecoder {
         visible_height: self.inner.display_height,
         pixel_format: self.inner.target.pixel_format_name().to_string(),
         timestamp: timestamp_micros,
+        ..Default::default()
       })
     };
 
@@ -518,6 +530,7 @@ impl Pipeline {
         visible_height: self.decoder.display_height,
         pixel_format: self.decoder.target.pixel_format_name().to_string(),
         timestamp: frame.timestamp_100ns as f64 / 10.0,
+        ..Default::default()
       })
     } else {
       None
@@ -1099,6 +1112,7 @@ impl VideoPlayer {
         visible_height: s.height,
         pixel_format: "bgra".to_string(),
         timestamp: 0.0,
+        ..Default::default()
       })
       .collect()
   }
@@ -1151,6 +1165,7 @@ impl VideoPlayer {
         // bgra handles.
         pixel_format: "bgra".to_string(),
         timestamp: f.pts_ms * 1000.0,
+        ..Default::default()
       },
     })
   }
