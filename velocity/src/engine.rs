@@ -35,6 +35,8 @@ mod encode;
 #[cfg(windows)]
 mod exporter;
 mod layout;
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(windows)]
 mod mf;
 mod pattern;
