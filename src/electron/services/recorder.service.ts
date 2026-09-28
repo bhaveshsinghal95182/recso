@@ -23,10 +23,12 @@ import type {
   StartRecordingResult,
   StopRecordingResult,
 } from '../types/recorder.types.js';
+import { moveFileSync } from '../utils/move-file.js';
 import { completeRecording, createRecording, getRecording } from './database.service.js';
 import { phoneCameraState } from './phone-camera.service.js';
 import { initProjectFolder } from './project-storage.service.js';
 import {
+  mp4HasMovieBox,
   nativeWebcamStartProblem,
   phoneCameraProblem,
   planNativeAudio,
@@ -685,9 +687,29 @@ function findScreenMedia(
 
 async function hasReadableVideoTrack(filePath: string): Promise<boolean> {
   try {
-    return new (getVelocityBindings().VideoDecoder)(filePath).info().duration > 0;
+    const { VideoDecoder } = getVelocityBindings();
+    if (typeof VideoDecoder !== 'function') {
+      // No engine on this platform yet (Linux): settle for the file being a
+      // finalised MP4 rather than one the decoder has opened.
+      return fileHasMovieBox(filePath);
+    }
+    return new VideoDecoder(filePath).info().duration > 0;
   } catch {
     return false;
+  }
+}
+
+function fileHasMovieBox(filePath: string): boolean {
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const size = fs.fstatSync(fd).size;
+    return mp4HasMovieBox((offset, length) => {
+      const buffer = Buffer.alloc(length);
+      const read = fs.readSync(fd, buffer, 0, length, offset);
+      return read > 0 ? buffer.subarray(0, read) : null;
+    }, size);
+  } finally {
+    fs.closeSync(fd);
   }
 }
 
@@ -1055,7 +1077,7 @@ async function finalizeRecording(recordingId: string): Promise<StopRecordingResu
     const nativeCameraTempPath = inferNativeCameraSidecarPath(currentRecording.tempPath);
     const nativeCameraFinalPath = inferNativeCameraSidecarPath(finalScreenPath);
 
-    fs.renameSync(currentRecording.tempPath, finalScreenPath);
+    moveFileSync(currentRecording.tempPath, finalScreenPath);
 
     if (fs.existsSync(nativeCameraTempPath)) {
       try {
@@ -1064,7 +1086,7 @@ async function finalizeRecording(recordingId: string): Promise<StopRecordingResu
           if (fs.existsSync(nativeCameraFinalPath)) {
             fs.unlinkSync(nativeCameraFinalPath);
           }
-          fs.renameSync(nativeCameraTempPath, nativeCameraFinalPath);
+          moveFileSync(nativeCameraTempPath, nativeCameraFinalPath);
           console.log('[RecorderService] Saved native webcam sidecar:', nativeCameraFinalPath);
         } else {
           fs.unlinkSync(nativeCameraTempPath);

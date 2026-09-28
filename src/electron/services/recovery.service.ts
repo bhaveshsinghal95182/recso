@@ -13,6 +13,7 @@
 
 import fs from 'fs';
 
+import { moveFileSync } from '../utils/move-file.js';
 import {
   deleteRecording,
   getOrphanedRecordings,
@@ -99,7 +100,7 @@ export function recoverRecording(
     }
 
     // Move temp file to output location
-    fs.renameSync(recording.tempPath, outputPath);
+    moveFileSync(recording.tempPath, outputPath);
 
     // Update database
     updateRecordingStatus(id, 'completed');

@@ -94,3 +94,51 @@ export function planNativeAudio(config: NativeAudioInput): NativeAudioPlan {
     microphone: available && Boolean(config.recordMic),
   };
 }
+
+/**
+ * Whether an MP4 has its top-level `moov` box: the movie header a muxer
+ * writes last, so a file that has one has been finalised.
+ *
+ * The engine-free way to tell a finished recording from one still being
+ * written, for platforms without the engine's decoder. `readAt` returns the
+ * bytes at an offset, or null past the end; only box headers are read, so
+ * checking a long recording costs a few small reads.
+ */
+export function mp4HasMovieBox(
+  readAt: (offset: number, length: number) => Uint8Array | null,
+  fileSize: number,
+): boolean {
+  let offset = 0;
+
+  while (offset + 8 <= fileSize) {
+    const header = readAt(offset, 16);
+    if (!header || header.length < 8) {
+      return false;
+    }
+
+    const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
+    const type = String.fromCharCode(header[4], header[5], header[6], header[7]);
+    if (type === 'moov') {
+      return true;
+    }
+
+    let size = view.getUint32(0);
+    if (size === 1) {
+      // A 64-bit size follows the type, as a large `mdat` uses.
+      if (header.length < 16) {
+        return false;
+      }
+      size = Number(view.getBigUint64(8));
+    } else if (size === 0) {
+      // "Extends to the end of the file": nothing can follow it.
+      return false;
+    }
+
+    if (size < 8) {
+      return false;
+    }
+    offset += size;
+  }
+
+  return false;
+}
