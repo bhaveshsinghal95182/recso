@@ -43,6 +43,7 @@ mod player;
 #[cfg(windows)]
 mod render;
 mod scene;
+mod sheet;
 #[cfg(windows)]
 mod spritesheet;
 pub mod zoom;
