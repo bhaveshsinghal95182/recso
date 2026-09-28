@@ -3,6 +3,8 @@ mod borderless;
 #[cfg(windows)]
 mod desktop_capture;
 mod devices;
+#[cfg(target_os = "linux")]
+mod linux;
 mod phone_camera;
 mod pixels;
 mod preview;
@@ -36,7 +38,9 @@ pub use stopper::Stopper;
 // entry points below and the JavaScript API are identical on every platform.
 #[cfg(windows)]
 use desktop_capture as screen_backend;
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+use linux::screen as screen_backend;
+#[cfg(not(any(windows, target_os = "linux")))]
 use unsupported as screen_backend;
 #[cfg(windows)]
 use webcam_capture as camera_backend;
@@ -48,7 +52,10 @@ pub use camera_backend::{list_webcam_devices, start_webcam_preview};
 pub use borderless::borderless_capture_allowed;
 #[cfg(not(windows))]
 pub use unsupported::borderless_capture_allowed;
-pub use screen_backend::list_audio_capture_devices;
+#[cfg(windows)]
+pub use desktop_capture::list_audio_capture_devices;
+#[cfg(not(windows))]
+pub use unsupported::list_audio_capture_devices;
 
 /// Which camera a recording is using.
 pub(crate) enum WebcamSource {
