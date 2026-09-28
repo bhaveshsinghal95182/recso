@@ -29,7 +29,7 @@ velocity was written directly against Windows APIs. Linux needs a replacement fo
 - [x] **M0: the JS side works on Linux.** `mise.toml` pins Node 24, because better-sqlite3 12.6 doesn't compile on Node 26. `pnpm install`, `pnpm typecheck`, `pnpm transpile:electron` and `pnpm test` (147 tests) all pass.
 - [x] **M1: velocity compiles on Linux with the same JS API.** Windows crates move to `[target.'cfg(windows)'.dependencies]`. Every `#[napi]` export stays on Linux: unsupported ones return a clear "not supported on Linux yet" error (or an empty list, where a list is the natural answer), so `index.d.ts` doesn't change. Pure logic (cuts, zoom, pattern, clocks, PCM mixing, geometry) is compiled and tested on Linux too.
 - [x] **M2: the Electron app launches on Linux.** `pnpm dev` opens, the recorder reports that native capture is unavailable instead of crashing, and `recorder-capture-plan.ts` knows about `linux`.
-- [ ] **M3: capture on Linux.** Portal screencast into PipeWire, encoded to MP4. Then cursor metadata, then audio, then webcam.
+- [ ] **M3: capture on Linux.** Done: screen or window through the portal, system audio and microphone (PipeWire → Opus), cursor position (Hyprland), and saving into a project that opens in the editor. Left: the webcam (V4L2), a streaming MP4 writer (muxide holds the whole recording in RAM), and a person clicking the real portal picker once (every unattended test used `VELOCITY_TEST_PIPEWIRE_NODE`).
 - [ ] **M4: engine on Linux.** Decode, the wgpu composite chain, preview delivery, export.
 - [ ] **M5: packaging.** `pnpm dist:linux` builds an AppImage that bundles the Linux `.node`.
 
@@ -52,6 +52,8 @@ velocity was written directly against Windows APIs. Linux needs a replacement fo
 ## Log
 
 Newest first. Record decisions and open questions for the user here.
+
+- 2026-09-29: Recording works in the real app on this machine, driven over CDP with a PipeWire test node standing in for the portal. Record → stop → the file is finalised → a project in `~/Videos` → the editor opens (its preview says the GPU engine is unavailable, which is M4). Files carry H.264 plus Opus at matching durations, and the microphone picker lists the PipeWire sources. Fixed along the way: openh264 dropped about 60% of frames (rate control without timestamps); the stop waited two minutes for the engine's decoder (now it checks for the `moov` box); and moving the file out of `/tmp` failed across filesystems (EXDEV). **Please try one real recording:** the portal picker needs a click, which I couldn't do unattended.
 
 - **Decision for the user: H.264 patents.** openh264 is BSD-licensed, but H.264 is patent-encumbered. Cisco pays the royalties only for its own prebuilt binary when users download it from Cisco. Development builds compile openh264 from source (the crate's `source` feature). For shipping, the usual approach (Firefox's) is the crate's `libloading` feature, which downloads Cisco's binary on first use. The alternative is VA-API/NVENC hardware encoding, where the GPU vendor covers the codec. Which one should the product use?
 
