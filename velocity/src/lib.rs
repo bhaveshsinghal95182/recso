@@ -1,10 +1,22 @@
 #![deny(clippy::all)]
+// Shared capture and layout code is written for every backend but, until the
+// Linux backends land, only the Windows one uses all of it. The Windows build
+// still reports genuine dead code.
+#![cfg_attr(not(windows), allow(dead_code))]
 
 pub mod capture;
+#[cfg(windows)]
+pub mod cursor;
+#[cfg(not(windows))]
+#[path = "cursor_unsupported.rs"]
 pub mod cursor;
 pub mod engine;
 pub mod singular_clock;
 pub mod tls;
+#[cfg(windows)]
+pub mod window;
+#[cfg(not(windows))]
+#[path = "window_unsupported.rs"]
 pub mod window;
 
 /// Combination matrices for the frame clock: the pacing decisions swept across

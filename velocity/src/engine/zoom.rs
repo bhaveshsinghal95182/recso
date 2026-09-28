@@ -16,7 +16,7 @@
 //! cursor are in zoomed space; the background and the webcam are not, because a
 //! zoom is about the *recording* and the camera box is furniture on top of it.
 
-use crate::engine::composite::Rect;
+use crate::engine::layout::Rect;
 
 /// A focal point the zoom pans to while a region is held.
 ///

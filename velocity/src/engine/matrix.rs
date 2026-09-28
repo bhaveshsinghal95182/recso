@@ -9,12 +9,12 @@
 //! rounding branch that only misbehaves for tall sources at small box sizes is
 //! not something a hand-picked example finds.
 
-use crate::engine::composite::{
+use crate::engine::layout::{
   fit_source, smear_geometry, CursorSample, CursorTrack, FitMode, HiddenSpans, OverlayShape, Rect,
   Shadow, UvRect, WebcamLayout,
 };
 use crate::engine::cuts::{Cut, CutTrack};
-use crate::engine::render::{parse_layer_order, Layer, SourceCrop, VideoLayout};
+use crate::engine::scene::{parse_layer_order, Layer, SourceCrop, VideoLayout};
 use crate::engine::zoom::{
   lerp_rect, FocalKeyframe, WebcamZoomRegion, WebcamZoomTrack, ZoomRegion, ZoomState, ZoomTrack,
 };

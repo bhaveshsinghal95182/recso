@@ -25,7 +25,6 @@ pub mod api;
 mod audio;
 #[cfg(windows)]
 mod composite;
-#[cfg(windows)]
 mod cuts;
 #[cfg(windows)]
 mod d3d;
@@ -35,17 +34,17 @@ mod decode;
 mod encode;
 #[cfg(windows)]
 mod exporter;
+mod layout;
 #[cfg(windows)]
 mod mf;
-#[cfg(windows)]
 mod pattern;
 #[cfg(windows)]
 mod player;
 #[cfg(windows)]
 mod render;
+mod scene;
 #[cfg(windows)]
 mod spritesheet;
-#[cfg(windows)]
 pub mod zoom;
 
 /// Cross-module scenarios: the tracks composed the way the render chain
@@ -55,13 +54,13 @@ pub mod zoom;
 /// above all which clock each one is expressed in, which is the mistake that
 /// does not crash and does not show up until someone watches the frame after a
 /// cut.
-#[cfg(all(windows, test))]
+#[cfg(test)]
 mod scenarios;
 
 /// Combination matrices: the same functions swept across the cross-product of
 /// the inputs they actually see, asserting the invariants that must hold for
 /// every cell rather than the value of any one of them.
-#[cfg(all(windows, test))]
+#[cfg(test)]
 mod matrix;
 
 /// Generated editing sessions.
@@ -70,10 +69,10 @@ mod matrix;
 /// from a deterministic pseudo-random generator and asserts the invariants
 /// that have to hold for every one of them. Hand-picked cases test the shapes
 /// somebody thought of; these test the shapes nobody did.
-#[cfg(all(windows, test))]
+#[cfg(test)]
 mod sessions;
 
 /// Regressions in this module's own code. See `crate::regressions` for the
 /// ones whose subject is reachable from the crate root.
-#[cfg(all(windows, test))]
+#[cfg(test)]
 mod regressions;

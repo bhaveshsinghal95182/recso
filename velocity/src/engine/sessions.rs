@@ -8,12 +8,12 @@
 //! Deterministic on purpose. A failure has to be reproducible from the seed
 //! printed in the message, or a property test is just a flaky one.
 
-use crate::engine::composite::{
+use crate::engine::layout::{
   fit_source, smear_geometry, CursorSample, CursorTrack, FitMode, HiddenSpans, OverlayShape, Rect,
   Shadow, WebcamLayout,
 };
 use crate::engine::cuts::{Cut, CutTrack};
-use crate::engine::render::{parse_layer_order, Layer, SourceCrop, VideoLayout};
+use crate::engine::scene::{parse_layer_order, Layer, SourceCrop, VideoLayout};
 use crate::engine::zoom::{
   FocalKeyframe, WebcamZoomRegion, WebcamZoomTrack, ZoomRegion, ZoomTrack,
 };

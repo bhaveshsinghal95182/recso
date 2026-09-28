@@ -48,6 +48,7 @@
     "prepublishOnly": "napi prepublish -t npm",
     "test": "ava",
     "test:rust": "cargo test --lib",
+    "check:windows": "bash scripts/check-windows.sh",
     "test:coverage": "cargo llvm-cov --lib --summary-only --ignore-filename-regex \"(scenarios|matrix|sessions|regressions)\\.rs$\"",
     "test:recording": "node scripts/run-recording-tests.mjs",
     "test:all": "run-s test:rust test",

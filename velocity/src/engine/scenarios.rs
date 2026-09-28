@@ -11,12 +11,12 @@
 //! reimplementing the chain, so they fail when the seam moves rather than when
 //! a copy of the arithmetic drifts.
 
-use crate::engine::composite::{
+use crate::engine::layout::{
   fit_source, smear_geometry, CursorSample, CursorTrack, FitMode, HiddenSpans, OverlayShape, Rect,
   Shadow, UvRect, WebcamLayout,
 };
 use crate::engine::cuts::{Cut, CutTrack};
-use crate::engine::render::{
+use crate::engine::scene::{
   parse_layer_order, CursorEffects, EffectParams, Layer, SourceCrop, VideoLayout,
   DEFAULT_LAYER_ORDER,
 };

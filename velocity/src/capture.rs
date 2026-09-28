@@ -1,7 +1,16 @@
+#[cfg(windows)]
 mod borderless;
+#[cfg(windows)]
 mod desktop_capture;
+mod devices;
 mod phone_camera;
+mod pixels;
+mod preview;
 mod recording_info;
+mod stopper;
+#[cfg(not(windows))]
+mod unsupported;
+#[cfg(windows)]
 mod webcam_capture;
 
 /// Capture-side scenarios and matrices.
@@ -15,19 +24,39 @@ mod scenarios;
 
 use napi_derive::napi;
 
-pub use borderless::borderless_capture_allowed;
-pub use desktop_capture::Stopper;
-pub use desktop_capture::{list_audio_capture_devices, AudioDeviceInfo};
+pub use devices::{AudioDeviceInfo, WebcamDeviceInfo};
 pub use phone_camera::{
   phone_camera_status, push_phone_frame, reset_phone_camera, PhoneCameraStatus,
 };
+pub use preview::{clear_webcam_preview_frame, webcam_preview_frame, WebcamPreviewFrame};
 pub use recording_info::{RecordingMediaInfo, RecordingStats};
-pub use webcam_capture::{
-  clear_webcam_preview_frame, list_webcam_devices, start_webcam_preview, webcam_preview_frame,
-  WebcamDeviceInfo, WebcamPreviewFrame,
-};
+pub use stopper::Stopper;
 
-use webcam_capture::WebcamSource;
+// The platform backends. Each exposes the same functions, so the recording
+// entry points below and the JavaScript API are identical on every platform.
+#[cfg(windows)]
+use desktop_capture as screen_backend;
+#[cfg(not(windows))]
+use unsupported as screen_backend;
+#[cfg(windows)]
+use webcam_capture as camera_backend;
+#[cfg(not(windows))]
+use unsupported as camera_backend;
+
+pub use camera_backend::{list_webcam_devices, start_webcam_preview};
+#[cfg(windows)]
+pub use borderless::borderless_capture_allowed;
+#[cfg(not(windows))]
+pub use unsupported::borderless_capture_allowed;
+pub use screen_backend::list_audio_capture_devices;
+
+/// Which camera a recording is using.
+pub(crate) enum WebcamSource {
+  /// A camera attached to this machine, by device id or the default.
+  Local(Option<String>),
+  /// A phone streaming over the local network, already paired and sending.
+  Phone,
+}
 
 /// Which camera a recording should use.
 ///
@@ -125,7 +154,7 @@ fn attach_webcam_stopper_if_requested(
   let screen_stats = stopper.screen_stats().ok_or_else(|| {
     napi::Error::from_reason("screen capture clock is unavailable")
   })?;
-  match webcam_capture::start_webcam_sidecar_recording(output_path, source, target_fps, screen_stats) {
+  match camera_backend::start_webcam_sidecar_recording(output_path, source, target_fps, screen_stats) {
     Ok(webcam_stopper) => {
       stopper.append(webcam_stopper);
       Ok(())
@@ -141,7 +170,7 @@ fn attach_webcam_stopper_if_requested(
 #[napi]
 pub fn start_monitor_recording_v2(options: NativeRecordingOptions) -> napi::Result<Stopper> {
   let output_path = options.output_path.clone();
-  let mut stopper = desktop_capture::start_monitor_recording_with_target_fps(
+  let mut stopper = screen_backend::start_monitor_recording_with_target_fps(
     options.output_path,
     options.bitrate,
     options.include_system_audio,
@@ -166,7 +195,7 @@ pub fn start_monitor_recording_v2(options: NativeRecordingOptions) -> napi::Resu
 #[napi]
 pub fn start_window_recording_v2(options: NativeWindowRecordingOptions) -> napi::Result<Stopper> {
   let output_path = options.output_path.clone();
-  let mut stopper = desktop_capture::start_window_recording_with_target_fps(
+  let mut stopper = screen_backend::start_window_recording_with_target_fps(
     options.window_title,
     options.output_path,
     options.bitrate,

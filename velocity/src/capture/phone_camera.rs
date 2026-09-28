@@ -26,7 +26,7 @@ use image::ImageFormat;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
-use super::webcam_capture::rgb_to_bgra_bottom_up;
+use super::pixels::rgb_to_bgra_bottom_up;
 
 /// How long a frame stays believable.
 ///

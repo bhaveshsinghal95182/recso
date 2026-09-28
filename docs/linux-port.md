@@ -1,0 +1,49 @@
+# Linux port
+
+Goal: run recso, including the velocity engine, on Linux. The first target is Arch (Omarchy) on Hyprland/Wayland with an NVIDIA GPU. Work happens on `feat/linux-port`, branched from `feat/native-engine`.
+
+## Licensing constraint
+
+Copyleft software (ffmpeg, GStreamer, x264, fdk-aac, anything GPL/LGPL) is allowed as a **development tool only**: probing files, making fixtures, checking output in scripts and tests. Nothing copyleft may be linked into, bundled with, or required at runtime by the product. Product dependencies must be MIT/BSD/Apache/ISC/zlib. Note any MPL crate before adding it.
+
+## Where things stand
+
+velocity was written directly against Windows APIs. Linux needs a replacement for each one:
+
+| Windows piece                                | Used for                    | Linux replacement (permissive)                                                   |
+| -------------------------------------------- | --------------------------- | -------------------------------------------------------------------------------- |
+| Windows Graphics Capture (`windows-capture`) | screen and window recording | xdg-desktop-portal ScreenCast (`ashpd`, MIT) + PipeWire stream (`pipewire`, MIT) |
+| GDI cursor APIs                              | cursor position and shape   | portal cursor metadata (`cursor_mode = metadata`)                                |
+| Window enumeration + WGC thumbnails          | window picker               | portal picker on Wayland (it already shows windows)                              |
+| WASAPI                                       | microphone and system audio | PipeWire capture of a source and of the default sink's monitor                   |
+| nokhwa / Media Foundation                    | webcam                      | V4L2 (`v4l`, MIT)                                                                |
+| Media Foundation decode                      | engine decode               | openh264 (BSD) first, VA-API later via `cros-codecs` (BSD)                       |
+| D3D11 + HLSL                                 | compositing and effects     | `wgpu` (MIT/Apache) with the shaders ported to WGSL                              |
+| Media Foundation encode                      | export, recording           | openh264 (BSD) first, VA-API encode later                                        |
+| Media Foundation MP4 sink                    | muxing                      | pure-Rust MP4 muxer (e.g. `mp4`, MIT)                                            |
+| AAC encoder                                  | audio track                 | Opus (`libopus`, BSD) in MP4                                                     |
+| D3D11 shared NT handle into Electron         | preview frames              | dmabuf through Electron shared textures if available, otherwise CPU frame copies |
+
+## Milestones
+
+- [x] **M0: the JS side works on Linux.** `mise.toml` pins Node 24, because better-sqlite3 12.6 doesn't compile on Node 26. `pnpm install`, `pnpm typecheck`, `pnpm transpile:electron` and `pnpm test` (147 tests) all pass.
+- [x] **M1: velocity compiles on Linux with the same JS API.** Windows crates move to `[target.'cfg(windows)'.dependencies]`. Every `#[napi]` export stays on Linux: unsupported ones return a clear "not supported on Linux yet" error (or an empty list, where a list is the natural answer), so `index.d.ts` doesn't change. Pure logic (cuts, zoom, pattern, clocks, PCM mixing, geometry) is compiled and tested on Linux too.
+- [ ] **M2: the Electron app launches on Linux.** `pnpm dev` opens, the recorder reports that native capture is unavailable instead of crashing, and `recorder-capture-plan.ts` knows about `linux`.
+- [ ] **M3: capture on Linux.** Portal screencast into PipeWire, encoded to MP4. Then cursor metadata, then audio, then webcam.
+- [ ] **M4: engine on Linux.** Decode, the wgpu composite chain, preview delivery, export.
+- [ ] **M5: packaging.** `pnpm dist:linux` builds an AppImage that bundles the Linux `.node`.
+
+## Working on the port
+
+- The project needs Node 24: `mise install`, then `mise exec -- pnpm ...`.
+- Linux addon: `cd velocity && npx napi build --platform --release --no-js --dts target/index.linux.d.ts`. The `--no-js`/`--dts` flags keep the committed `index.js` and `index.d.ts` (generated on Windows, and the full API) from being overwritten with the partial Linux API.
+- Rust tests: `cargo test --lib` in `velocity/`.
+- After touching shared Rust code, type-check the Windows build: `velocity/scripts/check-windows.sh` (once: `rustup target add x86_64-pc-windows-msvc`).
+- Platform code is split three ways. Pure logic (`engine/layout.rs`, `engine/scene.rs`, `engine/cuts.rs`, `engine/zoom.rs`, `capture/stopper.rs`, ...) builds and is tested everywhere. Windows backends stay `#[cfg(windows)]`. Other platforms get a backend module with the same functions (`capture/unsupported.rs`, `cursor_unsupported.rs`, `window_unsupported.rs` for now).
+
+## Log
+
+Newest first. Record decisions and open questions for the user here.
+
+- 2026-09-29: M1 done. velocity builds on Linux; 1187 Rust tests pass here (up from none), and the Windows build still type-checks. The capture, cursor and window API is identical on Linux and fails with "not supported on linux yet". The engine classes (`VideoPlayer`, `VideoExporter`, ...) are absent on Linux until M4, and Electron's `native.ts` already treats that as "engine unavailable".
+- 2026-09-29: M0 done. Started M1.

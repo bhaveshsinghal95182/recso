@@ -7,7 +7,7 @@
 
 use super::parse_webcam_source;
 use super::recording_info::RecordingStats;
-use super::webcam_capture::rgb_to_bgra_bottom_up;
+use super::pixels::rgb_to_bgra_bottom_up;
 
 // -- what the stats say about a take ----------------------------------------
 
@@ -319,7 +319,7 @@ mod webcam_source {
           id.map(|s| s.to_string()),
         );
         match parsed {
-          Ok(super::super::webcam_capture::WebcamSource::Local(got)) => {
+          Ok(super::super::WebcamSource::Local(got)) => {
             assert_eq!(got.as_deref(), id, "{source:?} + {id:?}");
           }
           _ => panic!("{source:?} + {id:?} was not a local camera"),
@@ -333,7 +333,7 @@ mod webcam_source {
     for id in DEVICE_IDS {
       let parsed = parse_webcam_source(Some("phone".to_string()), id.map(|s| s.to_string()));
       assert!(
-        matches!(parsed, Ok(super::super::webcam_capture::WebcamSource::Phone)),
+        matches!(parsed, Ok(super::super::WebcamSource::Phone)),
         "{id:?}"
       );
     }

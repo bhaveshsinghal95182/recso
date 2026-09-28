@@ -16,7 +16,6 @@ image = { version = "0.25", default-features = false, features = [
 ] }
 napi = { version = "3.0.0", features = ["napi6"] }
 napi-derive = "3.0.0"
-nokhwa = { version = "0.10", features = ["input-msmf"] }
 rcgen = { version = "0.14.10", default-features = false, features = [
   "pem",
   "ring",
@@ -24,6 +23,11 @@ rcgen = { version = "0.14.10", default-features = false, features = [
 serde_json = "1.0"
 time = { version = "0.3.55", default-features = false, features = ["std"] }
 tokio = { version = "1.49.0", features = ["rt", "macros"] }
+
+# Capture, engine and audio are built on Windows APIs; on other platforms the
+# crate compiles without them (see the cfg(windows) gates in src/).
+[target.'cfg(windows)'.dependencies]
+nokhwa = { version = "0.10", features = ["input-msmf"] }
 wasapi = "0.23.0"
 windows = { version = "0.62.2", features = [
   # capture / cursor / window

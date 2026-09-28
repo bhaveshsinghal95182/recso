@@ -1,18 +1,23 @@
-use super::desktop_capture::Stopper;
+use super::devices::WebcamDeviceInfo;
+use super::pixels::rgb_to_bgra_bottom_up;
+use super::preview::{
+  clear_webcam_preview_frame, preview_frame_slot, StoredWebcamPreviewFrame, WEBCAM_PREVIEW_SEQUENCE,
+};
+use super::stopper::Stopper;
+use super::WebcamSource;
 use super::phone_camera;
 use super::recording_info::RecordingStats;
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
 use image::{DynamicImage, ExtendedColorType, RgbImage};
-use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
 use nokhwa::pixel_format::RgbFormat;
 use nokhwa::utils::{ApiBackend, CameraIndex, RequestedFormat, RequestedFormatType};
 use nokhwa::{query, Camera};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender, TryRecvError};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 use windows::Win32::System::Com::{
@@ -34,57 +39,7 @@ const WEBCAM_PREVIEW_JPEG_QUALITY: u8 = 76;
 /// What the phone capture page targets. Anything above it is duplicated frames.
 const PHONE_CAPTURE_FPS: u32 = 30;
 
-#[napi(object)]
-pub struct WebcamDeviceInfo {
-  pub id: String,
-  pub label: String,
-  pub is_default: bool,
-}
-
-/** A small JPEG copied from the native camera owner for the recorder UI. */
-#[napi(object)]
-pub struct WebcamPreviewFrame {
-  pub jpeg: Buffer,
-  pub width: u32,
-  pub height: u32,
-  /** Monotonic, so a polling renderer can skip a frame it has already drawn. */
-  pub sequence: u32,
-}
-
-struct StoredWebcamPreviewFrame {
-  jpeg: Vec<u8>,
-  width: u32,
-  height: u32,
-  sequence: u32,
-}
-
-static WEBCAM_PREVIEW_FRAME: OnceLock<Mutex<Option<StoredWebcamPreviewFrame>>> = OnceLock::new();
-static WEBCAM_PREVIEW_SEQUENCE: AtomicU32 = AtomicU32::new(0);
 static WEBCAM_PREVIEW_RUNNING: AtomicBool = AtomicBool::new(false);
-
-fn preview_frame_slot() -> &'static Mutex<Option<StoredWebcamPreviewFrame>> {
-  WEBCAM_PREVIEW_FRAME.get_or_init(|| Mutex::new(None))
-}
-
-#[napi]
-pub fn webcam_preview_frame() -> Option<WebcamPreviewFrame> {
-  let slot = preview_frame_slot().lock().ok()?;
-  let frame = slot.as_ref()?;
-
-  Some(WebcamPreviewFrame {
-    jpeg: frame.jpeg.clone().into(),
-    width: frame.width,
-    height: frame.height,
-    sequence: frame.sequence,
-  })
-}
-
-#[napi]
-pub fn clear_webcam_preview_frame() {
-  if let Ok(mut slot) = preview_frame_slot().lock() {
-    *slot = None;
-  }
-}
 
 #[napi]
 pub fn list_webcam_devices() -> Vec<WebcamDeviceInfo> {
@@ -186,28 +141,6 @@ fn create_camera(index: CameraIndex, target_fps: u32) -> Result<LocalCamera, Str
   open(request_high_fps)
     .or_else(|_| open(request_default))
     .map_err(|error| format!("failed to initialize webcam: {error}"))
-}
-
-pub(crate) fn rgb_to_bgra_bottom_up(rgb: &[u8], width: usize, height: usize) -> Vec<u8> {
-  let mut output = vec![0u8; width * height * 4];
-  let row_bytes_rgb = width * 3;
-  let row_bytes_bgra = width * 4;
-
-  // Iterate over rows in reverse to flip the image bottom-up
-  for (y, rgb_row) in rgb.chunks_exact(row_bytes_rgb).enumerate() {
-    let dst_y = height - 1 - y;
-    let dst_row = &mut output[dst_y * row_bytes_bgra..(dst_y + 1) * row_bytes_bgra];
-
-    // Zip the chunks together to eliminate bounds checking entirely
-    for (src_pixel, dst_pixel) in rgb_row.chunks_exact(3).zip(dst_row.chunks_exact_mut(4)) {
-      dst_pixel[0] = src_pixel[2]; // B
-      dst_pixel[1] = src_pixel[1]; // G
-      dst_pixel[2] = src_pixel[0]; // R
-      dst_pixel[3] = 255; // A
-    }
-  }
-
-  output
 }
 
 fn preview_jpeg_from_bgra_bottom_up(
@@ -390,13 +323,6 @@ impl FrameSource for PhoneCamera {
   }
 }
 
-/// Which camera a recording is using.
-pub(crate) enum WebcamSource {
-  /// A camera attached to this machine, by device id or the default.
-  Local(Option<String>),
-  /// A phone streaming over the local network, already paired and sending.
-  Phone,
-}
 
 fn capture_next_bgra_frame(camera: &mut Camera) -> Result<(Vec<u8>, usize, usize), String> {
   let frame = camera
@@ -1024,40 +950,8 @@ mod tests {
     assert_eq!(target_webcam_fps(Some(0)), 60);
   }
 
-  #[test]
-  fn rgb_to_bgra_bottom_up_converts_channel_order_and_flips_rows() {
-    let width = 1;
-    let height = 2;
-    // Row 0 (top, decoded order): R=10,G=20,B=30. Row 1 (bottom): R=40,G=50,B=60.
-    let rgb = vec![10, 20, 30, 40, 50, 60];
-    let bgra = rgb_to_bgra_bottom_up(&rgb, width, height);
 
-    assert_eq!(bgra.len(), width * height * 4);
-    // Bottom-up output: row 0 of the output holds the *last* source row.
-    assert_eq!(&bgra[0..4], &[60, 50, 40, 255]);
-    assert_eq!(&bgra[4..8], &[30, 20, 10, 255]);
-  }
 
-  #[test]
-  fn rgb_to_bgra_bottom_up_sets_full_opacity_alpha_for_every_pixel() {
-    let width = 2;
-    let height = 1;
-    let rgb = vec![1, 2, 3, 4, 5, 6];
-    let bgra = rgb_to_bgra_bottom_up(&rgb, width, height);
-    assert_eq!(bgra[3], 255);
-    assert_eq!(bgra[7], 255);
-  }
-
-  #[test]
-  fn rgb_to_bgra_bottom_up_produces_identity_flip_for_single_row() {
-    let width = 2;
-    let height = 1;
-    let rgb = vec![9, 8, 7, 6, 5, 4];
-    let bgra = rgb_to_bgra_bottom_up(&rgb, width, height);
-    // A single-row image is its own vertical flip.
-    assert_eq!(&bgra[0..4], &[7, 8, 9, 255]);
-    assert_eq!(&bgra[4..8], &[4, 5, 6, 255]);
-  }
 }
 
 #[cfg(test)]
