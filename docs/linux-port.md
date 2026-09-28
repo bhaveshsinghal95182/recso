@@ -31,7 +31,15 @@ velocity was written directly against Windows APIs. Linux needs a replacement fo
 - [x] **M2: the Electron app launches on Linux.** `pnpm dev` opens, the recorder reports that native capture is unavailable instead of crashing, and `recorder-capture-plan.ts` knows about `linux`.
 - [ ] **M3: capture on Linux.** Done: screen or window through the portal, system audio and microphone (PipeWire → Opus), cursor position (Hyprland), and saving into a project that opens in the editor. Left: the webcam (V4L2), a streaming MP4 writer (muxide holds the whole recording in RAM), and a person clicking the real portal picker once (every unattended test used `VELOCITY_TEST_PIPEWIRE_NODE`).
 - [ ] **M4: engine on Linux.** Decode, the wgpu composite chain, preview delivery, export.
-- [ ] **M5: packaging.** `pnpm dist:linux` builds an AppImage that bundles the Linux `.node`.
+- [ ] **M5: packaging.** `pnpm dist:linux` builds velocity for Linux (`build:engine:linux`), the renderer and an AppImage; the AppImage runs here with velocity loaded from `resources/velocity/`. The `.deb` target needs a maintainer email (see Log).
+
+## M4 plan (engine on Linux)
+
+In order of value, each usable on its own:
+
+1. **Decode, probe, thumbnails** (in progress): `VideoDecoder`, `probeVideo`, `probeAudio`, `generateSpritesheet` in software. The `mp4` crate demuxes and openh264 decodes. The timeline gets its filmstrip, and a finished recording is validated by really decoding it. `sheet.rs` shares the slot-filling rules with Windows.
+2. **`VideoPlayer`** (33 methods, in `index.d.ts`). A decode thread and a clock (play/pause/rate/seek/tick) come first. Then the composition: a wgpu render chain porting `engine/shaders.hlsl` to WGSL, driven by the shared `layout.rs` / `scene.rs` / `zoom.rs` / `cuts.rs`, so placement stays identical to Windows. Frames reach the editor as DMA-BUFs through Electron's `sharedTexture` `nativePixmap` handle (planes with fd/stride/offset/size, plus a GBM modifier). The simplest correct route: render with wgpu, read back once, and write into a linear GBM buffer object (libgbm, MIT). `SharedTextureInfo` needs optional Linux fields (fd, stride, modifier), and `shared-texture.service.ts` needs a `nativePixmap` branch. `index.d.ts` is generated on Windows, so those fields must be added there by hand, or regenerated there.
+3. **`VideoExporter`**: the same render chain with no presentation, frames into `capture/linux/encoder.rs`, audio mixed from the sources (Opus).
 
 ## Working on the port
 
@@ -52,6 +60,10 @@ velocity was written directly against Windows APIs. Linux needs a replacement fo
 ## Log
 
 Newest first. Record decisions and open questions for the user here.
+
+- **Decision for the user: the `.deb` maintainer.** electron-builder's deb target refuses to build without an author email (`author.email` in `package.json`, or `linux.maintainer` in `electron-builder.json`). I didn't add your email to the repo without asking. The AppImage builds and runs without it.
+- **Note for the user: Electron's own ffmpeg.** Electron ships `libffmpeg.so` (`ffmpeg.dll` on Windows), Chromium's LGPL build, used for media playback. It comes with Electron itself, not from the port, and every Electron app ships it, but it is LGPL code in the product. Chromium can't play media without it.
+- 2026-09-29: M4 step 1 and the webcam are done. The Linux engine decodes, probes and builds the timeline filmstrip; the editor shows thumbnails. Webcams record through V4L2 into the `_camera.mp4` sidecar, aligned to the screen's first frame. The AppImage from `pnpm dist:linux` runs here with the Linux addon inside.
 
 - 2026-09-29: Recording works in the real app on this machine, driven over CDP with a PipeWire test node standing in for the portal. Record → stop → the file is finalised → a project in `~/Videos` → the editor opens (its preview says the GPU engine is unavailable, which is M4). Files carry H.264 plus Opus at matching durations, and the microphone picker lists the PipeWire sources. Fixed along the way: openh264 dropped about 60% of frames (rate control without timestamps); the stop waited two minutes for the engine's decoder (now it checks for the `moov` box); and moving the file out of `/tmp` failed across filesystems (EXDEV). **Please try one real recording:** the portal picker needs a click, which I couldn't do unattended.
 

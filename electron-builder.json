@@ -10,6 +10,22 @@
     "target": ["AppImage", "deb"],
     "category": "Utility"
   },
+  "deb": {
+    "depends": [
+      "libgtk-3-0",
+      "libnotify4",
+      "libnss3",
+      "libxss1",
+      "libxtst6",
+      "xdg-utils",
+      "libatspi2.0-0",
+      "libuuid1",
+      "libsecret-1-0",
+      "libpipewire-0.3-0",
+      "libopus0",
+      "xdg-desktop-portal"
+    ]
+  },
   "win": {
     "target": ["nsis", "appx"],
     "icon": "public/R.png"
