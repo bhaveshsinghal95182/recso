@@ -71,6 +71,10 @@ pipewire   = "0.10"
 # Webcams through the kernel's V4L2 interface. Not the `libv4l` feature:
 # that wraps the LGPL libv4l.
 v4l = { version = "0.14", default-features = false, features = ["v4l2"] }
+# The Linux engine's render chain: the D3D11 shaders ported to WGSL.
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "1"
+wgpu     = "30"
 
 [build-dependencies]
 napi-build = "2"
