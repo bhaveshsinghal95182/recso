@@ -43,7 +43,7 @@ const STOP_POLL: Duration = Duration::from_millis(50);
 ///
 /// Monotonic and shared by the process, so a second capture started later in
 /// the same recording (the webcam, the microphone) lands on the same timeline.
-fn now_100ns(at: Instant) -> i64 {
+pub(crate) fn now_100ns(at: Instant) -> i64 {
   static ORIGIN: OnceLock<Instant> = OnceLock::new();
   let origin = *ORIGIN.get_or_init(Instant::now);
   (at.saturating_duration_since(origin).as_nanos() / 100) as i64

@@ -10,6 +10,7 @@ pub(crate) mod mp4_writer;
 pub(crate) mod pipewire_stream;
 pub(crate) mod portal;
 pub(crate) mod screen;
+pub(crate) mod webcam;
 
 use super::devices::AudioDeviceInfo;
 

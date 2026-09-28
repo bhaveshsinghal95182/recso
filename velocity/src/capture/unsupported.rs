@@ -4,15 +4,19 @@
 //! build everywhere. Listing calls report no devices; anything that would start
 //! a capture fails with an error saying why, rather than recording nothing.
 
+#[cfg(not(target_os = "linux"))]
 use std::sync::Arc;
 
 use napi_derive::napi;
 
 #[cfg(not(target_os = "linux"))]
 use super::devices::AudioDeviceInfo;
+#[cfg(not(target_os = "linux"))]
 use super::devices::WebcamDeviceInfo;
+#[cfg(not(target_os = "linux"))]
 use super::recording_info::RecordingStats;
 use super::stopper::Stopper;
+#[cfg(not(target_os = "linux"))]
 use super::WebcamSource;
 
 fn unsupported(what: &str) -> napi::Error {
@@ -34,11 +38,13 @@ pub fn list_audio_capture_devices() -> Vec<AudioDeviceInfo> {
   Vec::new()
 }
 
+#[cfg(not(target_os = "linux"))]
 #[napi]
 pub fn list_webcam_devices() -> Vec<WebcamDeviceInfo> {
   Vec::new()
 }
 
+#[cfg(not(target_os = "linux"))]
 #[napi]
 pub fn start_webcam_preview(_device_id: Option<String>) -> napi::Result<Stopper> {
   Err(unsupported("webcam preview"))
@@ -67,6 +73,7 @@ pub(crate) fn start_window_recording_with_target_fps(
   Err(unsupported("window recording"))
 }
 
+#[cfg(not(target_os = "linux"))]
 pub(crate) fn start_webcam_sidecar_recording(
   _output_path: &str,
   _source: WebcamSource,

@@ -45,7 +45,9 @@ use linux::screen as screen_backend;
 use unsupported as screen_backend;
 #[cfg(windows)]
 use webcam_capture as camera_backend;
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+use linux::webcam as camera_backend;
+#[cfg(not(any(windows, target_os = "linux")))]
 use unsupported as camera_backend;
 
 pub use camera_backend::{list_webcam_devices, start_webcam_preview};
