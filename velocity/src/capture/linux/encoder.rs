@@ -11,7 +11,7 @@ use openh264::encoder::{
   UsageType,
 };
 use openh264::formats::{BgraSliceU8, RgbaSliceU8, YUVBuffer};
-use openh264::OpenH264API;
+use openh264::{OpenH264API, Timestamp};
 
 /// PipeWire pixel byte order; the fourth byte is ignored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,6 +108,9 @@ impl Mp4Recorder {
       .rate_control_mode(RateControlMode::Bitrate)
       .adaptive_quantization(false)
       .background_detection(false)
+      // A screen recording must keep every frame it is given: the capture is
+      // already variable-rate, and a skipped frame is a visible stutter.
+      .skip_frames(false)
       .intra_frame_period(IntraFramePeriod::from_num_frames(interval));
     let encoder = Encoder::with_api_config(OpenH264API::from_source(), config)
       .map_err(|e| format!("create H.264 encoder: {e}"))?;
@@ -172,6 +175,12 @@ impl Mp4Recorder {
       self.frames_dropped += 1;
       return Ok(());
     }
+    // Rate control paces itself by these timestamps; without them it assumes
+    // frames arrive at a fixed rate and misjudges a variable-rate capture.
+    let origin = self.first_written_pts.unwrap_or(pts_100ns);
+    let encoder_time = Timestamp::from_millis(
+      u64::try_from(pts_100ns.saturating_sub(origin) / 10_000).unwrap_or(0),
+    );
     self.packed.fill(0);
     let copy_bytes = frame_width.min(self.width) as usize * 4;
     let output_stride = self.width as usize * 4;
@@ -190,7 +199,7 @@ impl Mp4Recorder {
     let (mut data, mut keyframe) = {
       let encoded = self
         .encoder
-        .encode(&self.yuv)
+        .encode_at(&self.yuv, encoder_time)
         .map_err(|e| format!("encode video frame: {e}"))?;
       (encoded.to_vec(), encoded.frame_type() == FrameType::IDR)
     };
@@ -203,7 +212,7 @@ impl Mp4Recorder {
       self.encoder.force_intra_frame();
       let encoded = self
         .encoder
-        .encode(&self.yuv)
+        .encode_at(&self.yuv, encoder_time)
         .map_err(|e| format!("encode first keyframe: {e}"))?;
       data = encoded.to_vec();
       keyframe = encoded.frame_type() == FrameType::IDR;
@@ -214,7 +223,6 @@ impl Mp4Recorder {
         return Err("encoder did not produce an IDR for the first video frame".into());
       }
     }
-    let origin = self.first_written_pts.unwrap_or(pts_100ns);
     let relative = pts_100ns
       .checked_sub(origin)
       .ok_or("video timestamp span exceeds i64")?;

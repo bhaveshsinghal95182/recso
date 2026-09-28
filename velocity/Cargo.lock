@@ -1265,6 +1265,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "opusic-sys"
+version = "0.7.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9d1ecdf206421bc74343ab3bb2f30ad2abbfee41fa341f7181fecbaf957769a"
+
+[[package]]
 name = "ordered-stream"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2027,6 +2033,7 @@ dependencies = [
  "napi-derive",
  "nokhwa",
  "openh264",
+ "opusic-sys",
  "pipewire",
  "rcgen",
  "serde_json",

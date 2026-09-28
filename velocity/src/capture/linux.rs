@@ -4,6 +4,7 @@
 //! user picked; frames from it are encoded to H.264 with openh264 and muxed to
 //! MP4. Every piece is permissively licensed, as the product requires.
 
+pub(crate) mod audio;
 pub(crate) mod encoder;
 pub(crate) mod pipewire_stream;
 pub(crate) mod portal;

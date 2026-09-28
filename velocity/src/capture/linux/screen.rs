@@ -87,8 +87,26 @@ pub(crate) fn start_window_recording_with_target_fps(
   )
 }
 
+/// Record this PipeWire node instead of asking the portal. For testing the
+/// whole app unattended -- the portal's picker needs a person to click it.
+const TEST_NODE_VARIABLE: &str = "VELOCITY_TEST_PIPEWIRE_NODE";
+
 fn start(output_path: String, bitrate: u32, target_fps: Option<u32>) -> Result<Stopper, String> {
   let fps = resolved_fps(target_fps);
+
+  if let Some(node_id) = std::env::var(TEST_NODE_VARIABLE)
+    .ok()
+    .and_then(|value| value.parse::<u32>().ok())
+  {
+    eprintln!("[velocity] {TEST_NODE_VARIABLE}={node_id}: recording that node, not asking the portal");
+    let source = NodeSource {
+      remote: None,
+      node_id,
+    };
+    return record(source, PathBuf::from(&output_path), fps, bitrate)
+      .map(|recording| recording.into_stopper(None));
+  }
+
   let (grant, session) = portal::open(true)?;
   let source = NodeSource {
     remote: Some(grant.remote),
