@@ -55,6 +55,23 @@ function getVelocityCursorBindings(): VelocityCursorBindings | null {
   return velocityCursorBindingsCache;
 }
 
+/** The cursor's global position from velocity's snapshot, if it has one. */
+function readVelocityCursorPosition(): { x: number; y: number } | null {
+  const velocity = getVelocityCursorBindings();
+  if (!velocity?.captureCursorSnapshotJson) {
+    return null;
+  }
+  try {
+    const snapshot = asRecord(JSON.parse(velocity.captureCursorSnapshotJson()));
+    const screenPos = asRecord(asRecord(snapshot?.cursorInfo)?.screenPos);
+    const x = toFiniteOrUndefined(screenPos?.x);
+    const y = toFiniteOrUndefined(screenPos?.y);
+    return x === undefined || y === undefined ? null : { x, y };
+  } catch {
+    return null;
+  }
+}
+
 // Mouse event interface
 export interface MouseEvent {
   id?: number;
@@ -96,6 +113,8 @@ class MouseTrackerService {
   private recordingStartTime: number = 0;
   private eventBuffer: MouseEvent[] = [];
   private flushTimer: NodeJS.Timeout | null = null;
+  private pollTimer: NodeJS.Timeout | null = null;
+  private lastPolledPosition: { x: number; y: number } | null = null;
   private isTracking: boolean = false;
   private monitorBounds: MonitorBounds | null = null;
 
@@ -137,6 +156,13 @@ class MouseTrackerService {
 
     // Start the hook
     uIOhook.start();
+
+    // Wayland gives the X11 hook no events for native windows, so on Linux
+    // the position is polled from velocity instead (Hyprland's IPC).
+    if (process.platform === 'linux') {
+      this.lastPolledPosition = null;
+      this.pollTimer = setInterval(() => this.pollCursorPosition(), this.moveThrottleMs);
+    }
 
     // Start flush timer (every 2 seconds)
     this.flushTimer = setInterval(() => this.flushBuffer(), 2000);
@@ -204,6 +230,26 @@ class MouseTrackerService {
     };
 
     this.eventBuffer.push(mouseEvent);
+  }
+
+  /**
+   * Feed a polled cursor position through the same path as a hook event.
+   *
+   * Only a position that changed becomes an event: the hook reports movement,
+   * and a sampler that also reported stillness would fill the table with
+   * copies of the last position.
+   */
+  private pollCursorPosition(): void {
+    const position = readVelocityCursorPosition();
+    if (!position) {
+      return;
+    }
+    const last = this.lastPolledPosition;
+    if (last && last.x === position.x && last.y === position.y) {
+      return;
+    }
+    this.lastPolledPosition = position;
+    this.onMouseMove(position as UiohookMouseEvent);
   }
 
   private captureCursorVisualMeta(): Pick<
@@ -331,6 +377,10 @@ class MouseTrackerService {
     uIOhook.stop();
 
     // Clear timers
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
     if (this.flushTimer) {
       clearInterval(this.flushTimer);
       this.flushTimer = null;

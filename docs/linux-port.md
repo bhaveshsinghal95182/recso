@@ -41,9 +41,19 @@ velocity was written directly against Windows APIs. Linux needs a replacement fo
 - After touching shared Rust code, type-check the Windows build: `velocity/scripts/check-windows.sh` (once: `rustup target add x86_64-pc-windows-msvc`).
 - Platform code is split three ways. Pure logic (`engine/layout.rs`, `engine/scene.rs`, `engine/cuts.rs`, `engine/zoom.rs`, `capture/stopper.rs`, ...) builds and is tested everywhere. Windows backends stay `#[cfg(windows)]`. Other platforms get a backend module with the same functions (`capture/unsupported.rs`, `cursor_unsupported.rs`, `window_unsupported.rs` for now).
 
+## M3 design (Linux capture)
+
+- **Source selection:** the xdg-desktop-portal ScreenCast picker (`capture/linux/portal.rs`), shown when recording starts. Cursor mode `Hidden`, as on Windows (recso draws its own cursor). Not persisted: a remembered choice would never let the user switch sources, because the recorder has no picker of its own. The portal session lives on a thread that owns the D-Bus connection for the whole recording.
+- **Frames:** `capture/linux/pipewire_stream.rs` negotiates packed 32-bit RGB in shared memory and hands frames to a callback on PipeWire's thread. `capture/linux/screen.rs` copies each frame into a 2-slot queue; frames are dropped there when the encoder falls behind, not held. Variable frame rate, like Windows: a still screen sends no frames.
+- **Encoding:** `capture/linux/encoder.rs`: openh264 (BSD) → muxide (MIT/Apache) MP4. Audio is Opus (libopus, BSD), since there is no permissive AAC encoder.
+- **Cursor:** Wayland gives apps no global cursor position, and the X11 hook (`uiohook-napi`) sees only XWayland windows. On Hyprland, `cursor_linux.rs` reads the position over Hyprland's IPC socket, and the mouse tracker polls it every 50 ms on Linux. **Known gaps:** no click events and no cursor shape on Linux yet. Clicks would need `/dev/input` access (the `input` group) or a compositor protocol.
+- **Testing without a person at the picker:** a GStreamer `videotestsrc ! pipewiresink mode=provide` node (dev tool only) stands in for the portal's node.
+
 ## Log
 
 Newest first. Record decisions and open questions for the user here.
+
+- **Decision for the user: H.264 patents.** openh264 is BSD-licensed, but H.264 is patent-encumbered. Cisco pays the royalties only for its own prebuilt binary when users download it from Cisco. Development builds compile openh264 from source (the crate's `source` feature). For shipping, the usual approach (Firefox's) is the crate's `libloading` feature, which downloads Cisco's binary on first use. The alternative is VA-API/NVENC hardware encoding, where the GPU vendor covers the codec. Which one should the product use?
 
 - 2026-09-29: M2 done. `pnpm dev` launches on Hyprland. The recorder offers a single "Screen or window (chosen when recording starts)" source on Linux instead of calling `desktopCapturer`, which on Wayland would open the portal picker just to fill the list. Pressing record shows velocity's "screen recording is not supported on linux yet". Checked by driving the running app over CDP (`--remote-debugging-port`). **Decision for the user:** `pnpm-workspace.yaml` has `allowBuilds: electron: false`, so a fresh `pnpm install` never downloads Electron's binary, on any OS. This checkout was fixed by running `node_modules/.pnpm/electron@40.0.0/node_modules/electron/install.js` once. Recommend setting `electron: true`.
 - 2026-09-29: M1 done. velocity builds on Linux; 1187 Rust tests pass here (up from none), and the Windows build still type-checks. The capture, cursor and window API is identical on Linux and fails with "not supported on linux yet". The engine classes (`VideoPlayer`, `VideoExporter`, ...) are absent on Linux until M4, and Electron's `native.ts` already treats that as "engine unavailable".

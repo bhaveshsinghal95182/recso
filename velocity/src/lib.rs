@@ -7,7 +7,10 @@
 pub mod capture;
 #[cfg(windows)]
 pub mod cursor;
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+#[path = "cursor_linux.rs"]
+pub mod cursor;
+#[cfg(not(any(windows, target_os = "linux")))]
 #[path = "cursor_unsupported.rs"]
 pub mod cursor;
 pub mod engine;
