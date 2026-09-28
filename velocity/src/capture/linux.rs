@@ -9,3 +9,13 @@ pub(crate) mod encoder;
 pub(crate) mod pipewire_stream;
 pub(crate) mod portal;
 pub(crate) mod screen;
+
+use super::devices::AudioDeviceInfo;
+
+/// The microphones PipeWire knows about, for the recorder's picker. Each id
+/// is a PipeWire node id, which is what a recording's `microphoneDeviceId`
+/// takes back.
+#[napi_derive::napi]
+pub fn list_audio_capture_devices() -> Vec<AudioDeviceInfo> {
+  audio::list_audio_capture_devices()
+}

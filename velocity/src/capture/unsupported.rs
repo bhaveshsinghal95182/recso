@@ -8,7 +8,9 @@ use std::sync::Arc;
 
 use napi_derive::napi;
 
-use super::devices::{AudioDeviceInfo, WebcamDeviceInfo};
+#[cfg(not(target_os = "linux"))]
+use super::devices::AudioDeviceInfo;
+use super::devices::WebcamDeviceInfo;
 use super::recording_info::RecordingStats;
 use super::stopper::Stopper;
 use super::WebcamSource;
@@ -25,6 +27,8 @@ pub fn borderless_capture_allowed() -> bool {
   false
 }
 
+// Linux lists its PipeWire sources instead (capture/linux.rs).
+#[cfg(not(target_os = "linux"))]
 #[napi]
 pub fn list_audio_capture_devices() -> Vec<AudioDeviceInfo> {
   Vec::new()

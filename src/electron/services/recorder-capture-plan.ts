@@ -54,7 +54,7 @@ export function nativeWebcamStartProblem(error: unknown, usePhoneCamera: boolean
 export interface NativeAudioInput {
   recordSystemAudio?: boolean;
   recordMic?: boolean;
-  /** WASAPI is Windows-only. */
+  /** WASAPI on Windows, PipeWire on Linux; nothing elsewhere. */
   platform: string;
 }
 
@@ -82,12 +82,12 @@ export interface NativeAudioPlan {
  * timestamps, and zero-padded while a device is still starting -- so the silence
  * during warm-up lands exactly where the silence actually was.
  *
- * Windows only, since this is WASAPI. There is no longer a renderer fallback
- * behind it -- recording requires the native addon, which is Windows-only too,
- * so anywhere this returns false there was never going to be a recording.
+ * Windows (WASAPI) and Linux (PipeWire). There is no renderer fallback
+ * behind it -- recording requires the native addon, so anywhere this returns
+ * false there was never going to be a recording.
  */
 export function planNativeAudio(config: NativeAudioInput): NativeAudioPlan {
-  const available = config.platform === 'win32';
+  const available = config.platform === 'win32' || config.platform === 'linux';
 
   return {
     systemAudio: available && Boolean(config.recordSystemAudio),

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { mp4HasMovieBox, nativeWebcamStartProblem } from './recorder-capture-plan.js';
+import {
+  mp4HasMovieBox,
+  nativeWebcamStartProblem,
+  planNativeAudio,
+} from './recorder-capture-plan.js';
 
 describe('nativeWebcamStartProblem', () => {
   it('keeps a requested local webcam failure actionable instead of dropping the track', () => {
@@ -89,5 +93,31 @@ describe('mp4HasMovieBox', () => {
 
   it('says no for an empty file', () => {
     expect(mp4HasMovieBox(() => null, 0)).toBe(false);
+  });
+});
+
+describe('planNativeAudio', () => {
+  it('captures natively on Windows and Linux', () => {
+    for (const platform of ['win32', 'linux']) {
+      expect(planNativeAudio({ platform, recordSystemAudio: true, recordMic: true })).toEqual({
+        systemAudio: true,
+        microphone: true,
+      });
+    }
+  });
+
+  it('captures nothing natively where the addon has no audio backend', () => {
+    expect(
+      planNativeAudio({ platform: 'darwin', recordSystemAudio: true, recordMic: true }),
+    ).toEqual({ systemAudio: false, microphone: false });
+  });
+
+  it('only captures what was asked for', () => {
+    expect(
+      planNativeAudio({ platform: 'linux', recordSystemAudio: false, recordMic: true }),
+    ).toEqual({
+      systemAudio: false,
+      microphone: true,
+    });
   });
 });

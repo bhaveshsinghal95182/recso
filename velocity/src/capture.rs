@@ -54,7 +54,9 @@ pub use borderless::borderless_capture_allowed;
 pub use unsupported::borderless_capture_allowed;
 #[cfg(windows)]
 pub use desktop_capture::list_audio_capture_devices;
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+pub use linux::list_audio_capture_devices;
+#[cfg(not(any(windows, target_os = "linux")))]
 pub use unsupported::list_audio_capture_devices;
 
 /// Which camera a recording is using.
