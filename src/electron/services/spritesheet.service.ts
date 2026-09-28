@@ -23,7 +23,7 @@
 
 import fs from 'fs';
 
-import { getEngineBindings } from './engine/native.js';
+import { loadVelocityModule } from './engine/native.js';
 import type { Project } from '../types/project.types.js';
 import type {
   SpritesheetMeta,
@@ -76,12 +76,9 @@ const SPRITESHEET_SOURCES: readonly SpritesheetSource[] = ['screen', 'webcam'];
  * otherwise look like a working generator until the first call.
  */
 function resolveGenerator(): GenerateSpritesheetFn | null {
-  const bindings = getEngineBindings();
-  if (!bindings) {
-    return null;
-  }
-
-  const candidate = (bindings as unknown as Record<string, unknown>).generateSpritesheet;
+  // Not getEngineBindings: that also needs the preview player, and the
+  // filmstrip does not -- Linux has the generator before it has the player.
+  const candidate = loadVelocityModule()?.generateSpritesheet;
   return typeof candidate === 'function' ? (candidate as GenerateSpritesheetFn) : null;
 }
 
