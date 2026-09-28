@@ -2,6 +2,7 @@
 mod borderless;
 #[cfg(windows)]
 mod desktop_capture;
+mod camera;
 mod devices;
 #[cfg(target_os = "linux")]
 mod linux;
