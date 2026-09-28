@@ -6,3 +6,5 @@
 mod api;
 mod media;
 mod thumbnails;
+
+pub(crate) mod render;
