@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
 
-use muxide::api::{AudioCodec, Muxer, MuxerBuilder, VideoCodec};
+use super::mp4_writer::{AudioTrack, Mp4Writer, VideoTrack};
 use openh264::encoder::{
   BitRate, Encoder, EncoderConfig, FrameRate, FrameType, IntraFramePeriod, RateControlMode,
   UsageType,
@@ -60,7 +60,7 @@ pub(crate) struct RecorderSummary {
 /// Reuses its conversion buffers while the caller feeds it frames.
 pub(crate) struct Mp4Recorder {
   encoder: Encoder,
-  muxer: Muxer<BufWriter<File>>,
+  muxer: Mp4Writer<BufWriter<File>>,
   sync_file: File,
   packed: Vec<u8>,
   yuv: YUVBuffer,
@@ -76,7 +76,7 @@ pub(crate) struct Mp4Recorder {
 }
 
 impl Mp4Recorder {
-  /// Creates a fast-start, non-fragmented MP4 suitable for browser playback.
+  /// Creates a non-fragmented MP4 suitable for browser playback.
   pub(crate) fn create(
     path: &Path,
     video: VideoSettings,
@@ -118,18 +118,12 @@ impl Mp4Recorder {
     let sync_file = file
       .try_clone()
       .map_err(|e| format!("clone {} for flushing: {e}", path.display()))?;
-    let mut builder = MuxerBuilder::new(BufWriter::new(file)).video(
-      VideoCodec::H264,
-      width,
-      height,
-      video.fps as f64,
-    );
-    if let Some(settings) = audio {
-      builder = builder.audio(AudioCodec::Opus, 48_000, settings.channels);
-    }
-    let muxer = builder
-      .build()
-      .map_err(|e| format!("create MP4 muxer: {e}"))?;
+    let muxer = Mp4Writer::new(
+      BufWriter::new(file),
+      VideoTrack { width, height },
+      audio.map(|settings| AudioTrack { channels: settings.channels }),
+    )
+    .map_err(|e| format!("create MP4 muxer: {e}"))?;
     Ok(Self {
       encoder,
       muxer,
@@ -228,7 +222,7 @@ impl Mp4Recorder {
       .ok_or("video timestamp span exceeds i64")?;
     self
       .muxer
-      .write_video(relative as f64 / 10_000_000.0, &data, keyframe)
+      .write_video(relative, &data, keyframe)
       .map_err(|e| format!("write video sample: {e}"))?;
     self.first_written_pts.get_or_insert(pts_100ns);
     self.last_written_pts = Some(pts_100ns);
@@ -253,7 +247,7 @@ impl Mp4Recorder {
       .ok_or("audio timestamp span exceeds i64")?;
     self
       .muxer
-      .write_audio(relative as f64 / 10_000_000.0, packet)
+      .write_audio(relative, packet)
       .map_err(|e| format!("write audio sample: {e}"))?;
     self.last_audio_pts = Some(pts_100ns);
     Ok(())
@@ -273,10 +267,8 @@ impl Mp4Recorder {
       frames_dropped,
       ..
     } = self;
-    muxer
-      .finish_with_stats()
-      .map_err(|e| format!("finalize MP4: {e}"))?;
-    // The consumed muxer drops its BufWriter before returning. Sync the same
+    drop(muxer.finish().map_err(|e| format!("finalize MP4: {e}"))?);
+    // The consumed writer drops its BufWriter before returning. Sync the same
     // open file afterward so storage errors surface before reporting success.
     sync_file
       .sync_all()

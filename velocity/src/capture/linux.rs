@@ -6,6 +6,7 @@
 
 pub(crate) mod audio;
 pub(crate) mod encoder;
+pub(crate) mod mp4_writer;
 pub(crate) mod pipewire_stream;
 pub(crate) mod portal;
 pub(crate) mod screen;
