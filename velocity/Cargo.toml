@@ -62,14 +62,15 @@ ashpd = { version = "0.13", default-features = false, features = [
   "tokio",
   "screencast",
 ] }
+# Demuxes recordings for the Linux engine's decode, probe and thumbnails.
+mp4      = "0.14"
 openh264 = "0.9"
 # The system libopus (BSD), linked dynamically; the bundled build needs cmake.
 opusic-sys = { version = "0.7", default-features = false }
 pipewire   = "0.10"
-
-[target.'cfg(target_os = "linux")'.dev-dependencies]
-# Reads recordings back in the Linux capture tests.
-mp4 = "0.14"
+# Webcams through the kernel's V4L2 interface. Not the `libv4l` feature:
+# that wraps the LGPL libv4l.
+v4l = { version = "0.14", default-features = false, features = ["v4l2"] }
 
 [build-dependencies]
 napi-build = "2"
