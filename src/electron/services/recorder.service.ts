@@ -190,6 +190,12 @@ function getSafeStartRecordingError(error: unknown, sourceId: string): string {
     return START_RECORDING_ENGINE_UNAVAILABLE_ERROR;
   }
 
+  // velocity's own wording for a capture this platform lacks. Refreshing
+  // sources cannot help with that, so say what is actually missing.
+  if (message.includes('is not supported on')) {
+    return `${(error as Error).message}.`;
+  }
+
   return START_RECORDING_GENERIC_ERROR;
 }
 
@@ -456,6 +462,10 @@ function resolveBoundsFromSource(source: DesktopSource): SourceCaptureBounds | u
  * Get available desktop sources (screens and windows).
  */
 export async function getSources(): Promise<DesktopSource[]> {
+  if (process.platform === 'linux') {
+    return getPortalSources();
+  }
+
   const isPackagedWindows = process.platform === 'win32' && app.isPackaged;
   const attemptCount = isPackagedWindows ? 3 : 1;
   const displayById = new Map(
@@ -562,6 +572,34 @@ export async function getSources(): Promise<DesktopSource[]> {
   );
 
   return normalizedSources;
+}
+
+/**
+ * The one source Linux offers: whatever the system picker returns.
+ *
+ * On Wayland an app cannot list or look at other windows. Screen capture goes
+ * through the xdg-desktop-portal, whose own dialog is the picker -- and
+ * `desktopCapturer.getSources` would open that dialog just to fill this list.
+ * So the list holds a single entry, and velocity opens the portal when the
+ * recording starts, where the user picks a screen or a window.
+ */
+function getPortalSources(): DesktopSource[] {
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const bounds = scaleDisplayBounds(primaryDisplay.bounds, primaryDisplay.scaleFactor);
+  const source: DesktopSource = {
+    id: 'screen:portal',
+    name: 'Screen or window (chosen when recording starts)',
+    thumbnailDataUrl: '',
+    isScreen: true,
+    isPrimary: true,
+    ...bounds,
+  };
+
+  sourceMetaById = new Map([
+    [source.id, { name: source.name, isScreen: true, isPrimary: true, bounds }],
+  ]);
+
+  return [source];
 }
 
 export function resolveMouseTrackingBounds(sourceId: string): SourceCaptureBounds | undefined {

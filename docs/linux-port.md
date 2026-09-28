@@ -28,7 +28,7 @@ velocity was written directly against Windows APIs. Linux needs a replacement fo
 
 - [x] **M0: the JS side works on Linux.** `mise.toml` pins Node 24, because better-sqlite3 12.6 doesn't compile on Node 26. `pnpm install`, `pnpm typecheck`, `pnpm transpile:electron` and `pnpm test` (147 tests) all pass.
 - [x] **M1: velocity compiles on Linux with the same JS API.** Windows crates move to `[target.'cfg(windows)'.dependencies]`. Every `#[napi]` export stays on Linux: unsupported ones return a clear "not supported on Linux yet" error (or an empty list, where a list is the natural answer), so `index.d.ts` doesn't change. Pure logic (cuts, zoom, pattern, clocks, PCM mixing, geometry) is compiled and tested on Linux too.
-- [ ] **M2: the Electron app launches on Linux.** `pnpm dev` opens, the recorder reports that native capture is unavailable instead of crashing, and `recorder-capture-plan.ts` knows about `linux`.
+- [x] **M2: the Electron app launches on Linux.** `pnpm dev` opens, the recorder reports that native capture is unavailable instead of crashing, and `recorder-capture-plan.ts` knows about `linux`.
 - [ ] **M3: capture on Linux.** Portal screencast into PipeWire, encoded to MP4. Then cursor metadata, then audio, then webcam.
 - [ ] **M4: engine on Linux.** Decode, the wgpu composite chain, preview delivery, export.
 - [ ] **M5: packaging.** `pnpm dist:linux` builds an AppImage that bundles the Linux `.node`.
@@ -45,5 +45,6 @@ velocity was written directly against Windows APIs. Linux needs a replacement fo
 
 Newest first. Record decisions and open questions for the user here.
 
+- 2026-09-29: M2 done. `pnpm dev` launches on Hyprland. The recorder offers a single "Screen or window (chosen when recording starts)" source on Linux instead of calling `desktopCapturer`, which on Wayland would open the portal picker just to fill the list. Pressing record shows velocity's "screen recording is not supported on linux yet". Checked by driving the running app over CDP (`--remote-debugging-port`). **Decision for the user:** `pnpm-workspace.yaml` has `allowBuilds: electron: false`, so a fresh `pnpm install` never downloads Electron's binary, on any OS. This checkout was fixed by running `node_modules/.pnpm/electron@40.0.0/node_modules/electron/install.js` once. Recommend setting `electron: true`.
 - 2026-09-29: M1 done. velocity builds on Linux; 1187 Rust tests pass here (up from none), and the Windows build still type-checks. The capture, cursor and window API is identical on Linux and fails with "not supported on linux yet". The engine classes (`VideoPlayer`, `VideoExporter`, ...) are absent on Linux until M4, and Electron's `native.ts` already treats that as "engine unavailable".
 - 2026-09-29: M0 done. Started M1.
