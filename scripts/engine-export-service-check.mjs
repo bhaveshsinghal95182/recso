@@ -37,9 +37,16 @@ try {
   )
 
   const fps = 30
-  const encoder = new velocity.PatternEncoder(input, 640, 360, fps, 4_000_000)
-  for (let frame = 0; frame < fps * 3; frame += 1) encoder.writeFrame()
-  encoder.finish()
+  if (velocity.PatternEncoder) {
+    const encoder = new velocity.PatternEncoder(input, 640, 360, fps, 4_000_000)
+    for (let frame = 0; frame < fps * 3; frame += 1) encoder.writeFrame()
+    encoder.finish()
+  } else {
+    // PatternEncoder is Windows-only (D3D11). Elsewhere a dev-only ffmpeg makes the source.
+    const { execFileSync } = await import('node:child_process')
+    execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-f', 'lavfi', '-i',
+      `testsrc2=size=640x360:rate=${fps}:duration=3`, '-pix_fmt', 'yuv420p', '-c:v', 'libx264', '-profile:v', 'baseline', input])
+  }
 
   console.log('main-process export service')
 
