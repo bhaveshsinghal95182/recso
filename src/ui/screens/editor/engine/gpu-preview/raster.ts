@@ -21,6 +21,7 @@ import {
 } from '../background-raster';
 import { toFileUrl } from '../export-pipeline/source-paths';
 import {
+  arrowGlyphExtent,
   drawArrowCursor,
   drawBackground,
   drawCrosshairCursor,
@@ -262,8 +263,37 @@ export function parseCssColour(
   return null;
 }
 
-/** How big a rasterised glyph is drawn, before the engine scales it. */
+/** How big a rasterised glyph is drawn when no display size is known. */
 const GLYPH_SIZE_PX = 64;
+
+/**
+ * How many sprite pixels to draw per pixel the pointer is shown at.
+ *
+ * The engine samples sprites bilinearly with no mipmaps, so a sprite far
+ * larger than it is drawn loses whole rows of pixels -- the thin rim breaks up
+ * and the edges stair-step. Two to one keeps it smooth and leaves room for the
+ * click animation to grow it.
+ */
+const GLYPH_OVERSAMPLE = 2;
+
+/**
+ * The glyph size that makes a sprite `displayHeightPx * GLYPH_OVERSAMPLE`
+ * tall, given the sprite's extent at size 1. Without a display size, the
+ * fixed size.
+ */
+export function glyphSizeFor(
+  unitExtent: { top: number; bottom: number },
+  displayHeightPx?: number,
+): number {
+  if (!displayHeightPx || !Number.isFinite(displayHeightPx) || displayHeightPx <= 0) {
+    return GLYPH_SIZE_PX;
+  }
+  return (displayHeightPx * GLYPH_OVERSAMPLE) / (unitExtent.top + unitExtent.bottom);
+}
+
+export const ARROW_DEFAULT_FILL = 'rgba(14, 14, 16, 1)';
+export const ARROW_POINTER_FILL = 'rgba(35, 150, 255, 1)';
+export const ARROW_RIM_COLOR = 'rgba(255, 255, 255, 1)';
 
 /**
  * Rasterise the cursor the config asks for.
@@ -277,6 +307,7 @@ const GLYPH_SIZE_PX = 64;
  */
 export async function rasteriseCursor(
   cursor: CompositionCursorConfig | undefined,
+  displayHeightPx?: number,
 ): Promise<RgbaBitmap | null> {
   if (!cursor?.enabled) {
     return null;
@@ -290,24 +321,28 @@ export async function rasteriseCursor(
     // Drawn around its point, so the sprite is symmetric and the hotspot is the
     // middle. The arms reach 0.75 of the size either way; a little padding
     // stops the stroke clipping.
-    const extent = Math.ceil(GLYPH_SIZE_PX * 1.75);
+    const glyph = glyphSizeFor({ top: 0.875, bottom: 0.875 }, displayHeightPx);
+    const extent = Math.ceil(glyph * 1.75);
     const ctx = createContext(extent, extent);
     if (!ctx) return null;
-    drawCrosshairCursor(ctx, extent / 2, extent / 2, GLYPH_SIZE_PX);
+    drawCrosshairCursor(ctx, extent / 2, extent / 2, glyph);
     return { ...readBack(ctx), hotspotX: extent / 2, hotspotY: extent / 2 };
   }
 
-  // The arrow is drawn from its point, down and to the right, so the sprite's
-  // hotspot is its top-left corner. The path reaches 0.72 across and 2.28 down;
-  // the stroke adds a little on each side.
-  const stroke = Math.max(1, GLYPH_SIZE_PX * 0.09);
-  const width = Math.ceil(GLYPH_SIZE_PX * 0.72 + stroke * 2);
-  const height = Math.ceil(GLYPH_SIZE_PX * 2.28 + stroke * 2);
+  // The arrow is drawn from its tip, down and to the right; its rim and
+  // shadow reach a little past the path on every side, and the tip is the
+  // hotspot. Black with a white rim like the compositor's default; blue for
+  // `pointer`.
+  const glyph = glyphSizeFor(arrowGlyphExtent(1), displayHeightPx);
+  const extent = arrowGlyphExtent(glyph);
+  const width = Math.ceil(extent.left + extent.right);
+  const height = Math.ceil(extent.top + extent.bottom);
   const ctx = createContext(width, height);
   if (!ctx) return null;
 
-  drawArrowCursor(ctx, stroke, stroke, GLYPH_SIZE_PX, '#ffffff', 'rgba(0, 0, 0, 0.85)');
-  return { ...readBack(ctx), hotspotX: stroke, hotspotY: stroke };
+  const fill = cursor.style === 'pointer' ? ARROW_POINTER_FILL : ARROW_DEFAULT_FILL;
+  drawArrowCursor(ctx, extent.left, extent.top, glyph, fill, ARROW_RIM_COLOR);
+  return { ...readBack(ctx), hotspotX: extent.left, hotspotY: extent.top };
 }
 
 /** Load an image path into RGBA, for a custom cursor or a background image. */
@@ -428,9 +463,10 @@ function keyFor(
  * so the sprite is symmetric and its hotspot is the middle. Padded by a couple
  * of pixels, because the glyph draws a halo one pixel outside the bars.
  */
-function rasteriseIBeam(): RgbaBitmap | null {
-  const stemHeight = GLYPH_SIZE_PX * 1.9;
-  const capWidth = Math.max(Math.max(2, GLYPH_SIZE_PX * 0.16) * 2.6, GLYPH_SIZE_PX * 0.64);
+function rasteriseIBeam(displayHeightPx?: number): RgbaBitmap | null {
+  const glyph = glyphSizeFor({ top: 0.95, bottom: 0.95 }, displayHeightPx);
+  const stemHeight = glyph * 1.9;
+  const capWidth = Math.max(Math.max(2, glyph * 0.16) * 2.6, glyph * 0.64);
   const width = Math.ceil(capWidth) + 4;
   const height = Math.ceil(stemHeight) + 4;
 
@@ -439,7 +475,7 @@ function rasteriseIBeam(): RgbaBitmap | null {
     return null;
   }
 
-  drawIBeamCursor(ctx, width / 2, height / 2, GLYPH_SIZE_PX);
+  drawIBeamCursor(ctx, width / 2, height / 2, glyph);
   return { ...readBack(ctx), hotspotX: width / 2, hotspotY: height / 2 };
 }
 
@@ -451,9 +487,13 @@ function rasteriseIBeam(): RgbaBitmap | null {
  * has a tip too -- but it is what the other path does, and the two disagreeing
  * would be worse than both being slightly off.
  */
-async function loadForKey(key: string, event: CompositionCursorEvent): Promise<RgbaBitmap | null> {
+async function loadForKey(
+  key: string,
+  event: CompositionCursorEvent,
+  displayHeightPx?: number,
+): Promise<RgbaBitmap | null> {
   if (key === 'ibeam') {
-    return rasteriseIBeam();
+    return rasteriseIBeam(displayHeightPx);
   }
 
   if (key.startsWith('override:')) {
@@ -482,6 +522,7 @@ async function loadForKey(key: string, event: CompositionCursorEvent): Promise<R
 export async function buildCursorBitmapTable(
   cursor: CompositionCursorConfig | undefined,
   timeOf: (event: CompositionCursorEvent) => number,
+  displayHeightPx?: number,
 ): Promise<CursorBitmapTable> {
   if (!cursor?.enabled || cursor.events.length === 0) {
     return EMPTY_TABLE;
@@ -504,7 +545,7 @@ export async function buildCursorBitmapTable(
   const idByKey = new Map<string, number>();
 
   for (const [key, event] of firstSeen) {
-    const loaded = await loadForKey(key, event);
+    const loaded = await loadForKey(key, event, displayHeightPx);
     if (!loaded) {
       // One shape failing to decode costs that shape, not the table -- the
       // events that wanted it fall back to the default pointer.

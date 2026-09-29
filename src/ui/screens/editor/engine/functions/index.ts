@@ -2,6 +2,7 @@ export { drawBackground } from './background';
 export { lerp, roundRectPath, smoothstep } from './common';
 export { defaultConfig } from './config';
 export {
+  arrowGlyphExtent,
   drawArrowCursor,
   drawCrosshairCursor,
   drawCursorLayer,

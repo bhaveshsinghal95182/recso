@@ -258,30 +258,76 @@ function resolveCursorSample(
   };
 }
 
+/**
+ * The pointer's outline, tip at the origin, in units of the glyph's size: the
+ * proportions of the macOS arrow, 2.2 sizes tall. A path rather than an image
+ * so it stays sharp at any scale, and shared by both renderers.
+ */
+const ARROW_OUTLINE: ReadonlyArray<readonly [number, number]> = [
+  [0, 0],
+  [0, 1.905],
+  [0.4425, 1.4872],
+  [0.7497, 2.2],
+  [1.0324, 2.0771],
+  [0.7313, 1.3889],
+  [1.3397, 1.3643],
+];
+/** The contrasting rim, drawn outside the fill. */
+const ARROW_RIM = 0.17;
+/** A soft shadow under the pointer, which is what lifts it off busy footage. */
+const ARROW_SHADOW_BLUR = 0.2;
+const ARROW_SHADOW_OFFSET_Y = 0.07;
+const ARROW_SHADOW_COLOR = 'rgba(0, 0, 0, 0.38)';
+
+/** How far the drawn arrow reaches around its tip, in pixels, rim and shadow included. */
+export function arrowGlyphExtent(size: number): {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+} {
+  const xs = ARROW_OUTLINE.map(([x]) => x);
+  const ys = ARROW_OUTLINE.map(([, y]) => y);
+  const reach = ARROW_RIM + ARROW_SHADOW_BLUR;
+  return {
+    left: (reach - Math.min(...xs)) * size,
+    top: (reach - Math.min(...ys)) * size,
+    right: (Math.max(...xs) + reach) * size,
+    bottom: (Math.max(...ys) + reach + ARROW_SHADOW_OFFSET_Y) * size,
+  };
+}
+
 export function drawArrowCursor(
   ctx: Canvas2DContext,
   x: number,
   y: number,
   size: number,
   fillColor: string,
-  strokeColor: string,
+  rimColor: string,
 ): void {
   ctx.save();
   ctx.translate(x, y);
   ctx.beginPath();
-  ctx.moveTo(0, 0);
-  ctx.lineTo(size * 0.72, size * 1.82);
-  ctx.lineTo(size * 0.47, size * 1.8);
-  ctx.lineTo(size * 0.31, size * 2.28);
-  ctx.lineTo(size * 0.08, size * 2.18);
-  ctx.lineTo(size * 0.24, size * 1.7);
-  ctx.lineTo(0, size * 1.7);
+  ARROW_OUTLINE.forEach(([px, py], index) => {
+    if (index === 0) ctx.moveTo(px * size, py * size);
+    else ctx.lineTo(px * size, py * size);
+  });
   ctx.closePath();
+
+  // The rim is a stroke twice its width with the fill laid over its inner
+  // half, so the fill keeps its full shape; round joins soften the tip and
+  // the tail's corners the way a real pointer's are.
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = ARROW_RIM * size * 2;
+  ctx.strokeStyle = rimColor;
+  ctx.shadowColor = ARROW_SHADOW_COLOR;
+  ctx.shadowBlur = ARROW_SHADOW_BLUR * size;
+  ctx.shadowOffsetY = ARROW_SHADOW_OFFSET_Y * size;
+  ctx.stroke();
+
+  ctx.shadowColor = 'transparent';
   ctx.fillStyle = fillColor;
   ctx.fill();
-  ctx.lineWidth = Math.max(1, size * 0.09);
-  ctx.strokeStyle = strokeColor;
-  ctx.stroke();
   ctx.restore();
 }
 

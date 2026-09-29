@@ -51,6 +51,9 @@ import {
 
 type EnginePlayer = typeof window.electron.engine.player;
 
+/** The pointer's height in canvas pixels at cursor size 1. */
+export const CURSOR_BASE_SIZE_PX = 28;
+
 /** The engine's two overlay shapes, from the editor's four. */
 function engineShape(shape: WebcamOverlayShape | undefined): 'rect' | 'ellipse' {
   // The three rectangle variants differ only in the aspect ratio the *layout*
@@ -399,17 +402,23 @@ export async function resolveComposition(
   let resolvedCursor: ResolvedComposition['cursor'] = null;
   const cursor = config.cursor;
   if (cursor?.enabled && cursor.events.length > 0) {
+    // The pointer's height in canvas pixels, which the engine scales every
+    // sprite to: 28px at size 1, so the built-in arrow (whose sprite leaves
+    // room for its shadow) and a captured system pointer (which leaves room
+    // around its shape too) both come out about as tall as a real one.
+    const sizePx = CURSOR_BASE_SIZE_PX * Math.max(0.2, cursor.size);
+
     // The default pointer, drawn for any sample the recorder captured no
     // bitmap for -- and for every sample at all, on a recording from before
-    // the recorder captured them.
-    const bitmap = await rasteriseCursor(cursor);
+    // the recorder captured them. Rasterised for the size it is shown at.
+    const bitmap = await rasteriseCursor(cursor, sizePx);
 
     // Overrides resolve against composition time, the same clock the track is
     // built on and the same one the engine looks samples up at.
     const at = (event: CompositionCursorEvent) =>
       mapSourceTimeToCompositionTimeMs(event.timestampMs, cuts);
 
-    const table = await buildCursorBitmapTable(cursor, at);
+    const table = await buildCursorBitmapTable(cursor, at, sizePx);
 
     const samples = cursor.events
       .filter((event) => Number.isFinite(event.timestampMs))
@@ -431,9 +440,7 @@ export async function resolveComposition(
       track: withOverrideBoundaries(samples, cursor, table).map(
         ({ event: _event, ...sample }) => sample,
       ),
-      // The compositor's base size is 22px scaled by the user's multiplier; the
-      // engine takes the resolved height in canvas pixels.
-      sizePx: 22 * Math.max(0.2, cursor.size),
+      sizePx,
       // `showMotionBlur` is the switch the editor already has for "make fast
       // pointer movement look fast". The engine answers it with a smear rather
       // than the compositor's trail of ghosted copies -- same setting, different
