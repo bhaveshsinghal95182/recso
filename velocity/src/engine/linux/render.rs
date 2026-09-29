@@ -2,14 +2,22 @@
 //!
 //! It mirrors Windows' coded-size conversion and ordered canvas quads so a
 //! staged frame rerenders identically in the editor and export.
-use crate::engine::layout::{Fill, Grade, OverlayShape, Quad, Rect, ShadowFill, UvRect};
-use crate::engine::scene::{
-  BackgroundRequest, EffectParams, Layer, SourceCrop, VideoLayout, DEFAULT_LAYER_ORDER,
+use crate::engine::layout::{
+  fit_source, smear_geometry, CursorTrack, Fill, Grade, HiddenSpans, OverlayShape, Quad, Rect,
+  ShadowFill, UvRect, WebcamLayout,
 };
-use crate::engine::zoom::{ZoomState, ZoomTrack};
+use crate::engine::scene::{
+  BackgroundRequest, CursorEffects, EffectParams, Layer, SourceCrop, VideoLayout,
+  DEFAULT_LAYER_ORDER,
+};
+use crate::engine::zoom::{lerp_rect, WebcamZoomTrack, ZoomState, ZoomTrack};
 use std::sync::{Arc, OnceLock};
 
 const WGSL: &str = include_str!("shaders.wgsl");
+const DEFAULT_CURSOR_SIZE_PX: f32 = 22.0;
+const SMEAR_TRAVEL_MS: f32 = 28.0;
+const MAX_SMEAR_HEIGHTS: f32 = 4.0;
+const MIN_SMEAR_HEIGHTS: f32 = 0.15;
 struct Gpu {
   device: wgpu::Device,
   queue: wgpu::Queue,
@@ -66,6 +74,64 @@ struct Source {
   planes: [wgpu::Texture; 3],
   views: [wgpu::TextureView; 3],
 }
+struct WebcamLayer {
+  width: u32,
+  height: u32,
+  sources: Vec<Source>,
+  staged: Vec<bool>,
+  _rgba: wgpu::Texture,
+  rgba_view: wgpu::TextureView,
+}
+#[derive(Clone, Copy, Debug)]
+struct StagedWebcam {
+  visible: bool,
+  rect: Rect,
+  full_screen: f32,
+}
+impl Default for StagedWebcam {
+  fn default() -> Self {
+    Self {
+      visible: true,
+      rect: Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 0.0,
+        height: 0.0,
+      },
+      full_screen: 0.0,
+    }
+  }
+}
+#[derive(Clone, Copy)]
+struct StagedCursor {
+  rect: Rect,
+  image_id: Option<u32>,
+  smear: [f32; 2],
+}
+/// RGBA cursor pixels and the point within the bitmap that tracks the sample.
+pub(crate) struct CursorImage {
+  pub(crate) width: u32,
+  pub(crate) height: u32,
+  pub(crate) pixels: Vec<u8>,
+  pub(crate) hotspot_x: f32,
+  pub(crate) hotspot_y: f32,
+}
+struct SpriteTexture {
+  _texture: wgpu::Texture,
+  view: wgpu::TextureView,
+  width: u32,
+  height: u32,
+  hotspot_x: f32,
+  hotspot_y: f32,
+}
+struct CursorImages {
+  images: Vec<SpriteTexture>,
+}
+impl CursorImages {
+  fn get(&self, id: u32) -> Option<&SpriteTexture> {
+    self.images.get(id as usize)
+  }
+}
 struct Background {
   clear: [f32; 4],
   image: Option<(wgpu::Texture, wgpu::TextureView)>,
@@ -100,6 +166,19 @@ pub(crate) struct RenderChain {
   slot_zoom: Vec<ZoomState>,
   layer_order: [Layer; 3],
   background: Background,
+  webcam: Option<WebcamLayer>,
+  webcam_layout: WebcamLayout,
+  webcam_hidden: HiddenSpans,
+  webcam_zoom: WebcamZoomTrack,
+  slot_webcam: Vec<StagedWebcam>,
+  webcam_params: EffectParams,
+  cursor: Option<SpriteTexture>,
+  cursor_images: CursorImages,
+  cursor_track: CursorTrack,
+  cursor_size: f32,
+  cursor_opacity: f32,
+  cursor_effects: CursorEffects,
+  slot_cursor: Vec<Option<StagedCursor>>,
 }
 fn texture(
   d: &wgpu::Device,
@@ -122,6 +201,72 @@ fn texture(
     usage,
     view_formats: &[],
   })
+}
+fn source(d: &wgpu::Device, size: (u32, u32), usage: wgpu::TextureUsages) -> Source {
+  let dims = [
+    size,
+    (size.0.div_ceil(2), size.1.div_ceil(2)),
+    (size.0.div_ceil(2), size.1.div_ceil(2)),
+  ];
+  let planes = std::array::from_fn(|i| {
+    texture(
+      d,
+      "I420 plane",
+      dims[i],
+      wgpu::TextureFormat::R8Unorm,
+      usage,
+    )
+  });
+  let views = std::array::from_fn(|i| planes[i].create_view(&Default::default()));
+  Source { planes, views }
+}
+fn upload_planes(
+  gpu: &Gpu,
+  source: &Source,
+  size: (u32, u32),
+  slot: usize,
+  planes: [&[u8]; 3],
+  strides: [usize; 3],
+) -> Result<(), String> {
+  for (i, (data, stride)) in planes.into_iter().zip(strides).enumerate() {
+    let dims = if i == 0 {
+      size
+    } else {
+      (size.0.div_ceil(2), size.1.div_ceil(2))
+    };
+    let need = stride
+      .checked_mul(dims.1.saturating_sub(1) as usize)
+      .and_then(|n| n.checked_add(dims.0 as usize))
+      .ok_or_else(|| format!("slot {slot} plane {i}: stride overflows"))?;
+    if stride < dims.0 as usize || stride > u32::MAX as usize || data.len() < need {
+      return Err(format!(
+        "slot {slot} plane {i}: {}x{} stride {stride} needs {need} bytes, got {}",
+        dims.0,
+        dims.1,
+        data.len()
+      ));
+    }
+    gpu.queue.write_texture(
+      wgpu::TexelCopyTextureInfo {
+        texture: &source.planes[i],
+        mip_level: 0,
+        origin: wgpu::Origin3d::ZERO,
+        aspect: wgpu::TextureAspect::All,
+      },
+      data,
+      wgpu::TexelCopyBufferLayout {
+        offset: 0,
+        bytes_per_row: Some(stride as u32),
+        rows_per_image: Some(dims.1),
+      },
+      wgpu::Extent3d {
+        width: dims.0,
+        height: dims.1,
+        depth_or_array_layers: 1,
+      },
+    );
+  }
+  Ok(())
 }
 fn pipeline(
   d: &wgpu::Device,
@@ -285,22 +430,11 @@ impl RenderChain {
     };
     let mut sources = Vec::with_capacity(slots.max(1));
     for _ in 0..slots.max(1) {
-      let dims = [
+      sources.push(source(
+        d,
         coded,
-        (coded.0.div_ceil(2), coded.1.div_ceil(2)),
-        (coded.0.div_ceil(2), coded.1.div_ceil(2)),
-      ];
-      let planes = std::array::from_fn(|i| {
-        texture(
-          d,
-          "I420 plane",
-          dims[i],
-          wgpu::TextureFormat::R8Unorm,
-          wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
-        )
-      });
-      let views = std::array::from_fn(|i| planes[i].create_view(&Default::default()));
-      sources.push(Source { planes, views });
+        wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+      ));
     }
     let video = texture(
       d,
@@ -344,6 +478,19 @@ impl RenderChain {
         clear: [0.0, 0.0, 0.0, 1.0],
         image: None,
       },
+      webcam: None,
+      webcam_layout: WebcamLayout::default(),
+      webcam_hidden: HiddenSpans::default(),
+      webcam_zoom: WebcamZoomTrack::default(),
+      slot_webcam: vec![StagedWebcam::default(); slots.max(1)],
+      webcam_params: EffectParams::default(),
+      cursor: None,
+      cursor_images: CursorImages { images: Vec::new() },
+      cursor_track: CursorTrack::default(),
+      cursor_size: DEFAULT_CURSOR_SIZE_PX,
+      cursor_opacity: 1.0,
+      cursor_effects: CursorEffects::default(),
+      slot_cursor: vec![None; slots.max(1)],
     })
   }
   /// Size of the actual RGBA output.
@@ -364,6 +511,229 @@ impl RenderChain {
   }
   pub(crate) fn set_layer_order(&mut self, v: [Layer; 3]) {
     self.layer_order = v;
+  }
+  /// Allocate camera planes and an RGBA conversion target at camera resolution.
+  pub(crate) fn attach_webcam(&mut self, width: u32, height: u32) -> Result<(), String> {
+    if width == 0 || height == 0 {
+      return Err(format!("invalid webcam size {width}x{height}"));
+    }
+    let gpu = gpu()?;
+    let size = (width, height);
+    let sources = (0..self.sources.len())
+      .map(|_| {
+        source(
+          &gpu.device,
+          size,
+          wgpu::TextureUsages::COPY_DST
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::TEXTURE_BINDING,
+        )
+      })
+      .collect();
+    let rgba = texture(
+      &gpu.device,
+      "converted webcam",
+      size,
+      wgpu::TextureFormat::Rgba8Unorm,
+      wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+    );
+    let rgba_view = rgba.create_view(&Default::default());
+    self.webcam = Some(WebcamLayer {
+      width,
+      height,
+      sources,
+      staged: vec![false; self.sources.len()],
+      _rgba: rgba,
+      rgba_view,
+    });
+    Ok(())
+  }
+  /// Whether a camera source has been attached.
+  pub(crate) fn has_webcam(&self) -> bool {
+    self.webcam.is_some()
+  }
+  /// Set the camera's grade separately from the screen recording.
+  pub(crate) fn set_webcam_params(&mut self, params: EffectParams) {
+    self.webcam_params = params;
+  }
+  /// Set the camera box and its shape.
+  pub(crate) fn set_webcam_layout(&mut self, layout: WebcamLayout) {
+    self.webcam_layout = layout.sanitized();
+  }
+  /// Set camera box transitions in composition time.
+  pub(crate) fn set_webcam_zoom_regions(&mut self, track: WebcamZoomTrack) {
+    self.webcam_zoom = track;
+  }
+  /// Hide the camera during these composition-time spans.
+  pub(crate) fn set_webcam_cuts(&mut self, spans: Vec<(f64, f64)>) {
+    self.webcam_hidden = HiddenSpans::new(spans);
+  }
+  /// Upload a decoded I420 camera frame into one reusable slot.
+  pub(crate) fn stage_webcam(
+    &mut self,
+    slot: usize,
+    y: &[u8],
+    u: &[u8],
+    v: &[u8],
+    strides: (usize, usize, usize),
+  ) -> Result<(), String> {
+    let Some(webcam) = self.webcam.as_mut() else {
+      return Ok(());
+    };
+    let index = slot % webcam.sources.len();
+    upload_planes(
+      &self.gpu,
+      &webcam.sources[index],
+      (webcam.width, webcam.height),
+      slot,
+      [y, u, v],
+      [strides.0, strides.1, strides.2],
+    )?;
+    webcam.staged[index] = true;
+    Ok(())
+  }
+  /// Carry the last camera frame to a slot without a new camera decode.
+  pub(crate) fn inherit_webcam(&mut self, from: usize, to: usize) -> Result<(), String> {
+    let Some(webcam) = self.webcam.as_mut() else {
+      return Ok(());
+    };
+    let slots = webcam.sources.len();
+    let (from, to) = (from % slots, to % slots);
+    if from == to || !webcam.staged[from] {
+      return Ok(());
+    }
+    let mut encoder = self
+      .gpu
+      .device
+      .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("inherit webcam"),
+      });
+    for i in 0..3 {
+      let size = if i == 0 {
+        (webcam.width, webcam.height)
+      } else {
+        (webcam.width.div_ceil(2), webcam.height.div_ceil(2))
+      };
+      encoder.copy_texture_to_texture(
+        wgpu::TexelCopyTextureInfo {
+          texture: &webcam.sources[from].planes[i],
+          mip_level: 0,
+          origin: wgpu::Origin3d::ZERO,
+          aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyTextureInfo {
+          texture: &webcam.sources[to].planes[i],
+          mip_level: 0,
+          origin: wgpu::Origin3d::ZERO,
+          aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::Extent3d {
+          width: size.0,
+          height: size.1,
+          depth_or_array_layers: 1,
+        },
+      );
+    }
+    self.gpu.queue.submit([encoder.finish()]);
+    webcam.staged[to] = true;
+    Ok(())
+  }
+  /// Forget camera frames after a seek.
+  pub(crate) fn clear_webcam_staging(&mut self) {
+    if let Some(webcam) = self.webcam.as_mut() {
+      webcam.staged.fill(false);
+    }
+  }
+  fn upload_cursor(&self, image: CursorImage) -> Result<SpriteTexture, String> {
+    let row = image.width.checked_mul(4).ok_or_else(|| {
+      format!(
+        "cursor {}x{} row byte count overflow",
+        image.width, image.height
+      )
+    })?;
+    let bytes = (image.width as usize)
+      .checked_mul(image.height as usize)
+      .and_then(|n| n.checked_mul(4))
+      .ok_or_else(|| {
+        format!(
+          "cursor {}x{} byte count overflow",
+          image.width, image.height
+        )
+      })?;
+    if image.width == 0 || image.height == 0 || image.pixels.len() < bytes {
+      return Err(format!(
+        "cursor {}x{} requires {bytes} RGBA bytes, got {}",
+        image.width,
+        image.height,
+        image.pixels.len()
+      ));
+    }
+    let tex = texture(
+      &self.gpu.device,
+      "cursor",
+      (image.width, image.height),
+      wgpu::TextureFormat::Rgba8Unorm,
+      wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+    );
+    self.gpu.queue.write_texture(
+      wgpu::TexelCopyTextureInfo {
+        texture: &tex,
+        mip_level: 0,
+        origin: wgpu::Origin3d::ZERO,
+        aspect: wgpu::TextureAspect::All,
+      },
+      &image.pixels[..bytes],
+      wgpu::TexelCopyBufferLayout {
+        offset: 0,
+        bytes_per_row: Some(row),
+        rows_per_image: Some(image.height),
+      },
+      wgpu::Extent3d {
+        width: image.width,
+        height: image.height,
+        depth_or_array_layers: 1,
+      },
+    );
+    let view = tex.create_view(&Default::default());
+    Ok(SpriteTexture {
+      _texture: tex,
+      view,
+      width: image.width,
+      height: image.height,
+      hotspot_x: image.hotspot_x,
+      hotspot_y: image.hotspot_y,
+    })
+  }
+  /// Upload the cursor bitmap table used by sample image IDs.
+  pub(crate) fn set_cursor_images(&mut self, images: Vec<CursorImage>) -> Result<(), String> {
+    let uploaded = images
+      .into_iter()
+      .map(|image| self.upload_cursor(image))
+      .collect::<Result<Vec<_>, _>>()?;
+    self.cursor_images = CursorImages { images: uploaded };
+    Ok(())
+  }
+  /// Upload the fallback cursor bitmap.
+  pub(crate) fn set_cursor_image(&mut self, image: Option<CursorImage>) -> Result<(), String> {
+    self.cursor = image.map(|image| self.upload_cursor(image)).transpose()?;
+    Ok(())
+  }
+  /// Set the recorded cursor samples.
+  pub(crate) fn set_cursor_track(&mut self, track: CursorTrack) {
+    self.cursor_track = track;
+  }
+  /// Set cursor height in canvas pixels and opacity.
+  pub(crate) fn set_cursor_style(&mut self, size: f32, opacity: f32) {
+    self.cursor_size = size.max(0.0);
+    self.cursor_opacity = opacity.clamp(0.0, 1.0);
+  }
+  /// Set click growth and motion smear.
+  pub(crate) fn set_cursor_effects(&mut self, effects: CursorEffects) {
+    self.cursor_effects = CursorEffects {
+      click_scale: effects.click_scale.max(0.0),
+      click_duration_ms: effects.click_duration_ms.max(0.0),
+      smear_strength: effects.smear_strength.max(0.0),
+    };
   }
   /// Upload a static image or retain a solid clear colour.
   pub(crate) fn set_background(&mut self, request: BackgroundRequest) -> Result<(), String> {
@@ -432,54 +802,91 @@ impl RenderChain {
     strides: (usize, usize, usize),
   ) -> Result<(), String> {
     let source = &self.sources[slot % self.sources.len()];
-    for (i, (data, stride)) in [(y, strides.0), (u, strides.1), (v, strides.2)]
-      .into_iter()
-      .enumerate()
-    {
-      let dims = if i == 0 {
-        self.coded
-      } else {
-        (self.coded.0.div_ceil(2), self.coded.1.div_ceil(2))
-      };
-      let need = stride
-        .checked_mul(dims.1.saturating_sub(1) as usize)
-        .and_then(|n| n.checked_add(dims.0 as usize))
-        .ok_or_else(|| format!("slot {slot} plane {i}: stride overflows"))?;
-      if stride < dims.0 as usize || stride > u32::MAX as usize || data.len() < need {
-        return Err(format!(
-          "slot {slot} plane {i}: {}x{} stride {stride} needs {need} bytes, got {}",
-          dims.0,
-          dims.1,
-          data.len()
-        ));
-      }
-      self.gpu.queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
-          texture: &source.planes[i],
-          mip_level: 0,
-          origin: wgpu::Origin3d::ZERO,
-          aspect: wgpu::TextureAspect::All,
-        },
-        data,
-        wgpu::TexelCopyBufferLayout {
-          offset: 0,
-          bytes_per_row: Some(stride as u32),
-          rows_per_image: Some(dims.1),
-        },
-        wgpu::Extent3d {
-          width: dims.0,
-          height: dims.1,
-          depth_or_array_layers: 1,
-        },
-      );
-    }
-    Ok(())
+    upload_planes(
+      &self.gpu,
+      source,
+      self.coded,
+      slot,
+      [y, u, v],
+      [strides.0, strides.1, strides.2],
+    )
   }
-  /// Resolve and pin this frame's zoom for later rerenders.
+  /// Resolve and pin this frame's cursor, zoom, and camera state for rerenders.
   pub(crate) fn stage_timeline(&mut self, slot: usize, timestamp_ms: f64) {
+    let cursor_index = slot % self.slot_cursor.len();
+    self.slot_cursor[cursor_index] = self.resolve_cursor_rect(timestamp_ms);
     let i = slot % self.slot_zoom.len();
     self.slot_zoom[i] = self.zoom_track.state_at(timestamp_ms, self.layout.rect);
-    // TODO(R2): stage cursor and webcam state.
+    let webcam_index = slot % self.slot_webcam.len();
+    let webcam_zoom = self
+      .webcam_zoom
+      .state_at(timestamp_ms, self.webcam_layout.rect);
+    self.slot_webcam[webcam_index] = StagedWebcam {
+      visible: !self.webcam_hidden.contains(timestamp_ms),
+      rect: webcam_zoom.rect,
+      full_screen: webcam_zoom.full_screen,
+    };
+  }
+  fn sprite_for(&self, image_id: Option<u32>) -> Option<&SpriteTexture> {
+    image_id
+      .and_then(|id| self.cursor_images.get(id))
+      .or(self.cursor.as_ref())
+  }
+  fn resolve_cursor_rect(&self, timestamp_ms: f64) -> Option<StagedCursor> {
+    if self.cursor_opacity <= 0.0 || self.cursor_size <= 0.0 {
+      return None;
+    }
+    let sample = self.cursor_track.sample_at(timestamp_ms)?;
+    let sprite = self.sprite_for(sample.image_id)?;
+    let (sample_x, sample_y) = match self.crop {
+      None => (sample.x, sample.y),
+      Some(crop) => {
+        let x = (sample.x - crop.left) / crop.width();
+        let y = (sample.y - crop.top) / crop.height();
+        if !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y) {
+          return None;
+        }
+        (x, y)
+      }
+    };
+    let click = self.cursor_track.click_scale_at(
+      timestamp_ms,
+      self.cursor_effects.click_scale,
+      self.cursor_effects.click_duration_ms,
+    );
+    let scale = (self.cursor_size / sprite.height.max(1) as f32) * click;
+    let height = sprite.height as f32 * scale;
+    let video = self.layout.rect;
+    Some(StagedCursor {
+      rect: Rect {
+        x: video.x + sample_x * video.width - sprite.hotspot_x * scale,
+        y: video.y + sample_y * video.height - sprite.hotspot_y * scale,
+        width: sprite.width as f32 * scale,
+        height,
+      },
+      image_id: sample.image_id,
+      smear: self.resolve_smear(timestamp_ms, video, height),
+    })
+  }
+  fn resolve_smear(&self, timestamp_ms: f64, video: Rect, height: f32) -> [f32; 2] {
+    let strength = self.cursor_effects.smear_strength;
+    if strength <= 0.0 || height <= 0.0 {
+      return [0.0, 0.0];
+    }
+    let Some(motion) = self.cursor_track.motion_at(timestamp_ms) else {
+      return [0.0, 0.0];
+    };
+    let vx = motion.vx * video.width;
+    let vy = motion.vy * video.height;
+    let speed = (vx * vx + vy * vy).sqrt();
+    if speed <= 0.0 {
+      return [0.0, 0.0];
+    }
+    let length = (speed * SMEAR_TRAVEL_MS * strength).min(height * MAX_SMEAR_HEIGHTS);
+    if length < height * MIN_SMEAR_HEIGHTS {
+      return [0.0, 0.0];
+    }
+    [vx / speed * length, vy / speed * length]
   }
   fn video_uv(&self) -> UvRect {
     let visible = [
@@ -695,8 +1102,8 @@ impl RenderChain {
     for layer in self.layer_order {
       match layer {
         Layer::Video => self.composite_video(&mut encoder, zoom),
-        Layer::Webcam => { /* TODO(R2): draw webcam. */ }
-        Layer::Cursor => { /* TODO(R2): draw cursor. */ }
+        Layer::Webcam => self.composite_webcam(&mut encoder, slot),
+        Layer::Cursor => self.composite_cursor(&mut encoder, slot, zoom),
       }
     }
     self.gpu.queue.submit([encoder.finish()]);
@@ -764,6 +1171,156 @@ impl RenderChain {
         uv: self.video_uv(),
         grade: self.params.into(),
         fill: Fill::Texture,
+      },
+    );
+  }
+  fn composite_webcam(&self, encoder: &mut wgpu::CommandEncoder, slot: usize) {
+    let Some(webcam) = self.webcam.as_ref() else {
+      return;
+    };
+    if !self.webcam_layout.is_visible() {
+      return;
+    }
+    let staged = self.slot_webcam[slot % self.slot_webcam.len()];
+    if !staged.visible {
+      return;
+    }
+    let index = slot % webcam.sources.len();
+    if !webcam.staged[index] {
+      return;
+    }
+    let expansion = staged.full_screen.clamp(0.0, 1.0);
+    let softened = 1.0 - expansion;
+    let box_rect = if expansion > 0.0 {
+      lerp_rect(
+        staged.rect,
+        Rect::covering(self.canvas.0, self.canvas.1),
+        expansion,
+      )
+    } else {
+      staged.rect
+    };
+    let shape = if expansion > 0.0 {
+      OverlayShape::Rect
+    } else {
+      self.webcam_layout.shape
+    };
+    let corner_radius = self.webcam_layout.corner_radius * softened;
+    let border_width = self.webcam_layout.border_width * softened;
+    let opacity = self.webcam_layout.opacity + (1.0 - self.webcam_layout.opacity) * expansion;
+    let (rect, uv) = fit_source(
+      box_rect,
+      webcam.width,
+      webcam.height,
+      self.webcam_layout.fit,
+    );
+    let bindings = self.conversion_bindings(&webcam.sources[index]);
+    {
+      let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("convert webcam"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+          view: &webcam.rgba_view,
+          resolve_target: None,
+          ops: wgpu::Operations {
+            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+            store: wgpu::StoreOp::Store,
+          },
+          depth_slice: None,
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+      });
+      pass.set_pipeline(&self.pipelines.convert);
+      pass.set_bind_group(0, &bindings, &[]);
+      pass.draw(0..3, 0..1);
+    }
+    for shadow in &self.webcam_layout.shadows {
+      let colour = [
+        shadow.colour[0],
+        shadow.colour[1],
+        shadow.colour[2],
+        shadow.colour[3] * softened,
+      ];
+      if colour[3] <= 0.0 {
+        continue;
+      }
+      self.draw_quad(
+        encoder,
+        &self.output_view,
+        &webcam.rgba_view,
+        Quad {
+          rect: shadow.quad_rect(rect),
+          shape,
+          corner_radius,
+          opacity,
+          uv: UvRect::default(),
+          grade: Grade::default(),
+          fill: Fill::Shadow(ShadowFill {
+            colour,
+            half: [rect.width * 0.5, rect.height * 0.5],
+            softness: shadow.softness(),
+          }),
+        },
+      );
+    }
+    if border_width > 0.0 {
+      self.draw_quad(
+        encoder,
+        &self.output_view,
+        &webcam.rgba_view,
+        Quad {
+          rect: rect.expanded(border_width),
+          shape,
+          corner_radius: corner_radius + border_width,
+          opacity,
+          uv: UvRect::default(),
+          grade: Grade::default(),
+          fill: Fill::Solid(self.webcam_layout.border_colour),
+        },
+      );
+    }
+    self.draw_quad(
+      encoder,
+      &self.output_view,
+      &webcam.rgba_view,
+      Quad {
+        rect,
+        shape,
+        corner_radius,
+        opacity,
+        uv,
+        grade: self.webcam_params.into(),
+        fill: Fill::Texture,
+      },
+    );
+  }
+  fn composite_cursor(&self, encoder: &mut wgpu::CommandEncoder, slot: usize, zoom: ZoomState) {
+    let Some(staged) = self.slot_cursor[slot % self.slot_cursor.len()] else {
+      return;
+    };
+    let Some(sprite) = self.sprite_for(staged.image_id) else {
+      return;
+    };
+    let rect = zoom.apply(staged.rect);
+    let smear = [staged.smear[0] * zoom.scale, staged.smear[1] * zoom.scale];
+    let (quad_rect, uv, fill) = match smear_geometry(rect, smear) {
+      None => (rect, UvRect::default(), Fill::Sprite),
+      Some((box_rect, uv, offset)) => (box_rect, uv, Fill::Smear(offset)),
+    };
+    self.draw_quad(
+      encoder,
+      &self.output_view,
+      &sprite.view,
+      Quad {
+        rect: quad_rect,
+        shape: OverlayShape::Rect,
+        corner_radius: 0.0,
+        opacity: self.cursor_opacity,
+        uv,
+        grade: Grade::default(),
+        fill,
       },
     );
   }
@@ -851,6 +1408,7 @@ impl RenderChain {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::engine::layout::{CursorSample, FitMode};
   use crate::engine::scene::RgbaImage;
   use crate::engine::zoom::ZoomRegion;
   fn chain(size: (u32, u32)) -> Option<RenderChain> {
@@ -893,6 +1451,23 @@ mod tests {
           chain.coded.0 as usize,
           chain.coded.0.div_ceil(2) as usize,
           chain.coded.0.div_ceil(2) as usize,
+        ),
+      )
+      .unwrap();
+  }
+  fn camera(chain: &mut RenderChain, size: (u32, u32), colour: [u8; 3]) {
+    chain.attach_webcam(size.0, size.1).unwrap();
+    let (y, u, v) = i420(colour, size);
+    chain
+      .stage_webcam(
+        0,
+        &y,
+        &u,
+        &v,
+        (
+          size.0 as usize,
+          size.0.div_ceil(2) as usize,
+          size.0.div_ceil(2) as usize,
         ),
       )
       .unwrap();
@@ -1062,5 +1637,177 @@ mod tests {
     let after = read(&chain);
     near(pixel(&before, 64, x, y), [0, 0, 0], 1);
     near(pixel(&after, 64, x, y), [180, 90, 60], 3);
+  }
+  #[test]
+  fn webcam_box_uses_fit_geometry_and_rounded_corner() {
+    let Some(mut chain) = chain((64, 64)) else {
+      return;
+    };
+    let video = [35, 70, 120];
+    let camera_colour = [210, 130, 55];
+    stage(&mut chain, video);
+    camera(&mut chain, (32, 16), camera_colour);
+    let layout = WebcamLayout {
+      rect: Rect {
+        x: 6.0,
+        y: 8.0,
+        width: 24.0,
+        height: 24.0,
+      },
+      corner_radius: 10.0,
+      fit: FitMode::Cover,
+      ..Default::default()
+    };
+    let (drawn, uv) = fit_source(layout.rect, 32, 16, layout.fit);
+    assert_eq!(drawn, layout.rect);
+    assert!((uv.scale[0] - 0.5).abs() < 0.001);
+    chain.set_webcam_layout(layout);
+    chain.stage_timeline(0, 0.0);
+    let pixels = read(&chain);
+    near(
+      pixel(
+        &pixels,
+        64,
+        (drawn.x + drawn.width * 0.5) as u32,
+        (drawn.y + drawn.height * 0.5) as u32,
+      ),
+      camera_colour,
+      3,
+    );
+    near(pixel(&pixels, 64, drawn.x as u32, drawn.y as u32), video, 3);
+  }
+  #[test]
+  fn webcam_obeys_layer_order() {
+    let Some(mut chain) = chain((64, 64)) else {
+      return;
+    };
+    let video = [40, 90, 150];
+    let camera_colour = [200, 100, 30];
+    stage(&mut chain, video);
+    camera(&mut chain, (16, 16), camera_colour);
+    chain.set_webcam_layout(WebcamLayout {
+      rect: Rect {
+        x: 16.0,
+        y: 16.0,
+        width: 32.0,
+        height: 32.0,
+      },
+      ..Default::default()
+    });
+    chain.stage_timeline(0, 0.0);
+    chain.set_layer_order([Layer::Video, Layer::Webcam, Layer::Cursor]);
+    near(pixel(&read(&chain), 64, 32, 32), camera_colour, 3);
+    chain.set_layer_order([Layer::Webcam, Layer::Video, Layer::Cursor]);
+    near(pixel(&read(&chain), 64, 32, 32), video, 3);
+  }
+  #[test]
+  fn webcam_cut_hides_staged_frame() {
+    let Some(mut chain) = chain((64, 64)) else {
+      return;
+    };
+    let video = [50, 80, 110];
+    stage(&mut chain, video);
+    camera(&mut chain, (16, 16), [180, 120, 60]);
+    chain.set_webcam_layout(WebcamLayout {
+      rect: Rect {
+        x: 16.0,
+        y: 16.0,
+        width: 32.0,
+        height: 32.0,
+      },
+      ..Default::default()
+    });
+    chain.set_webcam_cuts(vec![(20.0, 40.0)]);
+    chain.stage_timeline(0, 30.0);
+    near(pixel(&read(&chain), 64, 32, 32), video, 3);
+    chain.stage_timeline(0, 40.0);
+    near(pixel(&read(&chain), 64, 32, 32), [180, 120, 60], 3);
+  }
+  #[test]
+  fn webcam_inherits_planes_and_clears_after_seek() {
+    let Some(mut chain) = (match RenderChain::new((64, 64), (64, 64), (64, 64), 2) {
+      Ok(chain) => Some(chain),
+      Err(error) if error.contains("GPU adapter") => {
+        println!("no adapter, skipping: {error}");
+        None
+      }
+      Err(error) => panic!("render chain: {error}"),
+    }) else {
+      return;
+    };
+    let video = [40, 70, 100];
+    let camera_colour = [190, 110, 50];
+    stage(&mut chain, video);
+    let (y, u, v) = i420(video, (64, 64));
+    chain.stage(1, &y, &u, &v, (64, 32, 32)).unwrap();
+    camera(&mut chain, (16, 16), camera_colour);
+    chain.set_webcam_layout(WebcamLayout {
+      rect: Rect {
+        x: 16.0,
+        y: 16.0,
+        width: 32.0,
+        height: 32.0,
+      },
+      ..Default::default()
+    });
+    chain.inherit_webcam(0, 1).unwrap();
+    chain.stage_timeline(1, 0.0);
+    chain.render_slot(1).unwrap();
+    let mut pixels = Vec::new();
+    chain.read_rgba(&mut pixels).unwrap();
+    near(pixel(&pixels, 64, 32, 32), camera_colour, 3);
+    chain.clear_webcam_staging();
+    chain.render_slot(1).unwrap();
+    chain.read_rgba(&mut pixels).unwrap();
+    near(pixel(&pixels, 64, 32, 32), video, 3);
+  }
+  #[test]
+  fn cursor_hotspot_position_and_hidden_sample() {
+    let Some(mut chain) = chain((64, 64)) else {
+      return;
+    };
+    let video = [25, 60, 100];
+    let cursor = [230, 40, 70];
+    stage(&mut chain, video);
+    chain
+      .set_cursor_image(Some(CursorImage {
+        width: 8,
+        height: 8,
+        pixels: [cursor[0], cursor[1], cursor[2], 255].repeat(64),
+        hotspot_x: 2.0,
+        hotspot_y: 3.0,
+      }))
+      .unwrap();
+    chain.set_cursor_style(8.0, 1.0);
+    let sample = CursorSample {
+      timestamp_ms: 10.0,
+      x: 0.5,
+      y: 0.5,
+      visible: true,
+      image_id: None,
+      click: false,
+    };
+    chain.set_cursor_track(CursorTrack::new(vec![
+      sample,
+      CursorSample {
+        timestamp_ms: 20.0,
+        visible: false,
+        ..sample
+      },
+    ]));
+    chain.stage_timeline(0, 10.0);
+    let scale = chain.cursor_size / 8.0;
+    let video_rect = chain.layout.rect;
+    let expected = Rect {
+      x: video_rect.x + sample.x * video_rect.width - 2.0 * scale,
+      y: video_rect.y + sample.y * video_rect.height - 3.0 * scale,
+      width: 8.0 * scale,
+      height: 8.0 * scale,
+    };
+    let x = (expected.x + expected.width * 0.5) as u32;
+    let y = (expected.y + expected.height * 0.5) as u32;
+    near(pixel(&read(&chain), 64, x, y), cursor, 1);
+    chain.stage_timeline(0, 20.0);
+    near(pixel(&read(&chain), 64, x, y), video, 3);
   }
 }
