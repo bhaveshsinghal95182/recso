@@ -169,12 +169,13 @@ describe('runCli', () => {
 
   it('returns 3 if the event connection drops', async () => {
     const { instance, transport } = await server();
-    const { io: target } = io(transport.path);
+    const { io: target, err } = io(transport.path);
     const running = runCli(['events', '--socket', transport.path], target);
     for (let i = 0; i < 100 && instance.connectionCount === 0; i++)
       await new Promise((resolve) => setTimeout(resolve, 1));
     await instance.stop();
     expect(await running).toBe(3);
+    expect(err.join('')).toContain('recso closed the connection');
   });
 });
 

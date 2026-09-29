@@ -214,6 +214,13 @@ electron.contextBridge.exposeInMainWorld('electron', {
     /** The screen the API asked for (recorder, or a project in the editor), once. */
     takeNavigation: (): Promise<AutomationNavigation | null> =>
       electron.ipcRenderer.invoke('automation:take-navigation'),
+    /** Settings ▸ Advanced ▸ Automation API: whether it's on, where, and who is connected. */
+    getState: (): Promise<AutomationState> => electron.ipcRenderer.invoke('automation:get-state'),
+    /** Turn the API on or off now and for later launches. */
+    setEnabled: (enabled: boolean): Promise<AutomationState> =>
+      electron.ipcRenderer.invoke('automation:set-enabled', enabled),
+    onState: (callback: (state: AutomationState) => void) =>
+      createSubscription('automation:state', callback),
   },
 
   // Recording
@@ -670,6 +677,13 @@ type AutomationRecorderSettings =
   | { active: false }
   | { active: true; values: Record<string, string | boolean | null> };
 type AutomationNavigation = { screen: 'recorder' } | { screen: 'editor'; projectDir: string };
+type AutomationState = {
+  running: boolean;
+  path: string;
+  connections: number;
+  error: string | null;
+  override: 'on' | 'off' | null;
+};
 
 function createSubscription<T>(channel: string, callback: (data: T) => void) {
   const handler = (_event: IpcRendererEvent, data: T) => callback(data);

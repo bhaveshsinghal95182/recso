@@ -121,7 +121,12 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
         parsed.command.events.length ? { events: parsed.command.events } : {},
       );
       return await Promise.race([
-        client.closedPromise().then(() => 3),
+        client.closedPromise().then(() => {
+          io.stderr(
+            'recso closed the connection (it quit, or its Automation API was turned off).\n',
+          );
+          return 3;
+        }),
         ...(io.interrupted ? [io.interrupted.then(() => 0)] : []),
       ]);
     } catch (error) {

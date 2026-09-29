@@ -1,12 +1,14 @@
-import { Copy, Square, X } from 'lucide-react';
+import { Copy, Settings, Square, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
+import { SettingsDialog } from '@/components/settings-dialog';
 import { Button } from '@/components/ui/button';
 
 import Minimize24Regular from '../icons/minimize';
 
 export const WindowTitlebar = () => {
   const [isMaximized, setIsMaximized] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   // const [supportId, setSupportId] = useState<string>('');
   // const [copied, setCopied] = useState(false);
 
@@ -51,6 +53,15 @@ export const WindowTitlebar = () => {
           variant="ghost"
           size="icon-lg"
           className="cursor-pointer text-gray-400 hover:text-white hover:bg-white/10 group h-full w-12"
+          onClick={() => setSettingsOpen(true)}
+          title="Settings"
+        >
+          <Settings size="15" className="transform group-hover:scale-105 transition-transform" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-lg"
+          className="cursor-pointer text-gray-400 hover:text-white hover:bg-white/10 group h-full w-12"
           onClick={handleHideToTray}
           title="Hide to Tray"
         >
@@ -82,6 +93,7 @@ export const WindowTitlebar = () => {
           <X size="14" className="transform group-hover:scale-105 transition-transform" />
         </Button>
       </div>
+      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </nav>
   );
 };

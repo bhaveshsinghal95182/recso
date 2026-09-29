@@ -17,14 +17,20 @@ interface StoredAutomationSettings {
   portalRestoreToken?: string | null;
 }
 
+/** What `RECSO_AUTOMATION` forces at launch, if it's set to something it understands. */
+export function automationOverride(env: Record<string, string | undefined>): 'on' | 'off' | null {
+  const value = env.RECSO_AUTOMATION?.trim().toLowerCase();
+  if (value === '1' || value === 'true' || value === 'on') return 'on';
+  if (value === '0' || value === 'false' || value === 'off') return 'off';
+  return null;
+}
+
 export function automationEnabled(
   env: Record<string, string | undefined>,
   storedEnabled: boolean,
 ): boolean {
-  const value = env.RECSO_AUTOMATION?.trim().toLowerCase();
-  if (value === '1' || value === 'true' || value === 'on') return true;
-  if (value === '0' || value === 'false' || value === 'off') return false;
-  return storedEnabled;
+  const override = automationOverride(env);
+  return override === null ? storedEnabled : override === 'on';
 }
 
 function readStored(userDataDir: string): StoredAutomationSettings {

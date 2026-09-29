@@ -581,6 +581,18 @@ export type AutomationNavigation =
   | { screen: 'recorder' }
   | { screen: 'editor'; projectDir: string };
 
+/** The Automation API as Settings shows it. */
+export interface AutomationState {
+  running: boolean;
+  /** The socket (Linux) or named pipe (Windows) it listens on, or would. */
+  path: string;
+  connections: number;
+  /** Why the last start failed, such as another recso already serving. */
+  error: string | null;
+  /** What RECSO_AUTOMATION forced at launch, if anything. */
+  override: 'on' | 'off' | null;
+}
+
 interface ElectronAPI {
   automation: {
     getRecorderSettings: () => Promise<AutomationRecorderSettings>;
@@ -590,6 +602,9 @@ interface ElectronAPI {
     onRecorderSettings: (callback: (settings: AutomationRecorderSettings) => void) => () => void;
     onNavigate: (callback: () => void) => () => void;
     takeNavigation: () => Promise<AutomationNavigation | null>;
+    getState: () => Promise<AutomationState>;
+    setEnabled: (enabled: boolean) => Promise<AutomationState>;
+    onState: (callback: (state: AutomationState) => void) => () => void;
   };
   headlessExport: {
     log: (message: string) => void;

@@ -7,7 +7,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { registerCoreMethods } from './methods/core.js';
 import { AutomationClient } from './client.js';
-import { automationEnabled, readStoredEnabled, writeStoredEnabled } from './enabled.js';
+import {
+  automationEnabled,
+  automationOverride,
+  readStoredEnabled,
+  writeStoredEnabled,
+} from './enabled.js';
 import { MethodRegistry } from './registry.js';
 import { AutomationServer } from './server.js';
 import { fakeServices } from './testing.js';
@@ -208,6 +213,9 @@ describe('turning the API on', () => {
     expect(automationEnabled({ RECSO_AUTOMATION: '1' }, false)).toBe(true);
     expect(automationEnabled({ RECSO_AUTOMATION: '0' }, true)).toBe(false);
     expect(automationEnabled({ RECSO_AUTOMATION: '' }, false)).toBe(false);
+    expect(automationOverride({ RECSO_AUTOMATION: ' On ' })).toBe('on');
+    expect(automationOverride({ RECSO_AUTOMATION: 'false' })).toBe('off');
+    expect(automationOverride({ RECSO_AUTOMATION: 'maybe' })).toBeNull();
   });
 
   it('stores the toggle, and reads a missing or broken file as off', () => {

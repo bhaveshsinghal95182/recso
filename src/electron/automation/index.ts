@@ -14,7 +14,12 @@ import { registerAllMethods } from './methods/all.js';
 import { EVENT_NAMES } from './methods/events.js';
 import { setActiveSettings } from './active-settings.js';
 import { createElectronServices } from './electron-services.js';
-import { automationEnabled, readStoredEnabled } from './enabled.js';
+import {
+  automationEnabled,
+  automationOverride,
+  readStoredEnabled,
+  writeStoredEnabled,
+} from './enabled.js';
 import { connectEvents } from './event-bridge.js';
 import { cachedHooksLoader, HookRunner, spawnHook } from './hooks.js';
 import { PendingNavigation } from './navigation.js';
@@ -36,6 +41,9 @@ let settings: SettingsStore | null = null;
 let disconnect: (() => void) | null = null;
 let services: AutomationServices | null = null;
 let hooks: HookRunner | null = null;
+let lastStartError: string | null = null;
+/** Serialises the toggle: a quick off-on must not start a second server over the first. */
+let toggling: Promise<unknown> = Promise.resolve();
 const navigation = new PendingNavigation(() => sendToWindow('automation:navigate'));
 
 function currentTransport() {
@@ -51,6 +59,31 @@ function sendToWindow(channel: string, ...args: unknown[]): void {
   if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) {
     window.webContents.send(channel, ...args);
   }
+}
+
+/** What Settings shows: whether the API is on, where, and whether anything is connected. */
+export interface AutomationState {
+  running: boolean;
+  path: string;
+  connections: number;
+  /** Why the last start failed (another recso already serving, say). */
+  error: string | null;
+  /** What RECSO_AUTOMATION forced at launch, if anything. */
+  override: 'on' | 'off' | null;
+}
+
+function automationState(): AutomationState {
+  return {
+    running: server !== null,
+    path: currentTransport().path,
+    connections: server?.connectionCount ?? 0,
+    error: lastStartError,
+    override: automationOverride(process.env),
+  };
+}
+
+function pushState(): void {
+  sendToWindow('automation:state', automationState());
 }
 
 /** Every API event goes to subscribed connections and to the hooks in automation.json. */
@@ -74,14 +107,18 @@ async function startServer(): Promise<void> {
     registry: registerAllMethods(new MethodRegistry(), candidateServices),
     transport,
     log: (message) => console.log(message),
+    onConnectionCountChange: () => pushState(),
   });
   try {
     await candidate.start();
   } catch (error) {
     // Never fatal: recso works the same without its API.
-    console.error('[Automation] Could not start:', error instanceof Error ? error.message : error);
+    lastStartError = error instanceof Error ? error.message : String(error);
+    console.error('[Automation] Could not start:', lastStartError);
+    pushState();
     return;
   }
+  lastStartError = null;
   server = candidate;
   services = candidateServices;
   settings = store;
@@ -103,6 +140,7 @@ async function startServer(): Promise<void> {
     offEvents();
   };
   sendToWindow('automation:recorder-settings', { active: true, values: store.get() });
+  pushState();
 }
 
 async function stopServer(): Promise<void> {
@@ -119,6 +157,7 @@ async function stopServer(): Promise<void> {
   disconnect = null;
   await running?.stop();
   sendToWindow('automation:recorder-settings', { active: false });
+  pushState();
 }
 
 /**
@@ -127,6 +166,24 @@ async function stopServer(): Promise<void> {
  */
 function registerRendererBridge(): void {
   ipcMain.handle('automation:take-navigation', () => navigation.take());
+  ipcMain.handle('automation:get-state', () => automationState());
+  // Settings ▸ Advanced ▸ Automation API: stored for next launch, and applied now.
+  ipcMain.handle('automation:set-enabled', (_event, enabled: unknown) => {
+    const on = enabled === true;
+    const next = toggling.then(async () => {
+      writeStoredEnabled(app.getPath('userData'), on);
+      if (on) {
+        lastStartError = null;
+        await startServer();
+      } else {
+        lastStartError = null;
+        await stopServer();
+      }
+      return automationState();
+    });
+    toggling = next.catch(() => undefined);
+    return next;
+  });
   ipcMain.handle('automation:get-recorder-settings', () =>
     settings ? { active: true, values: settings.get() } : { active: false },
   );
