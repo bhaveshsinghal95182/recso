@@ -61,10 +61,9 @@ export function getEngineBindings(): EngineBindings | null {
       const loaded = require(candidatePath) as Partial<EngineBindings>;
 
       if (typeof loaded.VideoPlayer !== 'function') {
-        loadError =
-          process.platform === 'linux'
-            ? 'The Linux engine has no preview player yet -- recording, thumbnails and decoding work, preview and export are still being ported (docs/linux-port.md, M4)'
-            : `velocity loaded from ${candidatePath} but has no VideoPlayer -- rebuild it with "pnpm --filter velocity build"`;
+        const rebuild =
+          process.platform === 'linux' ? 'pnpm build:engine:linux' : 'pnpm --filter velocity build';
+        loadError = `velocity loaded from ${candidatePath} but has no VideoPlayer -- rebuild it with "${rebuild}"`;
         continue;
       }
 
@@ -93,8 +92,8 @@ let velocityModule: Record<string, unknown> | null | undefined;
  * The velocity addon as loaded, whatever it exports.
  *
  * `getEngineBindings` answers "is the preview engine here", and says no when
- * `VideoPlayer` is missing. Some engine exports are useful without it -- on
- * Linux, decoding and timeline thumbnails exist before the player does -- so
+ * `VideoPlayer` is missing. Some engine exports are useful without it -- an
+ * older or partial build can still decode and make timeline thumbnails -- so
  * those callers load the module this way and probe for the one export they
  * need.
  */
