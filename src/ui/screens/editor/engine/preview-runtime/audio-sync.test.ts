@@ -7,6 +7,7 @@ function player(currentTime = 10, paused = false): PreviewAudio {
     currentTime,
     paused,
     seeking: false,
+    readyState: 4,
     playbackRate: 1,
     pause: vi.fn(),
     play: vi.fn(async () => {}),
@@ -55,5 +56,48 @@ describe('preview speech synchronization', () => {
     syncPreviewAudio(audio, 15, true);
     expect(audio.currentTime).toBe(15);
     expect(audio.playbackRate).toBe(1);
+  });
+
+  it('leaves a stalled element alone until it moves again', () => {
+    const audio = player();
+    audio.readyState = 2;
+    syncPreviewAudio(audio, 10.5, true, 0);
+    expect(audio.currentTime).toBe(10);
+  });
+  it('does not seek again while the last seek settles', () => {
+    const audio = player();
+    syncPreviewAudio(audio, 10.15, true, 0);
+    expect(audio.currentTime).toBe(10.15);
+    audio.currentTime = 10.15;
+    syncPreviewAudio(audio, 10.3, true, 100);
+    expect(audio.currentTime).toBe(10.15);
+    expect(audio.playbackRate).toBeGreaterThan(1);
+  });
+  it('learns how long a seek stalls and stops seeking in a loop', () => {
+    // Every seek freezes the element for 90ms while the clock runs on: more
+    // than the seek threshold, which once meant a seek every tick.
+    const STALL_S = 0.09;
+    const audio = player(0);
+    let clockS = 0;
+    let resumeAtS = 0;
+    let seeks = 0;
+    let time = 0;
+    Object.defineProperty(audio, 'currentTime', {
+      get: () => time,
+      set: (value: number) => {
+        seeks++;
+        time = value;
+        resumeAtS = clockS + STALL_S;
+      },
+    });
+    syncPreviewAudio(audio, 0.2, true, 0); // a jump, as after a cut
+    for (let tick = 1; tick <= 300; tick++) {
+      const stepS = 1 / 60;
+      clockS += stepS;
+      if (clockS > resumeAtS) time += stepS * audio.playbackRate;
+      syncPreviewAudio(audio, 0.2 + clockS, true, clockS * 1000);
+    }
+    expect(seeks).toBeLessThanOrEqual(3);
+    expect(Math.abs(0.2 + clockS - time)).toBeLessThan(0.03);
   });
 });
