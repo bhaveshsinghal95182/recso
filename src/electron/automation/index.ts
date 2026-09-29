@@ -11,13 +11,14 @@ import os from 'node:os';
 import { app, type BrowserWindow, ipcMain } from 'electron';
 
 import { registerCoreMethods } from './methods/core.js';
-import { registerEventMethods } from './methods/events.js';
+import { EVENT_NAMES, registerEventMethods } from './methods/events.js';
 import { registerProjectMethods } from './methods/projects.js';
 import { registerRecordingMethods } from './methods/recording.js';
 import { setActiveSettings } from './active-settings.js';
 import { createElectronServices } from './electron-services.js';
 import { automationEnabled, readStoredEnabled } from './enabled.js';
 import { connectEvents } from './event-bridge.js';
+import { cachedHooksLoader, HookRunner, spawnHook } from './hooks.js';
 import { PendingNavigation } from './navigation.js';
 import { MethodRegistry } from './registry.js';
 import { validate } from './schema.js';
@@ -36,6 +37,7 @@ let server: AutomationServer | null = null;
 let settings: SettingsStore | null = null;
 let disconnect: (() => void) | null = null;
 let services: AutomationServices | null = null;
+let hooks: HookRunner | null = null;
 const navigation = new PendingNavigation(() => sendToWindow('automation:navigate'));
 
 function currentTransport() {
@@ -64,9 +66,10 @@ function sendToWindow(channel: string, ...args: unknown[]): void {
   }
 }
 
-/** Every API event goes to subscribed connections. */
+/** Every API event goes to subscribed connections and to the hooks in automation.json. */
 function dispatch(event: string, payload: unknown): void {
   server?.broadcast(event, payload);
+  hooks?.run(event, payload);
 }
 
 async function startServer(): Promise<void> {
@@ -96,6 +99,14 @@ async function startServer(): Promise<void> {
   services = candidateServices;
   settings = store;
   setActiveSettings(store);
+  hooks = new HookRunner({
+    platform: process.platform,
+    loadHooks: cachedHooksLoader(app.getPath('userData'), EVENT_NAMES, (errors) =>
+      console.warn(`[Automation] automation.json: ${errors.join('; ')}`),
+    ),
+    spawn: spawnHook,
+    log: (message) => console.warn(`[Automation] ${message}`),
+  });
   const offRenderer = store.onChange(() =>
     sendToWindow('automation:recorder-settings', { active: true, values: store.get() }),
   );
@@ -113,6 +124,8 @@ async function stopServer(): Promise<void> {
   // An export process outliving recso would write a file nobody asked about.
   services?.exports.cancelAll();
   services = null;
+  hooks?.stopAll();
+  hooks = null;
   settings = null;
   setActiveSettings(null);
   disconnect?.();
