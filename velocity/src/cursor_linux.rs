@@ -66,6 +66,99 @@ fn hyprland_request(command: &str) -> Result<Value, String> {
   serde_json::from_str(&reply).map_err(|error| format!("Hyprland sent {reply:?}: {error}"))
 }
 
+/// A command whose reply is plain text ("ok" or an error), not JSON.
+fn hyprland_command(command: &str) -> Result<String, String> {
+  let mut stream =
+    UnixStream::connect(hyprland_socket()?).map_err(|error| format!("Hyprland socket: {error}"))?;
+  stream
+    .set_read_timeout(Some(IPC_TIMEOUT))
+    .and_then(|()| stream.set_write_timeout(Some(IPC_TIMEOUT)))
+    .map_err(|error| format!("Hyprland socket: {error}"))?;
+  stream
+    .write_all(command.as_bytes())
+    .map_err(|error| format!("Hyprland socket write: {error}"))?;
+  let mut reply = String::new();
+  stream
+    .read_to_string(&mut reply)
+    .map_err(|error| format!("Hyprland socket read: {error}"))?;
+  Ok(reply)
+}
+
+const NO_HARDWARE_CURSORS: &str = "cursor:no_hardware_cursors";
+
+/// Set `cursor:no_hardware_cursors`. Hyprland's Lua config (0.55 and later)
+/// only takes `eval`; the older hyprlang config only takes `keyword`.
+fn set_no_hardware_cursors(value: i64) -> Result<(), String> {
+  let lua = format!("eval hl.config({{ cursor = {{ no_hardware_cursors = {value} }} }})");
+  let reply = hyprland_command(&lua)?;
+  if reply.trim() == "ok" {
+    return Ok(());
+  }
+  let reply = hyprland_command(&format!("keyword {NO_HARDWARE_CURSORS} {value}"))?;
+  if reply.trim() == "ok" {
+    Ok(())
+  } else {
+    Err(format!("Hyprland would not set {NO_HARDWARE_CURSORS}: {}", reply.trim()))
+  }
+}
+
+/// Hardware cursors for as long as this is held, then the user's setting back.
+///
+/// Hyprland paints a software cursor into the frame itself, and screen
+/// capture copies that frame, so the portal's "hide the cursor" cannot take
+/// it out again -- the recording would show it under recso's own cursor.
+/// Hyprland picks software cursors on its own on NVIDIA machines with more
+/// than one GPU (`no_hardware_cursors = 2`, "auto"), so a hybrid laptop hits
+/// this out of the box. A hardware cursor lives on its own display plane and
+/// never reaches the captured frame.
+///
+/// The change is runtime-only: nothing is written to the user's config, and
+/// a config reload undoes it too.
+pub(crate) struct HardwareCursor {
+  restore: Option<i64>,
+}
+
+impl HardwareCursor {
+  /// Does nothing off Hyprland, or when hardware cursors are already forced.
+  pub(crate) fn acquire() -> Self {
+    let current = match hyprland_request(&format!("j/getoption {NO_HARDWARE_CURSORS}")) {
+      Ok(value) => value.get("int").and_then(Value::as_i64),
+      Err(_) => None,
+    };
+    let Some(current) = current.filter(|value| *value != 0) else {
+      return Self { restore: None };
+    };
+    if let Err(error) = set_no_hardware_cursors(0) {
+      eprintln!("[velocity] {error}; the recording will show Hyprland's own cursor");
+      return Self { restore: None };
+    }
+    if let Some(monitors) = hyprland_request("j/monitors")
+      .ok()
+      .and_then(|value| value.as_array().cloned())
+    {
+      for monitor in monitors {
+        if monitor.get("hardwareCursorsInUse").and_then(Value::as_bool) == Some(false) {
+          let name = monitor.get("name").and_then(Value::as_str).unwrap_or("?");
+          eprintln!("[velocity] {name} still draws a software cursor; recordings of it will show that cursor");
+        }
+      }
+    }
+    Self {
+      restore: Some(current),
+    }
+  }
+}
+
+impl Drop for HardwareCursor {
+  fn drop(&mut self) {
+    if let Some(value) = self.restore.take() {
+      if let Err(error) = set_no_hardware_cursors(value) {
+        eprintln!("[velocity] could not restore {NO_HARDWARE_CURSORS} = {value}: {error}");
+      }
+    }
+  }
+}
+
 /// A monitor's layout rectangle and scale, as Hyprland reports it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct MonitorLayout {
@@ -213,6 +306,27 @@ mod tests {
       height,
       scale,
     }
+  }
+
+  fn no_hardware_cursors() -> Option<i64> {
+    hyprland_request(&format!("j/getoption {NO_HARDWARE_CURSORS}"))
+      .ok()?
+      .get("int")?
+      .as_i64()
+  }
+
+  #[test]
+  #[ignore = "changes the running Hyprland's cursor setting for a moment; run with --ignored"]
+  fn a_recording_holds_hardware_cursors_and_gives_the_setting_back() {
+    let before = no_hardware_cursors().expect("running under Hyprland");
+    let guard = HardwareCursor::acquire();
+    assert_eq!(no_hardware_cursors(), Some(0));
+    let monitors = hyprland_request("j/monitors").expect("monitors");
+    for monitor in monitors.as_array().expect("a list") {
+      assert_eq!(monitor.get("hardwareCursorsInUse"), Some(&json!(true)), "{monitor}");
+    }
+    drop(guard);
+    assert_eq!(no_hardware_cursors(), Some(before));
   }
 
   #[test]

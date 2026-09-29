@@ -22,6 +22,7 @@ use super::audio::{self, AudioCapture, AudioRequest};
 use super::encoder::{AudioSettings, Mp4Recorder, PixelOrder, VideoSettings};
 use super::pipewire_stream::{self, Frame, NodeSource, NodeStream};
 use super::portal::{self, Session};
+use crate::cursor::HardwareCursor;
 
 /// A frame copied off the PipeWire buffer, waiting for the encoder.
 struct OwnedFrame {
@@ -120,13 +121,15 @@ fn start(
       .map(|recording| recording.into_stopper(None));
   }
 
+  // Before the picker, so the very first frame is already free of it.
+  let cursor = HardwareCursor::acquire();
   let (grant, session) = portal::open(true)?;
   let source = NodeSource {
     remote: Some(grant.remote),
     node_id: grant.node_id,
   };
   match record(source, PathBuf::from(&output_path), fps, bitrate, audio) {
-    Ok(recording) => Ok(recording.into_stopper(Some(session))),
+    Ok(recording) => Ok(recording.into_stopper(Some((session, cursor)))),
     Err(error) => {
       session.close();
       Err(error)
@@ -207,9 +210,10 @@ fn record(
 }
 
 impl Recording {
-  /// `session` is the portal grant to close once the stream is done; tests
-  /// that record a node directly have none.
-  fn into_stopper(self, session: Option<Session>) -> Stopper {
+  /// `portal` is the grant to close once the stream is done, and the cursor
+  /// setting to hand back with it; tests that record a node directly have
+  /// neither.
+  fn into_stopper(self, portal: Option<(Session, HardwareCursor)>) -> Stopper {
     let stats = self.stats.clone();
     let (stop_tx, stop_rx) = channel::<()>();
     let (done_tx, done_rx) = channel::<()>();
@@ -220,8 +224,9 @@ impl Recording {
         if let Err(error) = result {
           eprintln!("[velocity] Linux screen recording failed: {error}");
         }
-        if let Some(session) = session {
+        if let Some((session, cursor)) = portal {
           session.close();
+          drop(cursor);
         }
         let _ = done_tx.send(());
       })
