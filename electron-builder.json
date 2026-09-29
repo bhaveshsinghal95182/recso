@@ -23,6 +23,8 @@
       "libsecret-1-0",
       "libpipewire-0.3-0",
       "libopus0",
+      "libgbm1",
+      "libvulkan1",
       "xdg-desktop-portal"
     ]
   },
