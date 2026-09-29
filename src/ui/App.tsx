@@ -136,6 +136,17 @@ function InteractiveApp() {
     setState({ screen: 'recorder', recordingId: null });
   };
 
+  // An Automation API recording is starting: never record behind another screen.
+  useEffect(
+    () =>
+      window.electron.automation.onShowRecorder(() => {
+        setState((current) =>
+          current.screen === 'recorder' ? current : { screen: 'recorder', recordingId: null },
+        );
+      }),
+    [],
+  );
+
   // Handle opening an existing project
   const handleOpenProject = async () => {
     try {

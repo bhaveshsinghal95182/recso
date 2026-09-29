@@ -561,7 +561,23 @@ export interface EngineAPI {
   };
 }
 
+export type AutomationRecorderSettings =
+  | { active: false }
+  | {
+      active: true;
+      /** Keyed like the API's settings: `recording.outputDir`, `recording.mic`, ... */
+      values: Record<string, string | boolean | null>;
+    };
+
 interface ElectronAPI {
+  automation: {
+    getRecorderSettings: () => Promise<AutomationRecorderSettings>;
+    setRecorderSettings: (
+      patch: Record<string, string | boolean | null>,
+    ) => Promise<AutomationRecorderSettings>;
+    onRecorderSettings: (callback: (settings: AutomationRecorderSettings) => void) => () => void;
+    onShowRecorder: (callback: () => void) => () => void;
+  };
   headlessExport: {
     log: (message: string) => void;
     complete: (result: { ok: boolean; outputPath?: string; error?: string }) => void;

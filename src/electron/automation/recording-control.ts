@@ -9,10 +9,15 @@ import path from 'node:path';
 import { startRecordingSession, stopRecordingSession } from '../ipc/recorder.ipc.js';
 import * as editorService from '../services/editor.service.js';
 import * as RecorderService from '../services/recorder.service.js';
-import type { DesktopSource, RecordingConfig } from '../types/recorder.types.js';
+import type { RecordingConfig } from '../types/recorder.types.js';
 import { AutomationError } from './protocol.js';
+import {
+  defaultRecordingName,
+  describeSource,
+  pickSource,
+  startFailureReason,
+} from './recording-helpers.js';
 import type {
-  CaptureSource,
   DevicesListing,
   RecordingStarted,
   RecordingStartRequest,
@@ -26,46 +31,6 @@ export interface RecordingControlOptions {
   /** Bring the recorder screen to the front; called before capture starts. */
   showRecorder: () => void;
   restoreToken: { read(): string | null; write(token: string | null): void };
-}
-
-/** The recorder UI's own default name, so API recordings look like button ones. */
-export function defaultRecordingName(now: Date): string {
-  return `recording_${now.toISOString().slice(0, 19).replace(/[:T]/g, '-')}`;
-}
-
-export function describeSource(source: DesktopSource, platform: NodeJS.Platform): CaptureSource {
-  return {
-    id: source.id,
-    name: source.name,
-    kind: platform === 'linux' ? 'portal' : source.isScreen ? 'screen' : 'window',
-    isPrimary: source.isPrimary === true,
-  };
-}
-
-/** The source to record: the one asked for, else the primary screen, as the recorder picks. */
-export function pickSource(sources: DesktopSource[], requested?: string): DesktopSource {
-  if (requested !== undefined) {
-    const found = sources.find((source) => source.id === requested);
-    if (!found) {
-      throw new AutomationError(
-        'source_unavailable',
-        `no capture source ${requested}; list them with devices.list`,
-      );
-    }
-    return found;
-  }
-  const fallback =
-    sources.find((source) => source.isScreen && source.isPrimary) ??
-    sources.find((source) => source.isScreen) ??
-    sources[0];
-  if (!fallback) {
-    throw new AutomationError('source_unavailable', 'recso found nothing to record');
-  }
-  return fallback;
-}
-
-export function startFailureReason(error: string): string {
-  return /cancel/i.test(error) ? 'cancelled' : 'recording_failed';
 }
 
 export function createRecordingControl(options: RecordingControlOptions) {

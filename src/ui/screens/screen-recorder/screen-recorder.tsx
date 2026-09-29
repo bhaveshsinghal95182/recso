@@ -1,8 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { formats } from '@/constants';
 import type { NativeCaptureDevice } from '@/types';
 
+import {
+  type RecorderUiSettings,
+  useAutomationRecorderSettings,
+} from '../../hooks/useAutomationRecorderSettings.ts';
 import { useScreenRecorder } from '../../hooks/useScreenRecorder.ts';
 import { CapturePreviewStage } from './capture-preview-stage';
 import { FloatingRecorderToolbar } from './floating-recorder-toolbar';
@@ -47,10 +51,56 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
   const [nativeMicrophones, setNativeMicrophones] = useState<NativeCaptureDevice[]>([]);
   const [nativeMicDeviceId, setNativeMicDeviceId] = useState<string | null>(null);
 
+  // While the Automation API is on, follow its settings and report the user's.
+  const applyAutomationSettings = useCallback((settings: Partial<RecorderUiSettings>) => {
+    if (settings.outputDir !== undefined) setOutputDir(settings.outputDir);
+    if (settings.recordSystemAudio !== undefined) setRecordSystemAudio(settings.recordSystemAudio);
+    if (settings.recordMic !== undefined) setRecordMic(settings.recordMic);
+    if (settings.nativeMicDeviceId !== undefined) setNativeMicDeviceId(settings.nativeMicDeviceId);
+    if (settings.recordCamera !== undefined) setRecordCamera(settings.recordCamera);
+    if (settings.cameraDeviceId !== undefined) setCameraDeviceId(settings.cameraDeviceId);
+  }, []);
+  const reportSetting = useAutomationRecorderSettings(applyAutomationSettings);
+  const changeOutputDir = (value: string) => {
+    setOutputDir(value);
+    reportSetting('outputDir', value);
+  };
+  const changeRecordSystemAudio = (value: boolean) => {
+    setRecordSystemAudio(value);
+    reportSetting('recordSystemAudio', value);
+  };
+  const changeRecordMic = (value: boolean) => {
+    setRecordMic(value);
+    reportSetting('recordMic', value);
+  };
+  const changeNativeMicDeviceId = (value: string | null) => {
+    setNativeMicDeviceId(value);
+    reportSetting('nativeMicDeviceId', value ?? '');
+  };
+  const changeRecordCamera = (value: boolean) => {
+    setRecordCamera(value);
+    reportSetting('recordCamera', value);
+  };
+  const changeCameraDeviceId = (value: string | null) => {
+    setCameraDeviceId(value);
+    reportSetting('cameraDeviceId', value ?? '');
+  };
+
+  // A recording stopped elsewhere (over the API) still needs a fresh name here.
+  const previousStatusRef = useRef(state.status);
+  useEffect(() => {
+    const previous = previousStatusRef.current;
+    previousStatusRef.current = state.status;
+    if (state.status === 'idle' && previous !== 'idle') {
+      setFileName(`recording_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}`);
+    }
+  }, [state.status]);
+
   useEffect(() => {
     const loadDefaults = async () => {
       const defaultDir = await window.electron.recorder.getDefaultOutputDir();
-      setOutputDir(defaultDir);
+      // Unless the Automation API already set one.
+      setOutputDir((current) => current || defaultDir);
       setFileName(`recording_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}`);
 
       try {
@@ -222,18 +272,18 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
         cameraDeviceId={cameraDeviceId}
         nativeMicrophones={nativeMicrophones}
         nativeMicDeviceId={nativeMicDeviceId}
-        onNativeMicDeviceChange={setNativeMicDeviceId}
+        onNativeMicDeviceChange={changeNativeMicDeviceId}
         cameras={cameras}
         onSourceSelect={setSelectedSourceId}
         onRefreshSources={refreshSources}
         setIsLoading={setIsLoading}
-        onOutputDirChange={setOutputDir}
+        onOutputDirChange={changeOutputDir}
         onFileNameChange={setFileName}
         onVideoBitrateChange={setVideoBitrate}
-        onRecordMicChange={setRecordMic}
-        onRecordCameraChange={setRecordCamera}
-        onRecordSystemAudioChange={setRecordSystemAudio}
-        onCameraDeviceChange={setCameraDeviceId}
+        onRecordMicChange={changeRecordMic}
+        onRecordCameraChange={changeRecordCamera}
+        onRecordSystemAudioChange={changeRecordSystemAudio}
+        onCameraDeviceChange={changeCameraDeviceId}
         cameraSource={cameraSource}
         onCameraSourceChange={setCameraSource}
         onStart={handleStart}

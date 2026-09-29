@@ -77,6 +77,22 @@ export function useScreenRecorder(options: UseScreenRecorderOptions = {}) {
       recordingIdRef.current = newState.recordingId;
     });
 
+    // A recording may already be running (one started over the Automation
+    // API); show it now rather than at the next state push.
+    void window.electron.recorder.getState().then(
+      (current) => {
+        if (stopPassRef.current || !current.recordingId) return;
+        setState({
+          status: current.state.toLowerCase() as 'idle' | 'recording' | 'paused',
+          recordingId: current.recordingId,
+          duration: current.duration,
+          bytesWritten: current.bytesWritten,
+        });
+        recordingIdRef.current = current.recordingId;
+      },
+      () => undefined,
+    );
+
     refreshSources();
     const delayedRefresh = window.setTimeout(() => {
       refreshSources();

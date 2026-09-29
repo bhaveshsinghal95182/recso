@@ -190,6 +190,23 @@ electron.contextBridge.exposeInMainWorld('electron', {
     frame: (): Promise<ArrayBuffer | null> => electron.ipcRenderer.invoke('phone-camera:frame'),
   },
 
+  // The Automation API's side of the recorder, which does nothing while the API is off.
+  automation: {
+    /** The API's recorder settings, or `{ active: false }` while the API is off. */
+    getRecorderSettings: (): Promise<AutomationRecorderSettings> =>
+      electron.ipcRenderer.invoke('automation:get-recorder-settings'),
+    /** Write the recorder UI's own changes back; ignored while the API is off. */
+    setRecorderSettings: (
+      patch: Record<string, string | boolean | null>,
+    ): Promise<AutomationRecorderSettings> =>
+      electron.ipcRenderer.invoke('automation:set-recorder-settings', patch),
+    onRecorderSettings: (callback: (settings: AutomationRecorderSettings) => void) =>
+      createSubscription('automation:recorder-settings', callback),
+    /** An API recording is starting: show the recorder screen. */
+    onShowRecorder: (callback: () => void) =>
+      createSubscription('automation:show-recorder', callback),
+  },
+
   // Recording
   recorder: {
     getSources: (): Promise<DesktopSource[]> => electron.ipcRenderer.invoke('recorder:get-sources'),
@@ -640,6 +657,10 @@ electron.contextBridge.exposeInMainWorld('electron', {
 });
 
 // Helper to create a subscription that returns an unsubscribe function
+type AutomationRecorderSettings =
+  | { active: false }
+  | { active: true; values: Record<string, string | boolean | null> };
+
 function createSubscription<T>(channel: string, callback: (data: T) => void) {
   const handler = (_event: IpcRendererEvent, data: T) => callback(data);
   electron.ipcRenderer.on(channel, handler);
