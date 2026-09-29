@@ -31,7 +31,7 @@ velocity was written directly against Windows APIs. Linux needs a replacement fo
 - [x] **M2: the Electron app launches on Linux.** `pnpm dev` opens, the recorder reports that native capture is unavailable instead of crashing, and `recorder-capture-plan.ts` knows about `linux`.
 - [ ] **M3: capture on Linux.** Done: screen or window through the portal, system audio and microphone (PipeWire → Opus), cursor position (Hyprland), the webcam (V4L2), a streaming MP4 writer, and saving into a project that opens in the editor. Left: a person clicking the real portal picker once (every unattended test used `VELOCITY_TEST_PIPEWIRE_NODE`).
 - [x] **M4: engine on Linux.** Decode, probe, thumbnails, the wgpu composite chain (video, background, zoom, webcam, cursor), the preview `VideoPlayer` and `VideoExporter` (H.264 + Opus). Later, for speed: GPU colour conversion and VA-API encode (export is software, ~28 fps at 1080p here).
-- [ ] **M5: packaging.** `pnpm dist:linux` builds velocity for Linux (`build:engine:linux`), the renderer and an AppImage; the AppImage runs here with velocity loaded from `resources/velocity/`. The `.deb` target needs a maintainer email (see Log).
+- [ ] **M5: packaging.** `pnpm dist:linux` builds velocity for Linux (`build:engine:linux`), the renderer and an AppImage; the AppImage runs here with velocity loaded from `resources/velocity/`, and previews through the engine like the dev build. The deb depends on PipeWire, libopus, libgbm, Vulkan and the portal. The `.deb` target needs a maintainer email (see Log).
 
 ## M4 plan (engine on Linux)
 
