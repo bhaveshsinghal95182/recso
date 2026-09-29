@@ -7,8 +7,9 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
+use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use crate::capture::linux::audio::{OpusEncoder, PACKET_FRAMES};
@@ -148,7 +149,25 @@ fn set_stage(shared: &Shared, name: &'static str) {
   *shared.stage.lock().unwrap_or_else(|e| e.into_inner()) = name;
 }
 
-fn write_packets(recorder: &mut Mp4Recorder, encoder: &OpusEncoder,
+/// Work for the encoder thread, in file order.
+enum Job {
+  Video(Vec<u8>, i64),
+  Audio(Vec<u8>, i64),
+}
+
+/// Frames rendered ahead of the encoder. Two keeps both threads busy without
+/// holding more than a few frames of pixels.
+const PIPELINE_DEPTH: usize = 2;
+
+/// What a send to a stopped encoder thread returns. The thread's own error,
+/// which says why it stopped, replaces it.
+const ENCODER_GONE: &str = "the encoder thread stopped";
+
+fn send(jobs: &SyncSender<Job>, job: Job) -> Result<(), String> {
+  jobs.send(job).map_err(|_| ENCODER_GONE.to_string())
+}
+
+fn write_packets(jobs: &SyncSender<Job>, encoder: &OpusEncoder,
   pending: &mut Vec<f32>, packets_written: &mut u64) -> Result<(), String> {
   let packet_samples = PACKET_FRAMES * MIX_CHANNELS as usize;
   while pending.len() >= packet_samples {
@@ -157,8 +176,70 @@ fn write_packets(recorder: &mut Mp4Recorder, encoder: &OpusEncoder,
     pending.drain(..packet_samples);
     let packet = encoder.encode(&pcm)?;
     let pts = *packets_written as i64 * PACKET_FRAMES as i64 * 10_000_000 / MIX_SAMPLE_RATE as i64;
-    recorder.push_audio_packet(&packet, pts)?;
+    send(jobs, Job::Audio(packet, pts))?;
     *packets_written += 1;
+  }
+  Ok(())
+}
+
+/// Encode and mux on a thread of its own, so the next frame renders while
+/// this one encodes. The two cost about the same (openh264 ~19 ms, render and
+/// readback ~15 ms at 1080p), so in series they halved the export rate.
+/// Finalises the file whatever happens, and returns the first error.
+fn encode_jobs(shared: &Shared, mut recorder: Mp4Recorder, jobs: Receiver<Job>,
+  spare: Sender<Vec<u8>>, width: u32, height: u32) -> Result<(), String> {
+  let mut failure = None;
+  for job in jobs {
+    let result = match job {
+      Job::Video(rgba, pts) => {
+        let started = Instant::now();
+        let pushed = recorder.push_frame(&rgba, width, height, width as usize * 4, PixelOrder::Rgbx, pts);
+        shared.encode_us.fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
+        let _ = spare.send(rgba);
+        pushed
+      }
+      Job::Audio(packet, pts) => recorder.push_audio_packet(&packet, pts),
+    };
+    if let Err(error) = result { failure = Some(error); break; }
+  }
+  let finished = recorder.finish();
+  if let Some(error) = failure { return Err(error); }
+  finished.map(|_| ())
+}
+
+/// How far the audio thread should mix. Audio is cued by the video, not run
+/// ahead of it: the recorder drops audio that predates the first frame, and
+/// packets that follow their frame keep the file interleaved.
+enum AudioCue {
+  Until(f64),
+  /// The last cue: mix to here, pad the final packet and stop.
+  Finish(f64),
+}
+
+/// Mix and Opus-encode on a thread of its own. A recording with a low frame
+/// rate carries several 20 ms packets per frame, and doing them between frames
+/// held the render thread back by as much as the encoder.
+fn mix_audio(mut mixer: AudioMixer<OpusSource>, opus: OpusEncoder, origin_ms: f64,
+  cues: Receiver<AudioCue>, jobs: SyncSender<Job>) -> Result<(), String> {
+  let mut pending = Vec::new();
+  let mut packets_written = 0u64;
+  let mut audio_frames_written = 0u64;
+  for cue in cues {
+    let (until_ms, last) = match cue {
+      AudioCue::Until(ms) => (ms, false),
+      AudioCue::Finish(ms) => (ms, true),
+    };
+    let due = audio_frames_due(until_ms - origin_ms, audio_frames_written);
+    pending.extend(mixer.next_window(due));
+    audio_frames_written += due as u64;
+    write_packets(&jobs, &opus, &mut pending, &mut packets_written)?;
+    if last {
+      if !pending.is_empty() {
+        pending.resize(PACKET_FRAMES * MIX_CHANNELS as usize, 0.0);
+        write_packets(&jobs, &opus, &mut pending, &mut packets_written)?;
+      }
+      break;
+    }
   }
   Ok(())
 }
@@ -218,89 +299,106 @@ fn run(shared: &Shared, options: Options) -> Result<(), String> {
   let opus = if mixer.is_some() { Some(OpusEncoder::new()?) } else { None };
   set_stage(shared, "create encoder");
   let (width, height) = chain.output_size();
-  let mut recorder = Mp4Recorder::create(Path::new(&options.output), VideoSettings {
+  let recorder = Mp4Recorder::create(Path::new(&options.output), VideoSettings {
     width, height, fps: fps.round().max(1.0) as u32, bitrate: options.bitrate,
   }, mixer.as_ref().map(|_| AudioSettings { channels: 2 }))?;
 
-  // All work after creation is enclosed so finish also runs when it fails.
-  let work = (|| -> Result<(), String> {
-    if options.start_ms > 0.0 {
-      set_stage(shared, "seek");
-      source.seek_to_keyframe_before(options.start_ms)?;
-      if let Some(camera) = webcam.as_mut() { camera.seek_to_keyframe_before(options.start_ms)?; }
-    }
-    let mut overlays = OverlayState::default();
-    let mut latest_webcam_ms = f64::NEG_INFINITY;
-    let mut rgba = Vec::new();
-    let mut pending = Vec::new();
-    let mut packets_written = 0u64;
-    let mut audio_frames_written = 0u64;
-    let mut last_composition_ms = origin_ms;
-    // Video is timed from its own first frame, as the Windows encoder's frame
-    // counter is. Timing it from `origin_ms` would put the first frame a few
-    // milliseconds in whenever a trim starts between frames, and the recorder,
-    // which rebases to its first video frame, would then drop the first audio
-    // packet as early.
-    let mut first_composition_ms = None;
-    loop {
-      if shared.cancel.load(Ordering::Acquire) { break; }
-      set_stage(shared, "read_sample");
-      let t_decode = Instant::now();
-      let Some(frame) = source.next_frame()? else { break };
-      let decode_us = t_decode.elapsed().as_micros() as u64;
-      if frame.pts_ms + 0.5 < options.start_ms { continue; }
-      if frame.pts_ms > end_ms { break; }
-      if cuts.contains(frame.pts_ms) { continue; }
-      let composition_ms = cuts.to_composition(frame.pts_ms);
-      last_composition_ms = composition_ms;
-      set_stage(shared, "render");
-      let t_render = Instant::now();
-      pull_webcam(&mut webcam, &mut overlays, &mut latest_webcam_ms, frame.pts_ms);
-      overlays.stage_webcam(&mut chain, 0);
-      chain.stage_timeline(0, composition_ms);
-      frame.stage(&mut chain, 0)?;
-      chain.render_slot(0)?;
-      chain.read_rgba(&mut rgba)?;
-      let render_us = t_render.elapsed().as_micros() as u64;
-      set_stage(shared, "encode write_frame");
-      let t_encode = Instant::now();
-      let first = *first_composition_ms.get_or_insert(composition_ms);
-      let pts = ((composition_ms - first).max(0.0) * 10_000.0).round() as i64;
-      recorder.push_frame(&rgba, width, height, width as usize * 4, PixelOrder::Rgbx, pts)?;
-      let encode_us = t_encode.elapsed().as_micros() as u64;
-      if let (Some(mixer), Some(opus)) = (mixer.as_mut(), opus.as_ref()) {
-        set_stage(shared, "write audio");
-        let due = audio_frames_due(composition_ms - origin_ms, audio_frames_written);
-        pending.extend(mixer.next_window(due));
-        audio_frames_written += due as u64;
-        write_packets(&mut recorder, opus, &mut pending, &mut packets_written)?;
+  let (jobs, queued) = sync_channel::<Job>(PIPELINE_DEPTH);
+  let (spare_tx, spare) = channel::<Vec<u8>>();
+  let (cue, cues) = channel::<AudioCue>();
+  thread::scope(|scope| {
+    let writer = thread::Builder::new().name("export-encode".into())
+      .spawn_scoped(scope, move || encode_jobs(shared, recorder, queued, spare_tx, width, height))
+      .map_err(|error| format!("spawn the encoder thread: {error}"))?;
+    let audio = match (mixer, opus) {
+      (Some(mixer), Some(opus)) => {
+        let jobs = jobs.clone();
+        Some(thread::Builder::new().name("export-audio".into())
+          .spawn_scoped(scope, move || mix_audio(mixer, opus, origin_ms, cues, jobs))
+          .map_err(|error| format!("spawn the audio thread: {error}"))?)
       }
-      shared.decode_us.fetch_add(decode_us, Ordering::Relaxed);
-      shared.render_us.fetch_add(render_us, Ordering::Relaxed);
-      shared.encode_us.fetch_add(encode_us, Ordering::Relaxed);
-      if shared.frames_done.fetch_add(1, Ordering::Relaxed) == 0 {
-        shared.setup_us.store(shared.started_at.elapsed().as_micros() as u64, Ordering::Relaxed);
+      _ => None,
+    };
+    // Everything the render side does is enclosed, so the writer always gets
+    // to finalise the file, also after a failure here.
+    let work = (|| -> Result<(), String> {
+      if options.start_ms > 0.0 {
+        set_stage(shared, "seek");
+        source.seek_to_keyframe_before(options.start_ms)?;
+        if let Some(camera) = webcam.as_mut() { camera.seek_to_keyframe_before(options.start_ms)?; }
       }
-    }
-    if shared.frames_done.load(Ordering::Relaxed) > 0 {
-      if let (Some(mixer), Some(opus)) = (mixer.as_mut(), opus.as_ref()) {
-        set_stage(shared, "flush audio");
-        let due = audio_frames_due(last_composition_ms + 1000.0 / fps - origin_ms, audio_frames_written);
-        pending.extend(mixer.next_window(due));
-        write_packets(&mut recorder, opus, &mut pending, &mut packets_written)?;
-        if !pending.is_empty() {
-          pending.resize(PACKET_FRAMES * MIX_CHANNELS as usize, 0.0);
-          write_packets(&mut recorder, opus, &mut pending, &mut packets_written)?;
+      let mut overlays = OverlayState::default();
+      let mut latest_webcam_ms = f64::NEG_INFINITY;
+      let mut last_composition_ms = origin_ms;
+      // Video is timed from its own first frame, as the Windows encoder's frame
+      // counter is. Timing it from `origin_ms` would put the first frame a few
+      // milliseconds in whenever a trim starts between frames, and the recorder,
+      // which rebases to its first video frame, would then drop the first audio
+      // packet as early.
+      let mut first_composition_ms = None;
+      loop {
+        if shared.cancel.load(Ordering::Acquire) { break; }
+        set_stage(shared, "read_sample");
+        let t_decode = Instant::now();
+        let Some(frame) = source.next_frame()? else { break };
+        let decode_us = t_decode.elapsed().as_micros() as u64;
+        if frame.pts_ms + 0.5 < options.start_ms { continue; }
+        if frame.pts_ms > end_ms { break; }
+        if cuts.contains(frame.pts_ms) { continue; }
+        let composition_ms = cuts.to_composition(frame.pts_ms);
+        last_composition_ms = composition_ms;
+        set_stage(shared, "render");
+        let t_render = Instant::now();
+        pull_webcam(&mut webcam, &mut overlays, &mut latest_webcam_ms, frame.pts_ms);
+        overlays.stage_webcam(&mut chain, 0);
+        chain.stage_timeline(0, composition_ms);
+        frame.stage(&mut chain, 0)?;
+        chain.render_slot(0)?;
+        let mut rgba = spare.try_recv().unwrap_or_default();
+        chain.read_rgba(&mut rgba)?;
+        let render_us = t_render.elapsed().as_micros() as u64;
+        set_stage(shared, "encode write_frame");
+        let first = *first_composition_ms.get_or_insert(composition_ms);
+        let pts = ((composition_ms - first).max(0.0) * 10_000.0).round() as i64;
+        send(&jobs, Job::Video(rgba, pts))?;
+        // After the frame is queued, so its audio lands behind it in the file.
+        let _ = cue.send(AudioCue::Until(composition_ms));
+        shared.decode_us.fetch_add(decode_us, Ordering::Relaxed);
+        shared.render_us.fetch_add(render_us, Ordering::Relaxed);
+        if shared.frames_done.fetch_add(1, Ordering::Relaxed) == 0 {
+          shared.setup_us.store(shared.started_at.elapsed().as_micros() as u64, Ordering::Relaxed);
         }
       }
+      if shared.frames_done.load(Ordering::Relaxed) > 0 {
+        let _ = cue.send(AudioCue::Finish(last_composition_ms + 1000.0 / fps));
+      }
+      Ok(())
+    })();
+    if work.is_ok() { set_stage(shared, "finalize"); }
+    // Closing the queues is what tells the other threads the last job is in:
+    // the audio thread finishes, then the writer once both senders are gone.
+    drop(cue);
+    drop(jobs);
+    let mixed = audio.map_or(Ok(()), |audio| {
+      audio.join().unwrap_or_else(|_| Err("the audio thread panicked".into()))
+    });
+    let written = writer.join().unwrap_or_else(|_| Err("the encoder thread panicked".into()));
+    // The first real cause wins. A thread that failed only because the writer
+    // stopped reports that the writer stopped, which says less than the
+    // writer's own error.
+    let gone = |result: &Result<(), String>| matches!(result, Err(error) if error == ENCODER_GONE);
+    if work.is_err() && !gone(&work) { return work; }
+    if mixed.is_err() && !gone(&mixed) {
+      set_stage(shared, "write audio");
+      return mixed;
     }
-    Ok(())
-  })();
-  if work.is_ok() { set_stage(shared, "finalize"); }
-  let finished = recorder.finish();
-  if let Err(error) = work { return Err(error); }
-  finished?;
-  Ok(())
+    if written.is_err() {
+      if gone(&work) || gone(&mixed) { set_stage(shared, "encode write_frame"); }
+      else { set_stage(shared, "finalize"); }
+      return written;
+    }
+    work.and(mixed)
+  })
 }
 
 #[cfg(test)]
@@ -325,6 +423,31 @@ mod tests {
       layer_order: DEFAULT_LAYER_ORDER, webcam_zoom_regions: Vec::new(),
       zoom_regions: Vec::new(), audio_sources: vec![(input.into(), 0.0)],
       cuts: Vec::new(), crop: None,
+    }
+  }
+
+  /// Export speed on a real recording: `VELOCITY_BENCH_INPUT=<mp4> cargo test
+  /// --release --lib export_speed -- --ignored --nocapture`.
+  #[test]
+  #[ignore = "a benchmark on a recording named by VELOCITY_BENCH_INPUT"]
+  fn export_speed() {
+    let Ok(input) = std::env::var("VELOCITY_BENCH_INPUT") else { return };
+    let output = std::env::temp_dir().join("velocity-export-speed.mp4");
+    let mut options = options(&input, output.to_str().unwrap());
+    options.bitrate = 12_000_000;
+    if std::env::var("VELOCITY_BENCH_NO_AUDIO").is_ok() { options.audio_sources.clear(); }
+    options.end_ms = std::env::var("VELOCITY_BENCH_END_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(20_000.0);
+    let exporter = Exporter::start(options);
+    loop {
+      let progress = exporter.progress();
+      if progress.finished {
+        assert_eq!(progress.error, None);
+        println!("{} frames at {:.1} fps: decode {:.1} ms, render {:.1} ms, encode {:.1} ms",
+          progress.frames_done, progress.steady_fps, progress.avg_decode_ms,
+          progress.avg_render_ms, progress.avg_encode_ms);
+        break;
+      }
+      std::thread::sleep(Duration::from_millis(50));
     }
   }
 
