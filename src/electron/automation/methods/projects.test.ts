@@ -56,7 +56,8 @@ function setup(overrides: Partial<AutomationServices> = {}) {
     },
     removeFile: () => undefined,
   });
-  const services = fakeServices({ exports, ...overrides });
+  // Real temp paths, so the host's own path rules.
+  const services = fakeServices({ platform: process.platform, exports, ...overrides });
   const registry = new MethodRegistry();
   registerProjectMethods(registry, services);
   const call = (method: string, params: unknown = {}): Promise<JsonRpcResponse> =>

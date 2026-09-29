@@ -154,7 +154,8 @@ describe('Lua scripts', () => {
   });
 });
 
-describe('Hyprland click capture', () => {
+// Hyprland is Linux-only, and its IPC (faked here) is a Unix socket.
+describe.skipIf(process.platform === 'win32')('Hyprland click capture', () => {
   it('drains clicks with wall-clock timestamps and rounded physical coordinates', async () => {
     const fake = await fakeHyprland();
     const capture = await startHyprlandClickCapture({

@@ -20,7 +20,12 @@ import {
   parseMessage,
 } from './protocol.js';
 import type { ConnectionHandle, MethodRegistry } from './registry.js';
-import { prepareSocketDir, removeStaleSocket, type Transport } from './transport.js';
+import {
+  prepareSocketDir,
+  removeStaleSocket,
+  type Transport,
+  TransportInUseError,
+} from './transport.js';
 
 export interface AutomationServerOptions {
   registry: MethodRegistry;
@@ -91,7 +96,15 @@ export class AutomationServer {
 
     const server = net.createServer((socket) => this.accept(socket));
     await new Promise<void>((resolve, reject) => {
-      server.once('error', reject);
+      server.once('error', (error: NodeJS.ErrnoException) =>
+        reject(
+          // A pipe can't be stale: if its name is taken, something is serving it
+          // (recso's pipe is opened first-instance-only, so never shared).
+          transport.kind === 'pipe' && error.code === 'EADDRINUSE'
+            ? new TransportInUseError(`another recso is already serving ${transport.path}`)
+            : error,
+        ),
+      );
       server.listen(transport.path, () => {
         server.off('error', reject);
         resolve();

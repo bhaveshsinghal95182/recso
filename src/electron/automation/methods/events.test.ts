@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import { projectEvents, recorderEvents } from '../../services/recorder-events.js';
@@ -24,7 +26,8 @@ describe('event payloads', () => {
     expect(recordingStartedPayload({ recordingId: 'r', config })).toEqual({
       recordingId: 'r',
       sourceId: 'screen:portal',
-      videoPath: '/home/me/Videos/take/take.mp4',
+      // The recorder's own paths: the host's separator.
+      videoPath: path.join('/home/me/Videos', 'take', 'take.mp4'),
     });
   });
 

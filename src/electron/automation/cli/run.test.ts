@@ -37,13 +37,23 @@ function io(_socket: string): { io: CliIo; out: string[]; err: string[] } {
   };
 }
 
-async function server(socketPath?: string) {
-  if (!socketPath) {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'recso-cli-'));
-    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
-    socketPath = path.join(root, 'recso/api.sock');
+let pipeCount = 0;
+
+/** Where a test server listens: a temp Unix socket, or on Windows a named pipe. */
+function scratchSocketPath(): string {
+  if (process.platform === 'win32') {
+    return `\\\\.\\pipe\\recso-cli-test-${process.pid}-${++pipeCount}`;
   }
-  const transport: Transport = { kind: 'unix', dir: path.dirname(socketPath), path: socketPath };
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'recso-cli-'));
+  cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+  return path.join(root, 'recso/api.sock');
+}
+
+async function server(socketPath = scratchSocketPath()) {
+  const transport: Transport =
+    process.platform === 'win32'
+      ? { kind: 'pipe', path: socketPath }
+      : { kind: 'unix', dir: path.dirname(socketPath), path: socketPath };
   const registry = new MethodRegistry();
   registry.register({
     name: 'app.status',
@@ -103,9 +113,7 @@ describe('runCli', () => {
   });
 
   it('launches recso and completes the command after its socket comes up', async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'recso-cli-launch-'));
-    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
-    const socketPath = path.join(root, 'recso/api.sock');
+    const socketPath = scratchSocketPath();
     const { io: target, out } = io(socketPath);
     let started!: Promise<unknown>;
     const launch = vi.fn(() => {

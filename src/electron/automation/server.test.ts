@@ -18,7 +18,13 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
+let pipeCount = 0;
+
+/** A Unix socket in a temp directory, or on Windows a named pipe of its own. */
 function scratchTransport(): Transport {
+  if (process.platform === 'win32') {
+    return { kind: 'pipe', path: `\\\\.\\pipe\\recso-test-${process.pid}-${++pipeCount}` };
+  }
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'recso-server-'));
   cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
   const dir = path.join(root, 'recso');
@@ -74,7 +80,8 @@ function rawExchange(
 }
 
 describe('AutomationServer', () => {
-  it('makes the socket private to the user', async () => {
+  // A pipe has no mode bits; its ACL is libuv's default (see the Log).
+  it.skipIf(process.platform === 'win32')('makes the socket private to the user', async () => {
     const { transport } = await startServer();
     expect(fs.statSync(transport.path).mode & 0o777).toBe(0o600);
     if (transport.kind === 'unix') expect(fs.statSync(transport.dir).mode & 0o777).toBe(0o700);
@@ -165,10 +172,13 @@ describe('AutomationServer', () => {
     const closed = client.closedPromise();
     await server.stop();
     await closed;
-    expect(fs.existsSync(transport.path)).toBe(false);
+    if (transport.kind === 'unix') expect(fs.existsSync(transport.path)).toBe(false);
+    await expect(AutomationClient.connect(transport.path)).rejects.toMatchObject({
+      reason: 'not_running',
+    });
   });
 
-  it('replaces a stale socket file but not a live one', async () => {
+  it('refuses to share a live socket or pipe', async () => {
     const { transport } = await startServer();
     const second = new AutomationServer({ registry: new MethodRegistry(), transport });
     await expect(second.start()).rejects.toThrow(/already serving/);
@@ -177,7 +187,7 @@ describe('AutomationServer', () => {
   it('creates nothing until started', () => {
     const transport = scratchTransport();
     new AutomationServer({ registry: new MethodRegistry(), transport });
-    expect(fs.existsSync(transport.path)).toBe(false);
+    if (transport.kind === 'unix') expect(fs.existsSync(transport.dir)).toBe(false);
   });
 
   it('a client gets not_running when nothing listens', async () => {

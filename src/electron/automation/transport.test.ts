@@ -52,7 +52,8 @@ describe('transportPath', () => {
   });
 });
 
-describe('prepareSocketDir', () => {
+// Unix sockets only: Windows uses a named pipe, which has no directory.
+describe.skipIf(process.platform === 'win32')('prepareSocketDir', () => {
   const made: string[] = [];
   afterEach(() => {
     for (const dir of made.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
