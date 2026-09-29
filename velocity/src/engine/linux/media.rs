@@ -160,7 +160,17 @@ pub(super) mod fixtures {
 
   // capture::linux is private to capture.rs. Build the same H.264/MP4 layout
   // here to exercise the engine without widening that unrelated module's API.
-  pub fn recording(audio: bool) -> Fixture {
+  pub fn recording(audio: bool) -> Fixture { recording_sized(audio, 64, 48) }
+
+  /// A recording at any even size, for pictures that aren't macroblock-aligned.
+  pub fn recording_sized(audio: bool, width: usize, height: usize) -> Fixture {
+    recording_painted(audio, width, height, [[20, 40, 210, 0], [30, 200, 50, 0], [210, 45, 30, 0]])
+  }
+
+  /// A recording whose three seconds are painted with `palette` (BGRX), one
+  /// colour per second.
+  pub fn recording_painted(audio: bool, width: usize, height: usize,
+    palette: [[u8; 4]; 3]) -> Fixture {
     let path = path("recording", "mp4");
     let config = EncoderConfig::new()
       .bitrate(BitRate::from_bps(2_000_000))
@@ -172,18 +182,14 @@ pub(super) mod fixtures {
       .skip_frames(false)
       .intra_frame_period(IntraFramePeriod::from_num_frames(60));
     let mut encoder = Encoder::with_api_config(OpenH264API::from_source(), config).unwrap();
-    let mut yuv = YUVBuffer::new(64, 48);
+    let mut yuv = YUVBuffer::new(width, height);
     let mut samples = Vec::new();
     let mut sps = Vec::new();
     let mut pps = Vec::new();
     for index in 0..90 {
-      let colour: [u8; 4] = match index / 30 {
-        0 => [20, 40, 210, 0],
-        1 => [30, 200, 50, 0],
-        _ => [210, 45, 30, 0],
-      };
-      let pixels = colour.repeat(64 * 48);
-      yuv.read_bgra8(BgraSliceU8::new(&pixels, (64, 48)));
+      let colour = palette[(index / 30).min(2)];
+      let pixels = colour.repeat(width * height);
+      yuv.read_bgra8(BgraSliceU8::new(&pixels, (width, height)));
       let encoded = encoder.encode_at(&yuv, Timestamp::from_millis(index as u64 * 33)).unwrap();
       let mut avcc = Vec::new();
       for layer_index in 0..encoded.num_layers() {
@@ -213,7 +219,7 @@ pub(super) mod fixtures {
     writer.add_track(&mp4::TrackConfig {
       track_type: mp4::TrackType::Video, timescale: 30_000,
       language: "und".into(), media_conf: mp4::MediaConfig::AvcConfig(mp4::AvcConfig {
-        width: 64, height: 48, seq_param_set: sps, pic_param_set: pps,
+        width: width as u16, height: height as u16, seq_param_set: sps, pic_param_set: pps,
       }),
     }).unwrap();
     if audio {

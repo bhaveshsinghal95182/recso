@@ -8,3 +8,5 @@ mod media;
 mod thumbnails;
 
 pub(crate) mod render;
+pub(crate) mod player;
+pub(crate) mod present;
