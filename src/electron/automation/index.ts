@@ -10,10 +10,8 @@ import os from 'node:os';
 
 import { app, type BrowserWindow, ipcMain } from 'electron';
 
-import { registerCoreMethods } from './methods/core.js';
-import { EVENT_NAMES, registerEventMethods } from './methods/events.js';
-import { registerProjectMethods } from './methods/projects.js';
-import { registerRecordingMethods } from './methods/recording.js';
+import { registerAllMethods } from './methods/all.js';
+import { EVENT_NAMES } from './methods/events.js';
 import { setActiveSettings } from './active-settings.js';
 import { createElectronServices } from './electron-services.js';
 import { automationEnabled, readStoredEnabled } from './enabled.js';
@@ -46,17 +44,6 @@ function currentTransport() {
     username: os.userInfo().username,
     tmpdir: os.tmpdir(),
   });
-}
-
-export function registerAllMethods(
-  registry: MethodRegistry,
-  services: AutomationServices,
-): MethodRegistry {
-  registerCoreMethods(registry, services);
-  registerRecordingMethods(registry, services);
-  registerProjectMethods(registry, services);
-  registerEventMethods(registry);
-  return registry;
 }
 
 function sendToWindow(channel: string, ...args: unknown[]): void {

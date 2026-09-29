@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "recso": {
+      "command": "recso-cli",
+      "args": ["mcp"]
+    }
+  }
+}

@@ -45,7 +45,7 @@ const UNREACHABLE =
   'recso is not running, or its Automation API is off. Call recso_launch, or turn it on in recso: Settings ▸ Advanced ▸ Automation API.';
 
 const INSTRUCTIONS =
-  'recso is a screen recorder. Call app_status first. All paths are absolute. Record with recording_start then recording_stop, which returns the project. Export with export_start using wait: true, or call export_wait, and read the output path from the result. If recso_* tools are missing, recso is not running or its Automation API is off; call recso_launch.';
+  'recso is a screen recorder. Call app_status first. All paths are absolute. Record with recording_start then recording_stop, which returns the project. Export with export_start using wait: true, or call export_wait, and read the output path from the result. If recso_launch is the only tool, recso is not running or its Automation API is off; call recso_launch.';
 
 export function toolName(method: string): string {
   const name = method.replaceAll('.', '_');
