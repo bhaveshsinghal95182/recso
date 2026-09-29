@@ -22,6 +22,7 @@ import type {
   SpritesheetsBySource,
   SpritesheetSource,
 } from '../types/spritesheet.types.js';
+import { projectEvents } from './recorder-events.js';
 import { spritesheetImageName } from './spritesheet-plan.js';
 
 const RECSO_FOLDER = '.recso';
@@ -72,6 +73,11 @@ export function saveProjectMetadata(project: Project): boolean {
     const projectFile = path.join(project.projectFolderPath, PROJECT_FILE);
     fs.writeFileSync(projectFile, JSON.stringify(project, null, 2), 'utf-8');
     console.log('[ProjectStorage] Saved project metadata:', projectFile);
+    projectEvents.emit('saved', {
+      projectDir: path.dirname(project.projectFolderPath),
+      name: project.name,
+      recordingId: project.recordingId,
+    });
     return true;
   } catch (error) {
     console.error('[ProjectStorage] Failed to save project:', error);

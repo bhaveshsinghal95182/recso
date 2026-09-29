@@ -231,6 +231,7 @@ export async function stopRecordingSession(
   recordingId: string,
 ): Promise<{ result: StopRecordingResult; clicks: number }> {
   stopStatePolling();
+  recorderEvents.emit('stopping', { recordingId });
 
   // Stop mouse tracking
   const clickCount = mouseTrackerService.stopTracking();

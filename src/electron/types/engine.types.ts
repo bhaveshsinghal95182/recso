@@ -111,6 +111,11 @@ export interface PlayerStats {
  */
 export interface ExportOptions {
   output: string;
+  /**
+   * Which H.264 encoder: "auto" (the default) takes the GPU's when there is
+   * one. Linux's engine honours it; Windows' lets Media Foundation choose.
+   */
+  encoder?: 'auto' | 'hardware' | 'software';
   /** Target bitrate in bits per second. */
   bitrate: number;
   /** Milliseconds. Defaults to the whole file. */
@@ -199,6 +204,8 @@ export interface EngineAudioSource {
 
 export interface ExportProgress {
   framesDone: number;
+  /** The encoder in use, once open (Linux only for now). */
+  encoder?: string | null;
   /** Estimated from the range and frame rate, so treat it as approximate. */
   framesTotal: number;
   finished: boolean;

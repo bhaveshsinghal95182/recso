@@ -1,5 +1,5 @@
 /**
- * Recording lifecycle events, whoever started or stopped the recording.
+ * Recording and project lifecycle events, whoever caused them.
  *
  * The recorder's button and the Automation API both go through the same
  * session functions in `recorder.ipc.ts`, which raise these. The Automation
@@ -15,6 +15,10 @@ export interface RecordingStartedEvent {
   config: RecordingConfig;
 }
 
+export interface RecordingStoppingEvent {
+  recordingId: string;
+}
+
 export interface RecordingStoppedEvent {
   recordingId: string;
   result: StopRecordingResult;
@@ -23,7 +27,17 @@ export interface RecordingStoppedEvent {
 
 interface RecorderEventMap {
   started: [RecordingStartedEvent];
+  stopping: [RecordingStoppingEvent];
   stopped: [RecordingStoppedEvent];
 }
 
 export const recorderEvents = new EventEmitter<RecorderEventMap>();
+
+export interface ProjectSavedEvent {
+  projectDir: string;
+  name: string;
+  recordingId: string;
+}
+
+/** Every write of a project's `.recso/project.json`, from the editor or the API. */
+export const projectEvents = new EventEmitter<{ saved: [ProjectSavedEvent] }>();

@@ -11,10 +11,14 @@ import os from 'node:os';
 import { app, type BrowserWindow, ipcMain } from 'electron';
 
 import { registerCoreMethods } from './methods/core.js';
+import { registerEventMethods } from './methods/events.js';
+import { registerProjectMethods } from './methods/projects.js';
 import { registerRecordingMethods } from './methods/recording.js';
 import { setActiveSettings } from './active-settings.js';
 import { createElectronServices } from './electron-services.js';
 import { automationEnabled, readStoredEnabled } from './enabled.js';
+import { connectEvents } from './event-bridge.js';
+import { PendingNavigation } from './navigation.js';
 import { MethodRegistry } from './registry.js';
 import { validate } from './schema.js';
 import { AutomationServer } from './server.js';
@@ -30,7 +34,9 @@ import { transportPath } from './transport.js';
 let mainWindowRef: BrowserWindow | null = null;
 let server: AutomationServer | null = null;
 let settings: SettingsStore | null = null;
-let unsubscribeSettings: (() => void) | null = null;
+let disconnect: (() => void) | null = null;
+let services: AutomationServices | null = null;
+const navigation = new PendingNavigation(() => sendToWindow('automation:navigate'));
 
 function currentTransport() {
   return transportPath(process.platform, {
@@ -46,6 +52,8 @@ export function registerAllMethods(
 ): MethodRegistry {
   registerCoreMethods(registry, services);
   registerRecordingMethods(registry, services);
+  registerProjectMethods(registry, services);
+  registerEventMethods(registry);
   return registry;
 }
 
@@ -56,17 +64,24 @@ function sendToWindow(channel: string, ...args: unknown[]): void {
   }
 }
 
+/** Every API event goes to subscribed connections. */
+function dispatch(event: string, payload: unknown): void {
+  server?.broadcast(event, payload);
+}
+
 async function startServer(): Promise<void> {
   if (server) return;
   const transport = currentTransport();
   const store = new SettingsStore(defaultSettings(app.getPath('videos')));
-  const services = createElectronServices({
+  const candidateServices = createElectronServices({
     getWindow: () => mainWindowRef,
     transportPath: transport.path,
     settings: store,
+    navigation,
+    emit: (event, payload) => dispatch(event, payload),
   });
   const candidate = new AutomationServer({
-    registry: registerAllMethods(new MethodRegistry(), services),
+    registry: registerAllMethods(new MethodRegistry(), candidateServices),
     transport,
     log: (message) => console.log(message),
   });
@@ -78,21 +93,30 @@ async function startServer(): Promise<void> {
     return;
   }
   server = candidate;
+  services = candidateServices;
   settings = store;
   setActiveSettings(store);
-  unsubscribeSettings = store.onChange(() =>
+  const offRenderer = store.onChange(() =>
     sendToWindow('automation:recorder-settings', { active: true, values: store.get() }),
   );
+  const offEvents = connectEvents(dispatch, store);
+  disconnect = () => {
+    offRenderer();
+    offEvents();
+  };
   sendToWindow('automation:recorder-settings', { active: true, values: store.get() });
 }
 
 async function stopServer(): Promise<void> {
   const running = server;
   server = null;
+  // An export process outliving recso would write a file nobody asked about.
+  services?.exports.cancelAll();
+  services = null;
   settings = null;
   setActiveSettings(null);
-  unsubscribeSettings?.();
-  unsubscribeSettings = null;
+  disconnect?.();
+  disconnect = null;
   await running?.stop();
   sendToWindow('automation:recorder-settings', { active: false });
 }
@@ -102,6 +126,7 @@ async function stopServer(): Promise<void> {
  * values and writes its own changes back, but only while the API is on.
  */
 function registerRendererBridge(): void {
+  ipcMain.handle('automation:take-navigation', () => navigation.take());
   ipcMain.handle('automation:get-recorder-settings', () =>
     settings ? { active: true, values: settings.get() } : { active: false },
   );

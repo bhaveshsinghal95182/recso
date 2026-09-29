@@ -154,6 +154,13 @@ console.debug = (...args: unknown[]): void => {
 electron.contextBridge.exposeInMainWorld('electron', {
   headlessExport: {
     log: (message: string) => electron.ipcRenderer.send('headless-export:log', message),
+    progress: (progress: {
+      percent: number;
+      fps: number;
+      eta: number;
+      phase: string;
+      encoder: string | null;
+    }) => electron.ipcRenderer.send('headless-export:progress', progress),
     complete: (result: { ok: boolean; outputPath?: string; error?: string }) =>
       electron.ipcRenderer.send('headless-export:complete', result),
   },
@@ -202,9 +209,11 @@ electron.contextBridge.exposeInMainWorld('electron', {
       electron.ipcRenderer.invoke('automation:set-recorder-settings', patch),
     onRecorderSettings: (callback: (settings: AutomationRecorderSettings) => void) =>
       createSubscription('automation:recorder-settings', callback),
-    /** An API recording is starting: show the recorder screen. */
-    onShowRecorder: (callback: () => void) =>
-      createSubscription('automation:show-recorder', callback),
+    /** The API wants another screen: call takeNavigation for which one. */
+    onNavigate: (callback: () => void) => createSubscription('automation:navigate', callback),
+    /** The screen the API asked for (recorder, or a project in the editor), once. */
+    takeNavigation: (): Promise<AutomationNavigation | null> =>
+      electron.ipcRenderer.invoke('automation:take-navigation'),
   },
 
   // Recording
@@ -660,6 +669,7 @@ electron.contextBridge.exposeInMainWorld('electron', {
 type AutomationRecorderSettings =
   | { active: false }
   | { active: true; values: Record<string, string | boolean | null> };
+type AutomationNavigation = { screen: 'recorder' } | { screen: 'editor'; projectDir: string };
 
 function createSubscription<T>(channel: string, callback: (data: T) => void) {
   const handler = (_event: IpcRendererEvent, data: T) => callback(data);

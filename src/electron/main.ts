@@ -47,6 +47,27 @@ app.on('ready', () => {
   const headlessExportProject = exportProjectArgument
     ? path.resolve(exportProjectArgument)
     : undefined;
+  // Set by the Automation API when it runs an export in this process.
+  const flagValue = (flag: string) => {
+    const index = process.argv.indexOf(flag);
+    return index >= 0 ? process.argv[index + 1] : undefined;
+  };
+  const headlessExportQuery: Record<string, string> = {};
+  for (const [flag, key] of [
+    ['--export-output', 'exportOutput'],
+    ['--export-preset', 'exportPreset'],
+    ['--export-encoder', 'exportEncoder'],
+  ] as const) {
+    const value = flagValue(flag);
+    if (value) headlessExportQuery[key] = value;
+  }
+  // Machine-readable lines for the API's export jobs, next to the log.
+  const exportProtocol = process.env.RECSO_EXPORT_PROTOCOL === '1';
+  const emitExportMessage = (message: Record<string, unknown>) => {
+    if (exportProtocol) process.stdout.write(`@@recso-export ${JSON.stringify(message)}\n`);
+  };
+  // Started by `recso-cli --launch`: serve the API without taking the screen.
+  const startInBackground = process.argv.includes('--background');
   if (exportProjectDumpRender && headlessExportProject) {
     process.env.RECSO_ENGINE_DUMP_RENDER_DIR = path.join(
       headlessExportProject,
@@ -75,14 +96,19 @@ app.on('ready', () => {
     ipcMain.on('headless-export:log', (_event, message: string) => {
       console.log(`[ProjectExport] ${message}`);
     });
+    ipcMain.on('headless-export:progress', (_event, progress: Record<string, unknown>) => {
+      emitExportMessage({ type: 'progress', ...progress });
+    });
     ipcMain.once(
       'headless-export:complete',
       (_event, result: { ok: boolean; outputPath?: string; error?: string }) => {
         if (result.ok) {
           console.log(`[ProjectExport] Complete: ${result.outputPath ?? 'unknown output'}`);
+          emitExportMessage({ type: 'complete', outputPath: result.outputPath ?? null });
           app.exit(0);
         } else {
           console.error(`[ProjectExport] Failed: ${result.error ?? 'unknown error'}`);
+          emitExportMessage({ type: 'failed', error: result.error ?? 'unknown error' });
           app.exit(1);
         }
       },
@@ -104,10 +130,13 @@ app.on('ready', () => {
       backgroundThrottling: !headlessExportProject,
     },
     frame: false,
-    show: !headlessExportProject,
+    show: !headlessExportProject && !startInBackground,
   });
 
-  if (!headlessExportProject) {
+  if (startInBackground && !headlessExportProject) {
+    // Maximising would show it; wait until something (app.show) does.
+    mainWindow.once('show', () => mainWindow.maximize());
+  } else if (!headlessExportProject) {
     mainWindow.maximize();
   }
 
@@ -132,7 +161,7 @@ app.on('ready', () => {
     mainWindow.loadURL(url.toString());
   } else {
     mainWindow.loadFile(path.join(app.getAppPath(), 'dist-react/index.html'), {
-      query: headlessExportProject ? { headlessExportProject } : undefined,
+      query: headlessExportProject ? { headlessExportProject, ...headlessExportQuery } : undefined,
     });
   }
 

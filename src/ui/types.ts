@@ -476,6 +476,8 @@ export interface ExportProgress {
    * making its way towards.
    */
   indeterminate: boolean;
+  /** The video encoder, when the engine says which. */
+  encoder?: string;
 }
 
 /** Export result */

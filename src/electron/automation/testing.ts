@@ -2,6 +2,7 @@
  * A fake `AutomationServices` for the Automation API's own tests.
  */
 
+import { ExportJobs } from './export-jobs.js';
 import type { AutomationServices } from './services.js';
 import { defaultSettings, SettingsStore } from './settings-store.js';
 
@@ -36,6 +37,20 @@ export function fakeServices(overrides: Partial<AutomationServices> = {}): Autom
       clicks: 0,
     }),
     forgetSource: () => false,
+    recentProjectDirs: () => [],
+    openProject: () => undefined,
+    exports: new ExportJobs({
+      spawn: () => {
+        throw new Error('fakeServices: pass exports to run an export');
+      },
+    }),
+    exportSpawnPlan: (request) => ({
+      command: '/opt/recso/recso',
+      args: ['--export-project', request.projectDir, '--export-output', request.output],
+      env: {},
+    }),
+    pathExists: () => false,
+    ensureDir: () => undefined,
     ...overrides,
   };
 }

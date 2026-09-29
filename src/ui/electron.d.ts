@@ -106,6 +106,11 @@ export interface EngineExportOptions {
   /** Where to write. The engine writes the file itself; nothing comes back
    *  through the renderer, which is what makes a multi-gigabyte source possible. */
   output: string;
+  /**
+   * Which H.264 encoder: "auto" (the default) takes the GPU's when there is
+   * one. Linux's engine honours it; Windows' lets Media Foundation choose.
+   */
+  encoder?: 'auto' | 'hardware' | 'software';
   /** Target bitrate in bits per second. */
   bitrate: number;
   /** Milliseconds. Defaults to the whole file. */
@@ -166,6 +171,8 @@ export interface EngineExportProgress {
   avgEncodeMs: number;
   elapsedMs: number;
   output: string | null;
+  /** The encoder in use, once open (Linux only for now). */
+  encoder?: string | null;
 }
 
 export interface EngineFrameInfo {
@@ -569,6 +576,11 @@ export type AutomationRecorderSettings =
       values: Record<string, string | boolean | null>;
     };
 
+/** A screen the Automation API sends the window to. */
+export type AutomationNavigation =
+  | { screen: 'recorder' }
+  | { screen: 'editor'; projectDir: string };
+
 interface ElectronAPI {
   automation: {
     getRecorderSettings: () => Promise<AutomationRecorderSettings>;
@@ -576,10 +588,18 @@ interface ElectronAPI {
       patch: Record<string, string | boolean | null>,
     ) => Promise<AutomationRecorderSettings>;
     onRecorderSettings: (callback: (settings: AutomationRecorderSettings) => void) => () => void;
-    onShowRecorder: (callback: () => void) => () => void;
+    onNavigate: (callback: () => void) => () => void;
+    takeNavigation: () => Promise<AutomationNavigation | null>;
   };
   headlessExport: {
     log: (message: string) => void;
+    progress: (progress: {
+      percent: number;
+      fps: number;
+      eta: number;
+      phase: string;
+      encoder: string | null;
+    }) => void;
     complete: (result: { ok: boolean; outputPath?: string; error?: string }) => void;
   };
   window: {

@@ -125,6 +125,8 @@ export interface NativeExportOptions extends Pick<
   outputPath: string;
   /** Built once by `planExport`, so both runners see the same composition. */
   plan: ExportPlan;
+  /** Unset leaves the choice to the engine ("auto"). */
+  encoder?: 'auto' | 'hardware' | 'software';
 }
 
 export interface NativeExportResult {
@@ -138,6 +140,7 @@ export async function runNativeExport({
   config,
   plan,
   outputPath,
+  encoder,
   onProgress,
   onCancelReady,
 }: NativeExportOptions): Promise<NativeExportResult> {
@@ -185,6 +188,7 @@ export async function runNativeExport({
     cursorSize: resolved.cursor?.sizePx,
     cursorEffects: resolved.cursor?.effects,
     audioSources,
+    ...(encoder ? { encoder } : {}),
   };
 
   const startedAt = performance.now();
@@ -211,9 +215,10 @@ export async function runNativeExport({
         }
 
         const total = Math.max(1, progress.framesTotal);
-        onProgress?.(
-          createProgressSnapshot(progress.framesDone / total, total, startedAt, 'export'),
-        );
+        onProgress?.({
+          ...createProgressSnapshot(progress.framesDone / total, total, startedAt, 'export'),
+          ...(progress.encoder ? { encoder: progress.encoder } : {}),
+        });
 
         if (progress.error) {
           window.clearInterval(timer);

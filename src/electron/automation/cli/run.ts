@@ -112,12 +112,13 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
       }
     }
     try {
+      // Before subscribing: an event can arrive in the same read as the reply.
+      client.onNotification((message) =>
+        io.stdout(JSON.stringify({ event: message.method, data: message.params }) + '\n'),
+      );
       await client.call(
         'events.subscribe',
         parsed.command.events.length ? { events: parsed.command.events } : {},
-      );
-      client.onNotification((message) =>
-        io.stdout(JSON.stringify({ event: message.method, data: message.params }) + '\n'),
       );
       return await Promise.race([
         client.closedPromise().then(() => 3),

@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { ExportProgressToast } from '@/components/export-progress-toast';
 import { Toaster } from '@/components/ui/sonner';
 import { RootLayout } from '@/layouts/root-layout';
+import { parseExportPreset } from '@/lib/export-preset';
 import { EditorScreen } from '@/screens/editor';
 import { planExport, runNativeExport } from '@/screens/editor/engine/export-pipeline';
 import { EngineHarnessScreen } from '@/screens/engine-harness';
@@ -35,7 +36,30 @@ interface AppState {
   recordingId: string | null;
 }
 
-function HeadlessProjectExport({ projectFolder }: { projectFolder: string }) {
+/** What `--export-output`, `--export-preset` and `--export-encoder` asked for. */
+export interface HeadlessExportRequest {
+  output?: string;
+  preset?: string;
+  encoder?: 'auto' | 'hardware' | 'software';
+}
+
+function headlessExportRequest(params: URLSearchParams): HeadlessExportRequest {
+  const encoder = params.get('exportEncoder');
+  return {
+    output: params.get('exportOutput') ?? undefined,
+    preset: params.get('exportPreset') ?? undefined,
+    encoder:
+      encoder === 'auto' || encoder === 'hardware' || encoder === 'software' ? encoder : undefined,
+  };
+}
+
+function HeadlessProjectExport({
+  projectFolder,
+  request,
+}: {
+  projectFolder: string;
+  request: HeadlessExportRequest;
+}) {
   const startedRef = useRef(false);
 
   useEffect(() => {
@@ -62,14 +86,16 @@ function HeadlessProjectExport({ projectFolder }: { projectFolder: string }) {
             `${project.zoomRegionsBySource?.webcam?.length ?? 0} webcam zooms`,
         );
 
+        const [resolution, quality] = parseExportPreset(request.preset);
         const config: ExportConfig = {
-          resolution: '1080p',
+          resolution,
           format: 'mp4',
-          quality: 'high',
+          quality,
           backgroundColor: project.backgroundColor || '#000000',
           glRenderer: 'angle',
         };
-        const outputPath = await window.electron.exporter.resolveOutputPath(config);
+        const outputPath =
+          request.output ?? (await window.electron.exporter.resolveOutputPath(config));
         if (!outputPath) {
           throw new Error('Unable to resolve an output path for the loaded project');
         }
@@ -85,6 +111,13 @@ function HeadlessProjectExport({ projectFolder }: { projectFolder: string }) {
           webcamZoomRegions: project.zoomRegionsBySource?.webcam ?? [],
           mouseEvents,
           onProgress: (progress: ExportProgress) => {
+            window.electron.headlessExport.progress({
+              percent: progress.percent,
+              fps: progress.fps,
+              eta: progress.eta,
+              phase: progress.phase,
+              encoder: progress.encoder ?? null,
+            });
             if (progress.currentFrame % 120 === 0 || progress.percent >= 100) {
               window.electron.headlessExport.log(
                 `${progress.percent.toFixed(1)}% (${progress.currentFrame}/${progress.totalFrames} frames, ` +
@@ -101,7 +134,12 @@ function HeadlessProjectExport({ projectFolder }: { projectFolder: string }) {
             `${plan.compositionDurationMs.toFixed(0)}ms, webcam=${Boolean(plan.webcamSourcePath)}`,
         );
         window.electron.headlessExport.log('Starting native export');
-        const result = await runNativeExport({ ...shared, plan, outputPath });
+        const result = await runNativeExport({
+          ...shared,
+          plan,
+          outputPath,
+          encoder: request.encoder,
+        });
         window.electron.headlessExport.complete({ ok: true, outputPath: result.outputPath });
       } catch (error) {
         window.electron.headlessExport.complete({
@@ -136,17 +174,6 @@ function InteractiveApp() {
     setState({ screen: 'recorder', recordingId: null });
   };
 
-  // An Automation API recording is starting: never record behind another screen.
-  useEffect(
-    () =>
-      window.electron.automation.onShowRecorder(() => {
-        setState((current) =>
-          current.screen === 'recorder' ? current : { screen: 'recorder', recordingId: null },
-        );
-      }),
-    [],
-  );
-
   // Handle opening an existing project
   const handleOpenProject = async () => {
     try {
@@ -169,6 +196,26 @@ function InteractiveApp() {
     }
   };
 
+  // The Automation API moves the window: to the recorder when an API recording
+  // starts (never record behind another screen), to the editor for
+  // `projects.open`. Asked for on mount too, since a request can come first.
+  const openRecentProjectRef = useRef<(path: string) => Promise<void>>(async () => undefined);
+  useEffect(() => {
+    const follow = async () => {
+      const navigation = await window.electron.automation.takeNavigation();
+      if (navigation?.screen === 'recorder') {
+        setState((current) =>
+          current.screen === 'recorder' ? current : { screen: 'recorder', recordingId: null },
+        );
+      } else if (navigation?.screen === 'editor') {
+        await openRecentProjectRef.current(navigation.projectDir);
+      }
+    };
+    const unsubscribe = window.electron.automation.onNavigate(() => void follow());
+    void follow();
+    return unsubscribe;
+  }, []);
+
   // Handle opening a recent project bypasses the file dialog
   const handleOpenRecentProject = async (path: string) => {
     try {
@@ -185,6 +232,9 @@ function InteractiveApp() {
       toast.error('Failed to open project');
     }
   };
+  useEffect(() => {
+    openRecentProjectRef.current = handleOpenRecentProject;
+  });
 
   switch (state.screen) {
     case 'engine':
@@ -270,7 +320,10 @@ function App() {
   );
 
   return headlessExportProject ? (
-    <HeadlessProjectExport projectFolder={headlessExportProject} />
+    <HeadlessProjectExport
+      projectFolder={headlessExportProject}
+      request={headlessExportRequest(new URLSearchParams(window.location.search))}
+    />
   ) : (
     <InteractiveApp />
   );

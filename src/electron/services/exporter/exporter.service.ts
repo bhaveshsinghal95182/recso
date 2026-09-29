@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+import { activeSettings } from '../../automation/active-settings.js';
 import type { ExportConfig, ExportResult } from '../../types/exporter.types.js';
 import type { Project } from '../../types/project.types.js';
 import * as editorService from '../editor.service.js';
@@ -8,7 +9,10 @@ import * as editorService from '../editor.service.js';
 function ensureExportsDirectory(project: Project, configuredOutputFolder?: string): string {
   const recordingDir = path.dirname(project.projectFolderPath);
   const defaultExportsDir = path.join(recordingDir, 'exports');
-  const exportsDir = configuredOutputFolder ? configuredOutputFolder : defaultExportsDir;
+  // While the Automation API is on, an integration may have pointed exports
+  // somewhere (video-workflow's Media/Footage); with it off this is always null.
+  const apiOutputFolder = activeSettings()?.value('export.outputDir') ?? null;
+  const exportsDir = configuredOutputFolder || apiOutputFolder || defaultExportsDir;
 
   if (!fs.existsSync(exportsDir)) {
     fs.mkdirSync(exportsDir, { recursive: true });

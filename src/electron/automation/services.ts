@@ -6,6 +6,7 @@
  * a fake, so every method's validation and shape is checked without Electron.
  */
 
+import type { ExportEncoder, ExportJobs, SpawnPlan } from './export-jobs.js';
 import type { SettingsStore } from './settings-store.js';
 
 export type RecordingStateName = 'idle' | 'recording' | 'paused' | 'stopping';
@@ -95,4 +96,21 @@ export interface AutomationServices {
   stopRecording(): Promise<RecordingStopped>;
   /** Linux: drop the remembered portal source. False when there was none. */
   forgetSource(): boolean;
+  /** Folders of the recent projects, most recently opened first. */
+  recentProjectDirs(limit: number): string[];
+  /** Show this project (already checked to exist) in the editor. */
+  openProject(projectDir: string): void;
+  /** API exports, each in its own headless recso process. */
+  readonly exports: ExportJobs;
+  /** The command line of that process for one export. */
+  exportSpawnPlan(request: ExportRequest): SpawnPlan;
+  pathExists(path: string): boolean;
+  ensureDir(path: string): void;
+}
+
+export interface ExportRequest {
+  projectDir: string;
+  output: string;
+  preset: string;
+  encoder: ExportEncoder;
 }
