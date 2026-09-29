@@ -39,6 +39,7 @@ mod layout;
 mod linux;
 #[cfg(windows)]
 mod mf;
+mod mix;
 mod pattern;
 #[cfg(windows)]
 mod player;
