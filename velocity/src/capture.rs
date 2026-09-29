@@ -5,7 +5,7 @@ mod desktop_capture;
 mod camera;
 mod devices;
 #[cfg(target_os = "linux")]
-mod linux;
+pub(crate) mod linux;
 mod phone_camera;
 mod pixels;
 mod preview;

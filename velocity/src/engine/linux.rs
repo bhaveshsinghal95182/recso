@@ -10,3 +10,5 @@ mod thumbnails;
 pub(crate) mod render;
 pub(crate) mod player;
 pub(crate) mod present;
+pub(crate) mod exporter;
+pub(crate) mod audio;

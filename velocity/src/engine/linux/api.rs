@@ -3,7 +3,7 @@
 //! Decode stays in software here. Texture fields remain optional until the
 //! separate GPU player is available, so Electron can identify that boundary.
 
-use super::{media::VideoSource, thumbnails, player};
+use super::{audio, exporter, media::VideoSource, thumbnails, player};
 use crate::engine::{cuts, scene, zoom};
 use crate::engine::layout::{CursorSample, FitMode, OverlayShape, Rect, Shadow, WebcamLayout};
 use crate::engine::sheet::{SheetBudget, SheetPlan};
@@ -127,62 +127,14 @@ pub fn probe_video(path: String) -> ProbeResult {
   }
 }
 
-/// Inspect the first audio track, including this recorder's raw Opus entry.
+/// Inspect the first Opus track without buffering media data.
 #[napi]
 pub fn probe_audio(path: String) -> AudioProbe {
-  let absent = || AudioProbe { has_audio: false, sample_rate: 0, channels: 0, duration: 0.0 };
-  let Ok(file) = std::fs::File::open(&path) else { return absent() };
-  let Ok(reader) = mp4::read_mp4(file) else { return absent() };
-  let Some(track) = reader.tracks().values()
-    .filter(|track| track.track_type().ok() == Some(mp4::TrackType::Audio))
-    .min_by_key(|track| track.track_id()) else { return absent() };
-  let Ok(bytes) = std::fs::read(&path) else { return absent() };
-  let Some(channels) = audio_channels(&bytes, track.track_id()) else { return absent() };
-  AudioProbe { has_audio: true, sample_rate: 48_000, channels: channels as u32,
-    duration: track.duration().as_secs_f64() * 1000.0 }
-}
-
-// The recorder uses an extended-size mdat at top level. Stay within each
-// parent's payload, so malformed lengths cannot run into another track's stsd.
-fn boxes(mut bytes: &[u8]) -> impl Iterator<Item = (&[u8; 4], &[u8])> {
-  std::iter::from_fn(move || {
-    if bytes.len() < 8 { return None; }
-    let short_size = u32::from_be_bytes(bytes[..4].try_into().ok()?);
-    let (size, header) = if short_size == 1 {
-      (usize::try_from(u64::from_be_bytes(bytes.get(8..16)?.try_into().ok()?)).ok()?, 16)
-    } else if short_size == 0 { (bytes.len(), 8) }
-    else { (short_size as usize, 8) };
-    if size < header || size > bytes.len() { return None; }
-    let (item, rest) = bytes.split_at(size);
-    bytes = rest;
-    Some((item[4..8].try_into().ok()?, &item[header..]))
-  })
-}
-
-fn child<'a>(bytes: &'a [u8], kind: &[u8; 4]) -> Option<&'a [u8]> {
-  boxes(bytes).find(|(name, _)| *name == kind).map(|(_, data)| data)
-}
-
-fn audio_channels(bytes: &[u8], track_id: u32) -> Option<u16> {
-  let moov = child(bytes, b"moov")?;
-  for (kind, trak) in boxes(moov) {
-    if kind != b"trak" { continue; }
-    let tkhd = child(trak, b"tkhd")?;
-    let id_offset = if *tkhd.first()? == 1 { 20 } else { 12 };
-    let id = u32::from_be_bytes(tkhd.get(id_offset..id_offset + 4)?.try_into().ok()?);
-    if id != track_id { continue; }
-    let stsd = child(child(child(child(trak, b"mdia")?, b"minf")?, b"stbl")?, b"stsd")?;
-    // Version/flags and entry_count precede the sample entries.
-    let entries = stsd.get(8..)?;
-    for (format, entry) in boxes(entries) {
-      if format == b"Opus" || format == b"mp4a" {
-        // Six reserved bytes + two-byte data reference + eight reserved bytes.
-        return Some(u16::from_be_bytes(entry.get(16..18)?.try_into().ok()?));
-      }
-    }
-    return None;
+  match audio::read_opus_header(&path) {
+    Ok(Some(header)) => AudioProbe { has_audio: true, sample_rate: 48_000,
+      channels: header.channels as u32, duration: header.duration_ms },
+    _ => AudioProbe { has_audio: false, sample_rate: 0, channels: 0, duration: 0.0 },
   }
-  None
 }
 
 #[napi]
@@ -564,6 +516,92 @@ impl From<CursorPoint> for CursorSample {
   }
 }
 
+/// Settings for one independent export worker.
+#[napi(object)]
+pub struct ExportOptions {
+  pub output: String,
+  /// Target bitrate in bits per second.
+  pub bitrate: f64,
+  /// Milliseconds. Defaults to the whole file.
+  pub start: Option<f64>,
+  pub end: Option<f64>,
+  /// The video layer's grade. Pass whatever the preview is currently showing.
+  pub brightness: Option<f64>,
+  pub contrast: Option<f64>,
+  pub saturation: Option<f64>,
+  /// The webcam layer's own grade.
+  pub webcam_brightness: Option<f64>,
+  pub webcam_contrast: Option<f64>,
+  pub webcam_saturation: Option<f64>,
+  /// The canvas to compose onto. Defaults to the recording's visible size.
+  pub canvas_width: Option<u32>,
+  pub canvas_height: Option<u32>,
+  /// Where the recording sits on that canvas. Defaults to filling it.
+  pub layout: Option<VideoPlacement>,
+  /// What is behind the video. Only visible if `layout` insets it.
+  pub background: Option<BackgroundSpec>,
+  /// The camera sidecar. Omit it and the export has no webcam overlay, however
+  /// the preview looks.
+  pub webcam_path: Option<String>,
+  /// Where the camera goes, in the screen recording's own pixels -- the same
+  /// values passed to `setWebcamLayout`.
+  pub webcam: Option<WebcamOverlay>,
+  /// The pointer bitmap, as passed to `setCursorImage`. Drawn for samples
+  /// that do not name one of `cursorImages`.
+  pub cursor: Option<CursorBitmap>,
+  /// The pointer bitmap table, as passed to `setCursorImages`.
+  pub cursor_images: Option<Vec<CursorBitmap>>,
+  /// The recorded pointer path, as passed to `setCursorTrack`.
+  pub cursor_track: Option<Vec<CursorPoint>>,
+  /// The zoom/pan timeline. Omit it and the export is unzoomed, however the
+  /// preview looks.
+  pub zoom_regions: Option<Vec<ZoomRegion>>,
+  /// Every file contributing sound. Omit it and the export is silent.
+  ///
+  /// Not inferred from the input and the camera sidecar: which tracks belong in
+  /// the mix is an editing decision, and muting the camera should be a matter
+  /// of leaving it out of this list.
+  pub audio_sources: Option<Vec<AudioSource>>,
+  /// Spans of the source to leave out. Omit and the whole range is exported.
+  pub cuts: Option<Vec<CutRegion>>,
+  /// Edges of the recording to throw away. Omit to keep all of it.
+  pub crop: Option<SourceCropSpec>,
+  /// Cursor height in destination pixels. Defaults to 22, matching the editor.
+  pub cursor_size: Option<f64>,
+  /// Clamped to 0..1. Defaults to 1.
+  pub cursor_opacity: Option<f64>,
+  /// The click pop and the smear. Omit and the pointer draws plainly.
+  pub cursor_effects: Option<CursorEffectSpec>,
+  /// Spans of the composition to leave the camera out of, in composition time.
+  ///
+  /// Already mapped: a span cut from the screen as well is gone from the
+  /// timeline entirely, so what belongs here is only the stretches where the
+  /// recording keeps playing without the camera in it.
+  pub webcam_cuts: Option<Vec<CutRegion>>,
+  /// Which layer sits on top of which, bottom first: "video", "webcam",
+  /// "cursor". `background` is accepted and ignored -- it is the canvas rather
+  /// than a layer. Anything omitted keeps its default position.
+  pub layer_order: Option<Vec<String>>,
+  /// Spans where the camera changes size, or expands to the whole frame.
+  pub webcam_zoom_regions: Option<Vec<WebcamZoomRegionSpec>>,
+}
+
+#[napi(object)]
+pub struct ExportProgress {
+  pub frames_done: f64,
+  pub frames_total: f64,
+  pub finished: bool,
+  pub cancelled: bool,
+  pub error: Option<String>,
+  pub fps: f64,
+  pub steady_fps: f64,
+  pub setup_ms: f64,
+  pub avg_decode_ms: f64,
+  pub avg_render_ms: f64,
+  pub avg_encode_ms: f64,
+  pub elapsed_ms: f64,
+}
+
 /// One file contributing sound to the export.
 #[napi(object)]
 pub struct AudioSource {
@@ -769,6 +807,81 @@ mod api_scenarios {
   }
 }
 
+fn build_background(background: BackgroundSpec) -> Result<scene::BackgroundRequest> {
+  let clear = colour_or(background.colour.as_ref(), [0.0, 0.0, 0.0, 1.0]);
+  let image = background.image.map(|image| {
+    let expected = image.width as usize * image.height as usize * 4;
+    if image.pixels.len() < expected {
+      Err(Error::from_reason(format!("background image is {} bytes, expected {} for {}x{} RGBA",
+        image.pixels.len(), expected, image.width, image.height)))
+    } else {
+      Ok(scene::RgbaImage { width: image.width, height: image.height, pixels: image.pixels.to_vec() })
+    }
+  }).transpose()?;
+  Ok(scene::BackgroundRequest { clear, image })
+}
+
+/// A background export. Cancellation still finalises its MP4.
+#[napi]
+pub struct VideoExporter { inner: exporter::Exporter }
+
+#[napi]
+impl VideoExporter {
+  #[napi(constructor)]
+  pub fn new(input: String, options: ExportOptions) -> Result<Self> {
+    let cursor_image = options.cursor.map(CursorBitmap::into_image).transpose()?;
+    let cursor_images = options.cursor_images.unwrap_or_default().into_iter()
+      .map(CursorBitmap::into_image).collect::<Result<Vec<_>>>()?;
+    Ok(Self { inner: exporter::Exporter::start(exporter::Options {
+      input, output: options.output, bitrate: options.bitrate as u32,
+      start_ms: options.start.unwrap_or(0.0), end_ms: options.end.unwrap_or(0.0),
+      effects: scene::EffectParams {
+        brightness: options.brightness.unwrap_or(0.0) as f32,
+        contrast: options.contrast.unwrap_or(1.0) as f32,
+        saturation: options.saturation.unwrap_or(1.0) as f32,
+      },
+      webcam_effects: scene::EffectParams {
+        brightness: options.webcam_brightness.unwrap_or(0.0) as f32,
+        contrast: options.webcam_contrast.unwrap_or(1.0) as f32,
+        saturation: options.webcam_saturation.unwrap_or(1.0) as f32,
+      },
+      canvas: match (options.canvas_width, options.canvas_height) {
+        (Some(w), Some(h)) => Some((w, h)), _ => None,
+      },
+      layout: options.layout.map(scene::VideoLayout::from),
+      background: options.background.map(build_background).transpose()?,
+      webcam_path: options.webcam_path,
+      webcam_layout: options.webcam.map(WebcamLayout::from),
+      cursor_image, cursor_images,
+      cursor_track: options.cursor_track.unwrap_or_default().into_iter().map(CursorSample::from).collect(),
+      zoom_regions: options.zoom_regions.unwrap_or_default().into_iter().map(zoom::ZoomRegion::from).collect(),
+      audio_sources: options.audio_sources.unwrap_or_default().into_iter()
+        .map(|source| (source.path, source.offset_ms.unwrap_or(0.0))).collect(),
+      cuts: options.cuts.unwrap_or_default().into_iter().map(cuts::Cut::from).collect(),
+      crop: options.crop.map(scene::SourceCrop::from),
+      cursor_size: options.cursor_size.unwrap_or(22.0) as f32,
+      cursor_opacity: options.cursor_opacity.unwrap_or(1.0).clamp(0.0, 1.0) as f32,
+      cursor_effects: options.cursor_effects.map(scene::CursorEffects::from).unwrap_or_default(),
+      webcam_cuts: options.webcam_cuts.unwrap_or_default().into_iter()
+        .map(|region| (region.start_ms, region.end_ms)).collect(),
+      layer_order: options.layer_order.as_deref().map(scene::parse_layer_order)
+        .unwrap_or(scene::DEFAULT_LAYER_ORDER),
+      webcam_zoom_regions: options.webcam_zoom_regions.unwrap_or_default().into_iter()
+        .map(zoom::WebcamZoomRegion::from).collect(),
+    }) })
+  }
+  #[napi]
+  pub fn progress(&self) -> ExportProgress {
+    let p = self.inner.progress();
+    ExportProgress { frames_done: p.frames_done as f64, frames_total: p.frames_total as f64,
+      finished: p.finished, cancelled: p.cancelled, error: p.error, fps: p.fps,
+      steady_fps: p.steady_fps, setup_ms: p.setup_ms, avg_decode_ms: p.avg_decode_ms,
+      avg_render_ms: p.avg_render_ms, avg_encode_ms: p.avg_encode_ms, elapsed_ms: p.elapsed_ms }
+  }
+  #[napi]
+  pub fn cancel(&self) { self.inner.cancel(); }
+}
+
 /// Clocked preview backed by a fixed pool of DMA-BUF frames.
 #[napi]
 pub struct VideoPlayer { inner: player::Player }
@@ -888,17 +1001,7 @@ impl VideoPlayer {
   pub fn set_layout(&self, placement: VideoPlacement) { self.inner.set_layout(placement.into()); }
   #[napi]
   pub fn set_background(&self, background: BackgroundSpec) -> Result<()> {
-    let clear = colour_or(background.colour.as_ref(), [0.0, 0.0, 0.0, 1.0]);
-    let image = background.image.map(|image| {
-      let expected = image.width as usize * image.height as usize * 4;
-      if image.pixels.len() < expected {
-        Err(Error::from_reason(format!("background image is {} bytes, expected {} for {}x{} RGBA",
-          image.pixels.len(), expected, image.width, image.height)))
-      } else {
-        Ok(scene::RgbaImage { width: image.width, height: image.height, pixels: image.pixels.to_vec() })
-      }
-    }).transpose()?;
-    self.inner.set_background(scene::BackgroundRequest { clear, image });
+    self.inner.set_background(build_background(background)?);
     Ok(())
   }
   #[napi]

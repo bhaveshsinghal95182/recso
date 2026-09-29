@@ -21,7 +21,7 @@ use spa::pod::Pod;
 use crate::capture::devices::AudioDeviceInfo;
 
 const SAMPLE_RATE: u32 = 48_000;
-const PACKET_FRAMES: usize = 960;
+pub(crate) const PACKET_FRAMES: usize = 960;
 const PACKET_DURATION: Duration = Duration::from_millis(20);
 const PACKET_TICKS: i64 = 200_000;
 /// Half a second of stereo frames; excess frames are dropped from the front.
@@ -307,13 +307,13 @@ where P: FnMut(&[u8], i64),
   }
 }
 
-struct OpusEncoder(*mut opusic_sys::OpusEncoder);
+pub(crate) struct OpusEncoder(*mut opusic_sys::OpusEncoder);
 
 // SAFETY: The encoder moves to one mixer thread and is never shared or called concurrently.
 unsafe impl Send for OpusEncoder {}
 
 impl OpusEncoder {
-  fn new() -> Result<Self, String> {
+  pub(crate) fn new() -> Result<Self, String> {
     let mut code = 0;
     // SAFETY: `code` is writable and the arguments are valid libopus parameters.
     let ptr = unsafe { opusic_sys::opus_encoder_create(SAMPLE_RATE as i32, 2, opusic_sys::OPUS_APPLICATION_AUDIO, &mut code) };
@@ -324,7 +324,7 @@ impl OpusEncoder {
     if code != opusic_sys::OPUS_OK { return Err(format!("could not set the Opus audio bitrate (libopus error {code})")); }
     Ok(encoder)
   }
-  fn encode(&self, pcm: &[f32; PACKET_FRAMES * 2]) -> Result<Vec<u8>, String> {
+  pub(crate) fn encode(&self, pcm: &[f32; PACKET_FRAMES * 2]) -> Result<Vec<u8>, String> {
     let mut output = [0u8; 4000];
     // SAFETY: Both buffers are valid for 960 stereo frames and 4000 output bytes.
     let len = unsafe { opusic_sys::opus_encode_float(self.0, pcm.as_ptr(), PACKET_FRAMES as i32, output.as_mut_ptr(), output.len() as i32) };

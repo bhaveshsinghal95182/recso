@@ -301,29 +301,29 @@ fn select_due(queue: &mut VecDeque<QueuedFrame>, now: f64, generation: u64,
 }
 
 /// One decoded I420 frame, owned after OpenH264 advances to the next sample.
-struct PlaneFrame {
-  pts_ms: f64,
-  y: Vec<u8>, u: Vec<u8>, v: Vec<u8>,
-  strides: (usize, usize, usize),
+pub(super) struct PlaneFrame {
+  pub(super) pts_ms: f64,
+  pub(super) y: Vec<u8>, u: Vec<u8>, v: Vec<u8>,
+  pub(super) strides: (usize, usize, usize),
 }
 impl PlaneFrame {
-  fn stage(&self, chain: &mut RenderChain, slot: usize) -> Result<(), String> {
+  pub(super) fn stage(&self, chain: &mut RenderChain, slot: usize) -> Result<(), String> {
     chain.stage(slot, &self.y, &self.u, &self.v, self.strides)
   }
 }
 
 /// Local demuxer keeps OpenH264's planes before RGBA conversion discards them.
-struct PlaneSource {
+pub(super) struct PlaneSource {
   reader: mp4::Mp4Reader<BufReader<File>>,
   decoder: Decoder,
   track_id: u32,
   timescale: u32,
   sps: Vec<u8>, pps: Vec<u8>,
-  info: SourceInfo,
+  pub(super) info: SourceInfo,
   next_sample: u32,
 }
 impl PlaneSource {
-  fn open(path: &str) -> Result<Self, String> {
+  pub(super) fn open(path: &str) -> Result<Self, String> {
     let file = File::open(path).map_err(|error| format!("failed to open {path}: {error}"))?;
     let reader = mp4::read_mp4(file).map_err(|error| format!("failed to read {path} as MP4: {error}"))?;
     let track = reader.tracks().values()
@@ -347,7 +347,7 @@ impl PlaneSource {
     let decoder = Decoder::new().map_err(|error| error.to_string())?;
     Ok(Self { reader, decoder, track_id, timescale, sps, pps, info, next_sample: 1 })
   }
-  fn next_frame(&mut self) -> Result<Option<PlaneFrame>, String> {
+  pub(super) fn next_frame(&mut self) -> Result<Option<PlaneFrame>, String> {
     while self.next_sample <= self.info.sample_count {
       let sample_id = self.next_sample;
       self.next_sample += 1;
@@ -374,7 +374,7 @@ impl PlaneSource {
     }
     Ok(None)
   }
-  fn seek_to_keyframe_before(&mut self, ms: f64) -> Result<(), String> {
+  pub(super) fn seek_to_keyframe_before(&mut self, ms: f64) -> Result<(), String> {
     let target = if ms.is_finite() { ms.max(0.0) } else { 0.0 };
     let mut chosen = 1;
     for sample_id in 1..=self.info.sample_count {
@@ -401,13 +401,13 @@ fn append_nal(target: &mut Vec<u8>, nal: &[u8]) {
 /// Windows' `inherit_webcam` does. Most screen frames reuse the camera picture,
 /// so this saves an upload per frame.
 #[derive(Default)]
-struct OverlayState {
+pub(super) struct OverlayState {
   webcam_frame: Option<PlaneFrame>,
   webcam_fresh: bool,
   webcam_slot: Option<usize>,
 }
 impl OverlayState {
-  fn stage_webcam(&mut self, chain: &mut RenderChain, slot: usize) {
+  pub(super) fn stage_webcam(&mut self, chain: &mut RenderChain, slot: usize) {
     let Some(frame) = self.webcam_frame.as_ref() else { return };
     let staged = match self.webcam_slot {
       Some(previous) if !self.webcam_fresh => chain.inherit_webcam(previous, slot),
@@ -495,7 +495,7 @@ fn do_seek(shared: &Shared, decoder: &mut PlaneSource, webcam: &mut Option<Plane
 }
 
 /// Retain the camera picture nearest this screen frame on the same worker.
-fn pull_webcam(webcam: &mut Option<PlaneSource>, overlays: &mut OverlayState,
+pub(super) fn pull_webcam(webcam: &mut Option<PlaneSource>, overlays: &mut OverlayState,
   latest_ms: &mut f64, target_ms: f64) {
   let Some(webcam) = webcam.as_mut() else { return };
   while *latest_ms <= target_ms {
