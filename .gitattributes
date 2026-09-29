@@ -1,4 +1,8 @@
+# LF on every checkout, including Windows with autocrlf: Prettier (and so
+# lint) wants LF, and generated files are compared byte for byte.
+* text=auto eol=lf
+
 # Hooks and shell scripts run under sh/bash, where a CR is part of the last
-# argument. Keep them LF on every checkout, including Windows with autocrlf.
+# argument.
 .husky/* text eol=lf
 *.sh text eol=lf
