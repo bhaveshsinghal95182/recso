@@ -47,6 +47,8 @@ export function exportSpawnPlan(options: {
   execPath: string;
   packaged: boolean;
   appPath: string;
+  /** recso's own, so the child reads the same database (cursor data) and settings. */
+  userDataDir: string;
   env: Record<string, string | undefined>;
   projectDir: string;
   output: string;
@@ -61,6 +63,7 @@ export function exportSpawnPlan(options: {
     command: options.execPath,
     args: [
       ...(options.packaged ? [] : [options.appPath]),
+      `--user-data-dir=${options.userDataDir}`,
       '--export-project',
       options.projectDir,
       '--export-output',

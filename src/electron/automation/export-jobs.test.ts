@@ -62,8 +62,9 @@ function harness(maxFinished?: number) {
 describe('exportSpawnPlan', () => {
   it('builds packaged and development commands without mutating the environment', () => {
     const env = { ELECTRON_RUN_AS_NODE: '1', RECSO_AUTOMATION: '1', KEEP: 'yes' };
-    const options = { execPath: '/electron', appPath: '/app', env, ...request };
+    const options = { execPath: '/electron', appPath: '/app', userDataDir: '/ud', env, ...request };
     const expectedArgs = [
+      '--user-data-dir=/ud',
       '--export-project',
       '/project',
       '--export-output',

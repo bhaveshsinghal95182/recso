@@ -109,6 +109,7 @@ export function createElectronServices(options: ElectronServicesOptions): Automa
         execPath: process.execPath,
         packaged: app.isPackaged,
         appPath: app.getAppPath(),
+        userDataDir: app.getPath('userData'),
         env: process.env,
         ...request,
       }),
