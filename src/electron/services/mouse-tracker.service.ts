@@ -16,6 +16,7 @@ import path from 'path';
 import { uIOhook, type UiohookMouseEvent } from 'uiohook-napi';
 
 import { getDatabase } from './database.service.js';
+import { type HyprlandClickCapture, startHyprlandClickCapture } from './hyprland-clicks.js';
 
 const require = createRequire(import.meta.url);
 
@@ -115,6 +116,8 @@ class MouseTrackerService {
   private flushTimer: NodeJS.Timeout | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
   private lastPolledPosition: { x: number; y: number } | null = null;
+  private clickCapture: HyprlandClickCapture | null = null;
+  private drainingClicks = false;
   private isTracking: boolean = false;
   private monitorBounds: MonitorBounds | null = null;
 
@@ -162,6 +165,15 @@ class MouseTrackerService {
     if (process.platform === 'linux') {
       this.lastPolledPosition = null;
       this.pollTimer = setInterval(() => this.pollCursorPosition(), this.moveThrottleMs);
+      // Nor any clicks, which auto zoom is built from. Hyprland can report
+      // them through binds that let every click through.
+      void startHyprlandClickCapture().then((capture) => {
+        if (this.isTracking && this.recordingId === recordingId && !this.clickCapture) {
+          this.clickCapture = capture;
+        } else {
+          void capture?.stop();
+        }
+      });
     }
 
     // Start flush timer (every 2 seconds)
@@ -177,19 +189,33 @@ class MouseTrackerService {
    * Handle mouse down events from uiohook
    */
   private onMouseDown(event: UiohookMouseEvent): void {
-    if (!this.recordingId || !this.isTracking) return;
+    // Hyprland reports every click, including the XWayland ones this hook
+    // also sees; taking both would record those twice.
+    if (this.clickCapture) return;
 
     // Map button number to string
     let button: 'left' | 'right' | 'middle' = 'left';
     if (event.button === 2) button = 'right';
     else if (event.button === 3) button = 'middle';
 
-    const { x, y, normalizedX, normalizedY } = this.normalizeCoordinates(event.x, event.y);
+    this.recordClick(event.x, event.y, button, Date.now());
+  }
+
+  /** A click from any source, at the wall-clock time it happened. */
+  private recordClick(
+    screenX: number,
+    screenY: number,
+    button: 'left' | 'right' | 'middle',
+    atEpochMs: number,
+  ): void {
+    if (!this.recordingId || !this.isTracking) return;
+
+    const { x, y, normalizedX, normalizedY } = this.normalizeCoordinates(screenX, screenY);
     const cursorSnapshot = this.captureCursorVisualMeta();
 
     const mouseEvent: MouseEvent = {
       recordingId: this.recordingId,
-      timestampMs: Date.now() - this.recordingStartTime,
+      timestampMs: Math.max(0, atEpochMs - this.recordingStartTime),
       x,
       y,
       normalizedX,
@@ -240,6 +266,7 @@ class MouseTrackerService {
    * copies of the last position.
    */
   private pollCursorPosition(): void {
+    this.drainClicks();
     const position = readVelocityCursorPosition();
     if (!position) {
       return;
@@ -250,6 +277,25 @@ class MouseTrackerService {
     }
     this.lastPolledPosition = position;
     this.onMouseMove(position as UiohookMouseEvent);
+  }
+
+  /** Hyprland's clicks since the last poll. One drain at a time: each is a socket round trip. */
+  private drainClicks(): void {
+    const capture = this.clickCapture;
+    if (!capture || this.drainingClicks) {
+      return;
+    }
+    this.drainingClicks = true;
+    void capture
+      .drain()
+      .then((clicks) => {
+        for (const click of clicks) {
+          this.recordClick(click.x, click.y, click.button, click.atEpochMs);
+        }
+      })
+      .finally(() => {
+        this.drainingClicks = false;
+      });
   }
 
   private captureCursorVisualMeta(): Pick<
@@ -381,6 +427,8 @@ class MouseTrackerService {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
+    void this.clickCapture?.stop();
+    this.clickCapture = null;
     if (this.flushTimer) {
       clearInterval(this.flushTimer);
       this.flushTimer = null;
