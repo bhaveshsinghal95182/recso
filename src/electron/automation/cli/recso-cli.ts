@@ -4,18 +4,24 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
+import { runMcpServer } from '../mcp.js';
 import { launchPlan, launchRecso } from './launch.js';
 import { type CliIo, runCli } from './run.js';
 
 const cliPath = fileURLToPath(import.meta.url);
 const interrupted = new Promise<void>((resolve) => process.once('SIGINT', resolve));
-let runMcp: CliIo['runMcp'];
-const mcpModule = '../mcp.js';
-try {
-  const mod = await import(mcpModule);
-  runMcp = (socketPath) => mod.runMcpServer(socketPath);
-} catch {
-  /* MCP is optional until its entry point is built. */
+
+function launch(): boolean {
+  const plan = launchPlan({
+    platform: process.platform,
+    env: process.env,
+    execPath: process.execPath,
+    cliPath,
+    exists: fs.existsSync,
+  });
+  if (!plan) return false;
+  launchRecso(plan);
+  return true;
 }
 
 const io: CliIo = {
@@ -28,20 +34,9 @@ const io: CliIo = {
   execPath: process.execPath,
   cliPath,
   exists: fs.existsSync,
-  launch: () => {
-    const plan = launchPlan({
-      platform: process.platform,
-      env: process.env,
-      execPath: process.execPath,
-      cliPath,
-      exists: fs.existsSync,
-    });
-    if (!plan) return false;
-    launchRecso(plan);
-    return true;
-  },
+  launch,
   interrupted,
-  ...(runMcp ? { runMcp } : {}),
+  runMcp: (socketPath) => runMcpServer(socketPath, { launch }),
 };
 
 process.exitCode = await runCli(process.argv.slice(2), io);
