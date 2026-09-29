@@ -54,6 +54,14 @@ export interface RecordingConfig {
   nativeMicDeviceId?: string;
   /** Target fps for native singular-clock capture path. */
   targetFps?: 30 | 60;
+  /**
+   * Linux: ask the portal to remember the source the user picks, so a later
+   * recording can reuse it without the picker. Only the Automation API sets
+   * this; the recorder's button always asks.
+   */
+  rememberSource?: boolean;
+  /** Linux: the token a remembered recording returned. Used only with `rememberSource`. */
+  portalRestoreToken?: string;
   options?: RecordingOptions;
 }
 
@@ -126,6 +134,8 @@ export interface StartRecordingResult {
    */
   nativeSystemAudioHandled?: boolean;
   nativeMicrophoneHandled?: boolean;
+  /** Linux, with `rememberSource`: the portal's token for the chosen source, if it gave one. */
+  portalRestoreToken?: string | null;
   error?: string;
 }
 

@@ -43,6 +43,8 @@ interface VelocityStopper {
    * why every caller treats the result as optional.
    */
   stop(): RecordingMediaInfo[] | undefined;
+  /** Linux: the portal's token for this source, when asked to remember it. Absent on older builds. */
+  portalRestoreToken?(): string | null;
 }
 
 interface VelocityBindings {
@@ -86,6 +88,8 @@ interface VelocityBindings {
     webcamSource?: 'local' | 'phone';
     includeMicrophone?: boolean;
     microphoneDeviceId?: string;
+    rememberSource?: boolean;
+    portalRestoreToken?: string;
   }) => VelocityStopper;
   startWindowRecordingV2: (options: {
     windowTitle: string;
@@ -98,6 +102,8 @@ interface VelocityBindings {
     webcamSource?: 'local' | 'phone';
     includeMicrophone?: boolean;
     microphoneDeviceId?: string;
+    rememberSource?: boolean;
+    portalRestoreToken?: string;
   }) => VelocityStopper;
 }
 
@@ -111,6 +117,9 @@ interface NativeClockOptions {
   includeMicrophone?: boolean;
   /** Which microphone, as an id from `listAudioCaptureDevices`. */
   microphoneDeviceId?: string;
+  /** Linux: let the portal remember the source; see `RecordingConfig.rememberSource`. */
+  rememberSource?: boolean;
+  portalRestoreToken?: string;
 }
 
 interface NativeWebcamCapability {
@@ -352,6 +361,8 @@ function startVelocityMonitorRecording(
     webcamSource: nativeClockOptions.webcamSource,
     includeMicrophone: nativeClockOptions.includeMicrophone,
     microphoneDeviceId: nativeClockOptions.microphoneDeviceId,
+    rememberSource: nativeClockOptions.rememberSource,
+    portalRestoreToken: nativeClockOptions.portalRestoreToken,
   });
 }
 
@@ -374,6 +385,8 @@ function startVelocityWindowRecording(
     webcamSource: nativeClockOptions.webcamSource,
     includeMicrophone: nativeClockOptions.includeMicrophone,
     microphoneDeviceId: nativeClockOptions.microphoneDeviceId,
+    rememberSource: nativeClockOptions.rememberSource,
+    portalRestoreToken: nativeClockOptions.portalRestoreToken,
   });
 }
 
@@ -633,7 +646,7 @@ function ensureTempDir(): string {
   return tempDir;
 }
 
-function inferNativeCameraSidecarPath(videoPath: string): string {
+export function inferNativeCameraSidecarPath(videoPath: string): string {
   const parsed = path.parse(videoPath);
   return path.join(parsed.dir, `${parsed.name}_camera${parsed.ext || '.mp4'}`);
 }
@@ -824,6 +837,8 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
       enableWebcam: Boolean(config.recordCamera),
       webcamDeviceId: config.cameraDeviceId,
       webcamSource: usePhoneCamera ? 'phone' : 'local',
+      rememberSource: config.rememberSource,
+      portalRestoreToken: config.rememberSource ? config.portalRestoreToken : undefined,
     };
     let useNativeWebcam = false;
     let nativeWebcamDeviceId = nativeClockOptions.webcamDeviceId;
@@ -967,6 +982,7 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
       success: true,
       recordingId,
       tempPath,
+      portalRestoreToken: config.rememberSource ? (stopper.portalRestoreToken?.() ?? null) : null,
       nativeWebcamHandled: useNativeWebcam,
       nativeSystemAudioHandled: nativeAudio.systemAudio,
       nativeMicrophoneHandled: nativeAudio.microphone,
@@ -1187,6 +1203,11 @@ export function resumeRecording(recordingId: string): boolean {
     '[RecorderService] Resume is not supported for native velocity capture; continuing.',
   );
   return false;
+}
+
+/** True while a stopped recording's file is still being finalised. */
+export function isFinalizing(): boolean {
+  return finalizingRecordings.size > 0;
 }
 
 /**

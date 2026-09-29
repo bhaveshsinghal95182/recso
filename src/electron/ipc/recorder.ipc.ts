@@ -9,8 +9,13 @@ import path from 'path';
 
 import { mouseTrackerService } from '../services/mouse-tracker.service.js';
 import * as RecorderService from '../services/recorder.service.js';
+import { recorderEvents } from '../services/recorder-events.js';
 import * as RecoveryService from '../services/recovery.service.js';
-import type { RecordingConfig } from '../types/recorder.types.js';
+import type {
+  RecordingConfig,
+  StartRecordingResult,
+  StopRecordingResult,
+} from '../types/recorder.types.js';
 
 // Reference to main window for pushing state updates
 let mainWindowRef: BrowserWindow | null = null;
@@ -86,36 +91,14 @@ export function registerRecorderHandlers(): void {
   });
 
   // Start a new recording
-  ipcMain.handle('recorder:start', async (_event, config: RecordingConfig) => {
-    const result = RecorderService.startRecording(config);
+  ipcMain.handle('recorder:start', async (_event, config: RecordingConfig) =>
+    startRecordingSession(config),
+  );
 
-    if (result.success && result.recordingId) {
-      const trackingBounds = RecorderService.resolveMouseTrackingBounds(config.sourceId);
-
-      // Start mouse tracking for this recording
-      mouseTrackerService.startTracking(result.recordingId, trackingBounds);
-      console.log('[RecorderIPC] Mouse tracking started for recording:', result.recordingId);
-      if (trackingBounds) {
-        console.log('[RecorderIPC] Mouse tracking bounds:', trackingBounds);
-      }
-
-      // Start pushing state updates
-      startStatePolling();
-    }
-
-    return result;
-  });
-
-  // Append a video chunk (legacy sequential append)
-  ipcMain.handle('recorder:stop', async (_event, recordingId: string) => {
-    stopStatePolling();
-
-    // Stop mouse tracking
-    const clickCount = mouseTrackerService.stopTracking();
-    console.log('[RecorderIPC] Mouse tracking stopped. Total clicks:', clickCount);
-
-    return RecorderService.stopRecording(recordingId);
-  });
+  ipcMain.handle(
+    'recorder:stop',
+    async (_event, recordingId: string) => (await stopRecordingSession(recordingId)).result,
+  );
 
   // Pause recording
   ipcMain.on('recorder:pause', (_event, recordingId: string) => {
@@ -208,6 +191,56 @@ export function registerRecorderHandlers(): void {
   );
 
   console.log('[RecorderIPC] Handlers registered');
+}
+
+/**
+ * Start a recording: the capture, mouse tracking and the state pushes that
+ * drive the recorder's timer.
+ *
+ * The recorder's button and the Automation API both start recordings here, so
+ * one started either way looks the same in the UI and stops the same way.
+ */
+export function startRecordingSession(config: RecordingConfig): StartRecordingResult {
+  const result = RecorderService.startRecording(config);
+
+  if (result.success && result.recordingId) {
+    const trackingBounds = RecorderService.resolveMouseTrackingBounds(config.sourceId);
+
+    // Start mouse tracking for this recording
+    mouseTrackerService.startTracking(result.recordingId, trackingBounds);
+    console.log('[RecorderIPC] Mouse tracking started for recording:', result.recordingId);
+    if (trackingBounds) {
+      console.log('[RecorderIPC] Mouse tracking bounds:', trackingBounds);
+    }
+
+    // Start pushing state updates, with one straight away so a recorder
+    // screen that is already showing picks the recording up at once.
+    startStatePolling();
+    pushState();
+    recorderEvents.emit('started', { recordingId: result.recordingId, config });
+  }
+
+  return result;
+}
+
+/**
+ * Stop a recording and wait for its file to be finalised, reporting the clicks
+ * tracked during it. See `startRecordingSession`.
+ */
+export async function stopRecordingSession(
+  recordingId: string,
+): Promise<{ result: StopRecordingResult; clicks: number }> {
+  stopStatePolling();
+
+  // Stop mouse tracking
+  const clickCount = mouseTrackerService.stopTracking();
+  console.log('[RecorderIPC] Mouse tracking stopped. Total clicks:', clickCount);
+
+  const result = await RecorderService.stopRecording(recordingId);
+  // The final push above ran before the finalize; this one reports idle.
+  pushState();
+  recorderEvents.emit('stopped', { recordingId, result, clicks: clickCount });
+  return { result, clicks: clickCount };
 }
 
 // State polling for real-time updates

@@ -8,6 +8,7 @@ if (app.isPackaged) {
 
 import path from 'path';
 
+import { initializeAutomation } from './automation/index.js';
 import { initializeWithWindow, registerAllIpcHandlers } from './ipc/index.js';
 import { initializeDatabase } from './services/database.service.js';
 import { checkGpuMatch } from './services/engine/gpu.service.js';
@@ -162,6 +163,8 @@ app.on('ready', () => {
   // Create system tray
   if (!headlessExportProject) {
     createTray(mainWindow);
+    // Off unless the user turned it on; a headless export never serves it.
+    void initializeAutomation(mainWindow);
   }
 
   // Fire-and-forget: reports which adapter the engine and Chromium each landed

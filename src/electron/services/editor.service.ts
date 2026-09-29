@@ -360,9 +360,10 @@ function createDefaultWebcamOverlay(rawVideoPath: string): Project['webcamOverla
 }
 
 /**
- * Create a new editing project from a recording
+ * The finished recording behind `recordingId`, or null (logged) when there is
+ * none yet.
  */
-export async function createProject(recordingId: string): Promise<Project | null> {
+async function finishedRecording(recordingId: string) {
   // Stopping a recording writes `final_path` only after the video has been
   // muxed, which takes seconds on a long take. Join that pass if it is still
   // running so we read a finished row rather than racing it to a null path.
@@ -379,18 +380,18 @@ export async function createProject(recordingId: string): Promise<Project | null
     return null;
   }
 
-  // Check if a project already exists for this recording — if so, load it
-  // instead of creating a new one (preserves zoom regions, cuts, backgrounds)
+  return { ...recording, finalPath: recording.finalPath };
+}
+
+/**
+ * Write a new project for a finished recording to its `.recso` folder and
+ * list it in recent projects, without opening it.
+ */
+async function writeNewProject(
+  recordingId: string,
+  recording: NonNullable<Awaited<ReturnType<typeof finishedRecording>>>,
+): Promise<Project> {
   const recordingDir = path.dirname(recording.finalPath);
-  if (projectStorage.projectExists(recordingDir)) {
-    console.log('[EditorService] Found existing project, loading...');
-    const existingProject = loadProject(recordingDir);
-    if (existingProject) {
-      return existingProject;
-    }
-    // If loading fails, fall through to create a new project
-    console.warn('[EditorService] Failed to load existing project, creating new one');
-  }
 
   // Video metadata.
   //
@@ -459,12 +460,6 @@ export async function createProject(recordingId: string): Promise<Project | null
   // Save project metadata to .recso folder
   projectStorage.saveProjectMetadata(project);
 
-  activeProject = project;
-  console.log('[EditorService] Created project:', project.id);
-
-  // Load click events
-  loadClickEvents(recordingId);
-
   // Track in recent projects
   upsertRecentProject({
     id: project.id,
@@ -473,9 +468,64 @@ export async function createProject(recordingId: string): Promise<Project | null
     recordingId,
   });
 
+  return project;
+}
+
+/**
+ * Create a new editing project from a recording
+ */
+export async function createProject(recordingId: string): Promise<Project | null> {
+  const recording = await finishedRecording(recordingId);
+  if (!recording) {
+    return null;
+  }
+
+  // Check if a project already exists for this recording — if so, load it
+  // instead of creating a new one (preserves zoom regions, cuts, backgrounds)
+  const recordingDir = path.dirname(recording.finalPath);
+  if (projectStorage.projectExists(recordingDir)) {
+    console.log('[EditorService] Found existing project, loading...');
+    const existingProject = loadProject(recordingDir);
+    if (existingProject) {
+      return existingProject;
+    }
+    // If loading fails, fall through to create a new one
+    console.warn('[EditorService] Failed to load existing project, creating new one');
+  }
+
+  const project = await writeNewProject(recordingId, recording);
+
+  activeProject = project;
+  console.log('[EditorService] Created project:', project.id);
+
+  // Load click events
+  loadClickEvents(recordingId);
+
   kickOffSpritesheets(project);
 
   return project;
+}
+
+/**
+ * Make sure a finished recording has its `.recso/project.json`, and return the
+ * project's folder.
+ *
+ * For the Automation API, whose `recording.stop` hands back a project without
+ * opening the editor. Leaves the editor's open project alone; opening this one
+ * later finds the file and loads it, as for any existing project.
+ */
+export async function ensureProjectFile(recordingId: string): Promise<string | null> {
+  const recording = await finishedRecording(recordingId);
+  if (!recording) {
+    return null;
+  }
+
+  const recordingDir = path.dirname(recording.finalPath);
+  if (!projectStorage.projectExists(recordingDir)) {
+    const project = await writeNewProject(recordingId, recording);
+    console.log('[EditorService] Wrote project for automation:', project.id);
+  }
+  return recordingDir;
 }
 
 type SpritesheetListener = (sheets: SpritesheetsBySource) => void;
