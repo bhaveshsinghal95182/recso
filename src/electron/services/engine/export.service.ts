@@ -25,6 +25,11 @@ export function startEngineExport(input: string, options: ExportOptions) {
   }
 
   const { VideoExporter } = requireEngineBindings();
+  // A platform port can ship the player before the exporter (Linux did), and
+  // `new undefined` would surface as a bare TypeError in the export dialog.
+  if (typeof VideoExporter !== 'function') {
+    throw new Error(`the engine on ${process.platform} has no exporter yet`);
+  }
 
   // Paths de-quoted and pixel buffers turned back into Buffers. See
   // `export-options.ts` for why neither survives the trip from the renderer.
