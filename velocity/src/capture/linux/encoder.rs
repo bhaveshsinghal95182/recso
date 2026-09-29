@@ -1,11 +1,14 @@
 //! Encodes raw PipeWire pixels into H.264 and writes a regular MP4.
 //! The capture thread drives this synchronous API frame by frame.
+//!
+//! H.264 comes from openh264 on the CPU, or from NVENC on an NVIDIA GPU.
 
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
 
 use super::mp4_writer::{AudioTrack, Mp4Writer, VideoTrack};
+use super::nvenc::{NvencEncoder, NvencSettings};
 use openh264::encoder::{
   BitRate, Encoder, EncoderConfig, FrameRate, FrameType, IntraFramePeriod, RateControlMode,
   UsageType,
@@ -35,6 +38,17 @@ pub(crate) struct VideoSettings {
   pub(crate) bitrate: u32,
 }
 
+/// Which H.264 encoder a recorder uses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EncoderChoice {
+  /// NVENC when the machine has it, openh264 otherwise.
+  Auto,
+  /// NVENC, or an error.
+  Hardware,
+  /// openh264 on the CPU.
+  Software,
+}
+
 /// Opus is fixed at 48 kHz, leaving only channel count to configure.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct AudioSettings {
@@ -57,13 +71,18 @@ pub(crate) struct RecorderSummary {
   pub(crate) height: u32,
 }
 
+enum VideoEncoder {
+  Software { encoder: Encoder, yuv: YUVBuffer },
+  Nvenc(NvencEncoder),
+}
+
 /// Reuses its conversion buffers while the caller feeds it frames.
 pub(crate) struct Mp4Recorder {
-  encoder: Encoder,
+  video: VideoEncoder,
+  encoder_name: String,
   muxer: Mp4Writer<BufWriter<File>>,
   sync_file: File,
   packed: Vec<u8>,
-  yuv: YUVBuffer,
   width: u32,
   height: u32,
   fps: u32,
@@ -75,12 +94,68 @@ pub(crate) struct Mp4Recorder {
   frames_dropped: u64,
 }
 
+/// Copies a frame into `packed`, the output size at a tight stride: cropped
+/// where the frame is larger, black where it is smaller.
+fn pack(
+  packed: &mut [u8],
+  pixels: &[u8],
+  frame_width: u32,
+  frame_height: u32,
+  stride: usize,
+  width: u32,
+  height: u32,
+) {
+  packed.fill(0);
+  let copy_bytes = frame_width.min(width) as usize * 4;
+  let output_stride = width as usize * 4;
+  for row in 0..frame_height.min(height) as usize {
+    let source = row * stride;
+    let target = row * output_stride;
+    packed[target..target + copy_bytes].copy_from_slice(&pixels[source..source + copy_bytes]);
+  }
+}
+
+/// openh264, tuned for screen content.
+fn software_encoder(
+  video: VideoSettings,
+  interval: u32,
+  width: u32,
+  height: u32,
+) -> Result<(VideoEncoder, String), String> {
+  let config = EncoderConfig::new()
+    .bitrate(BitRate::from_bps(video.bitrate))
+    .max_frame_rate(FrameRate::from_hz(video.fps as f32))
+    .usage_type(UsageType::ScreenContentRealTime)
+    .rate_control_mode(RateControlMode::Bitrate)
+    .adaptive_quantization(false)
+    .background_detection(false)
+    // A screen recording must keep every frame it is given: the capture is
+    // already variable-rate, and a skipped frame is a visible stutter.
+    .skip_frames(false)
+    .intra_frame_period(IntraFramePeriod::from_num_frames(interval));
+  let encoder = Encoder::with_api_config(OpenH264API::from_source(), config)
+    .map_err(|e| format!("create H.264 encoder: {e}"))?;
+  let yuv = YUVBuffer::new(width as usize, height as usize);
+  Ok((VideoEncoder::Software { encoder, yuv }, "openh264 (CPU)".into()))
+}
+
 impl Mp4Recorder {
-  /// Creates a non-fragmented MP4 suitable for browser playback.
+  /// Creates a non-fragmented MP4 suitable for browser playback, encoded by
+  /// openh264.
   pub(crate) fn create(
     path: &Path,
     video: VideoSettings,
     audio: Option<AudioSettings>,
+  ) -> Result<Self, String> {
+    Self::create_with(path, video, audio, EncoderChoice::Software)
+  }
+
+  /// Like `create`, with the H.264 encoder picked by `choice`.
+  pub(crate) fn create_with(
+    path: &Path,
+    video: VideoSettings,
+    audio: Option<AudioSettings>,
+    choice: EncoderChoice,
   ) -> Result<Self, String> {
     let width = video.width & !1;
     let height = video.height & !1;
@@ -101,19 +176,30 @@ impl Mp4Recorder {
     if width > i32::MAX as u32 || height > i32::MAX as u32 {
       return Err("video dimensions exceed the encoder limit".into());
     }
-    let config = EncoderConfig::new()
-      .bitrate(BitRate::from_bps(video.bitrate))
-      .max_frame_rate(FrameRate::from_hz(video.fps as f32))
-      .usage_type(UsageType::ScreenContentRealTime)
-      .rate_control_mode(RateControlMode::Bitrate)
-      .adaptive_quantization(false)
-      .background_detection(false)
-      // A screen recording must keep every frame it is given: the capture is
-      // already variable-rate, and a skipped frame is a visible stutter.
-      .skip_frames(false)
-      .intra_frame_period(IntraFramePeriod::from_num_frames(interval));
-    let encoder = Encoder::with_api_config(OpenH264API::from_source(), config)
-      .map_err(|e| format!("create H.264 encoder: {e}"))?;
+    let nvenc = || NvencEncoder::new(NvencSettings {
+      width,
+      height,
+      fps: video.fps,
+      bitrate: video.bitrate,
+    });
+    let (video_encoder, encoder_name) = match choice {
+      EncoderChoice::Software => software_encoder(video, interval, width, height)?,
+      EncoderChoice::Hardware => {
+        let encoder = nvenc().map_err(|e| format!("open the GPU encoder (NVENC): {e}"))?;
+        let name = format!("NVENC on {}", encoder.device_name());
+        (VideoEncoder::Nvenc(encoder), name)
+      }
+      EncoderChoice::Auto => match nvenc() {
+        Ok(encoder) => {
+          let name = format!("NVENC on {}", encoder.device_name());
+          (VideoEncoder::Nvenc(encoder), name)
+        }
+        Err(error) => {
+          eprintln!("[velocity] no GPU encoder ({error}); encoding in software");
+          software_encoder(video, interval, width, height)?
+        }
+      },
+    };
     let file = File::create(path).map_err(|e| format!("create {}: {e}", path.display()))?;
     let sync_file = file
       .try_clone()
@@ -125,11 +211,11 @@ impl Mp4Recorder {
     )
     .map_err(|e| format!("create MP4 muxer: {e}"))?;
     Ok(Self {
-      encoder,
+      video: video_encoder,
+      encoder_name,
       muxer,
       sync_file,
       packed: vec![0; packed_len],
-      yuv: YUVBuffer::new(width as usize, height as usize),
       width,
       height,
       fps: video.fps,
@@ -175,47 +261,60 @@ impl Mp4Recorder {
     let encoder_time = Timestamp::from_millis(
       u64::try_from(pts_100ns.saturating_sub(origin) / 10_000).unwrap_or(0),
     );
-    self.packed.fill(0);
-    let copy_bytes = frame_width.min(self.width) as usize * 4;
     let output_stride = self.width as usize * 4;
-    for row in 0..frame_height.min(self.height) as usize {
-      let source = row * stride;
-      let target = row * output_stride;
-      self.packed[target..target + copy_bytes]
-        .copy_from_slice(&pixels[source..source + copy_bytes]);
-    }
-    let size = (self.width as usize, self.height as usize);
-    match order {
-      PixelOrder::Bgrx => self.yuv.read_bgra8(BgraSliceU8::new(&self.packed, size)),
-      PixelOrder::Rgbx => self.yuv.read_rgba8(RgbaSliceU8::new(&self.packed, size)),
-    }
-
-    let (mut data, mut keyframe) = {
-      let encoded = self
-        .encoder
-        .encode_at(&self.yuv, encoder_time)
+    let fits = frame_width == self.width && frame_height == self.height;
+    let (data, keyframe) = match &mut self.video {
+      VideoEncoder::Nvenc(encoder) => {
+        // NVENC reads RGBA rows at any stride, so a frame that already has the
+        // output size goes to the GPU as it is.
+        let encoded = if fits && order == PixelOrder::Rgbx {
+          encoder.encode(pixels, stride, false)
+        } else {
+          pack(&mut self.packed, pixels, frame_width, frame_height, stride, self.width, self.height);
+          if order == PixelOrder::Bgrx {
+            self.packed.chunks_exact_mut(4).for_each(|pixel| pixel.swap(0, 2));
+          }
+          encoder.encode(&self.packed, output_stride, false)
+        }
         .map_err(|e| format!("encode video frame: {e}"))?;
-      (encoded.to_vec(), encoded.frame_type() == FrameType::IDR)
+        (encoded.annex_b, encoded.keyframe)
+      }
+      VideoEncoder::Software { encoder, yuv } => {
+        let source = if fits && stride == output_stride {
+          &pixels[..output_stride * self.height as usize]
+        } else {
+          pack(&mut self.packed, pixels, frame_width, frame_height, stride, self.width, self.height);
+          &self.packed[..]
+        };
+        let size = (self.width as usize, self.height as usize);
+        match order {
+          PixelOrder::Bgrx => yuv.read_bgra8(BgraSliceU8::new(source, size)),
+          PixelOrder::Rgbx => yuv.read_rgba8(RgbaSliceU8::new(source, size)),
+        }
+        let (mut data, mut keyframe) = {
+          let encoded = encoder
+            .encode_at(&*yuv, encoder_time)
+            .map_err(|e| format!("encode video frame: {e}"))?;
+          (encoded.to_vec(), encoded.frame_type() == FrameType::IDR)
+        };
+        // The initial encode normally initializes the encoder with an IDR. If it
+        // does not, force one after initialization before handing it to the muxer.
+        if !data.is_empty() && self.first_written_pts.is_none() && !keyframe {
+          encoder.force_intra_frame();
+          let encoded = encoder
+            .encode_at(&*yuv, encoder_time)
+            .map_err(|e| format!("encode first keyframe: {e}"))?;
+          data = encoded.to_vec();
+          keyframe = encoded.frame_type() == FrameType::IDR;
+          if !data.is_empty() && !keyframe {
+            return Err("encoder did not produce an IDR for the first video frame".into());
+          }
+        }
+        (data, keyframe)
+      }
     };
     if data.is_empty() {
       return Ok(());
-    }
-    // The initial encode normally initializes the encoder with an IDR. If it
-    // does not, force one after initialization before handing it to the muxer.
-    if self.first_written_pts.is_none() && !keyframe {
-      self.encoder.force_intra_frame();
-      let encoded = self
-        .encoder
-        .encode_at(&self.yuv, encoder_time)
-        .map_err(|e| format!("encode first keyframe: {e}"))?;
-      data = encoded.to_vec();
-      keyframe = encoded.frame_type() == FrameType::IDR;
-      if data.is_empty() {
-        return Ok(());
-      }
-      if !keyframe {
-        return Err("encoder did not produce an IDR for the first video frame".into());
-      }
     }
     let relative = pts_100ns
       .checked_sub(origin)
@@ -228,6 +327,11 @@ impl Mp4Recorder {
     self.last_written_pts = Some(pts_100ns);
     self.frames_written += 1;
     Ok(())
+  }
+
+  /// The encoder in use, named for the user.
+  pub(crate) fn encoder_name(&self) -> &str {
+    &self.encoder_name
   }
 
   /// Discards audio predating the first video sample, which establishes the

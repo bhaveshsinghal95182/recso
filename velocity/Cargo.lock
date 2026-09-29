@@ -2464,6 +2464,7 @@ dependencies = [
  "bytemuck",
  "gbm",
  "image",
+ "libloading 0.8.9",
  "mp4",
  "napi",
  "napi-build",

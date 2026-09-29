@@ -4,6 +4,7 @@
 //! separate GPU player is available, so Electron can identify that boundary.
 
 use super::{audio, exporter, media::VideoSource, thumbnails, player};
+use crate::capture::linux::encoder::EncoderChoice;
 use crate::engine::{cuts, scene, zoom};
 use crate::engine::layout::{CursorSample, FitMode, OverlayShape, Rect, Shadow, WebcamLayout};
 use crate::engine::sheet::{SheetBudget, SheetPlan};
@@ -584,6 +585,10 @@ pub struct ExportOptions {
   pub layer_order: Option<Vec<String>>,
   /// Spans where the camera changes size, or expands to the whole frame.
   pub webcam_zoom_regions: Option<Vec<WebcamZoomRegionSpec>>,
+  /// "auto" (the default) uses the GPU's H.264 encoder when there is one and
+  /// the software encoder otherwise; "hardware" fails without one; "software"
+  /// never touches the GPU encoder.
+  pub encoder: Option<String>,
 }
 
 #[napi(object)]
@@ -600,6 +605,9 @@ pub struct ExportProgress {
   pub avg_render_ms: f64,
   pub avg_encode_ms: f64,
   pub elapsed_ms: f64,
+  /// The video encoder in use, such as "NVENC on NVIDIA GeForce RTX 4050
+  /// Laptop GPU"; absent until it opens.
+  pub encoder: Option<String>,
 }
 
 /// One file contributing sound to the export.
@@ -832,8 +840,15 @@ impl VideoExporter {
     let cursor_image = options.cursor.map(CursorBitmap::into_image).transpose()?;
     let cursor_images = options.cursor_images.unwrap_or_default().into_iter()
       .map(CursorBitmap::into_image).collect::<Result<Vec<_>>>()?;
+    let encoder = match options.encoder.as_deref() {
+      None | Some("auto") => EncoderChoice::Auto,
+      Some("hardware") => EncoderChoice::Hardware,
+      Some("software") => EncoderChoice::Software,
+      Some(other) => return Err(Error::from_reason(format!(
+        "unknown encoder {other:?}; expected \"auto\", \"hardware\" or \"software\""))),
+    };
     Ok(Self { inner: exporter::Exporter::start(exporter::Options {
-      input, output: options.output, bitrate: options.bitrate as u32,
+      input, output: options.output, bitrate: options.bitrate as u32, encoder,
       start_ms: options.start.unwrap_or(0.0), end_ms: options.end.unwrap_or(0.0),
       effects: scene::EffectParams {
         brightness: options.brightness.unwrap_or(0.0) as f32,
@@ -876,7 +891,8 @@ impl VideoExporter {
     ExportProgress { frames_done: p.frames_done as f64, frames_total: p.frames_total as f64,
       finished: p.finished, cancelled: p.cancelled, error: p.error, fps: p.fps,
       steady_fps: p.steady_fps, setup_ms: p.setup_ms, avg_decode_ms: p.avg_decode_ms,
-      avg_render_ms: p.avg_render_ms, avg_encode_ms: p.avg_encode_ms, elapsed_ms: p.elapsed_ms }
+      avg_render_ms: p.avg_render_ms, avg_encode_ms: p.avg_encode_ms, elapsed_ms: p.elapsed_ms,
+      encoder: p.encoder }
   }
   #[napi]
   pub fn cancel(&self) { self.inner.cancel(); }

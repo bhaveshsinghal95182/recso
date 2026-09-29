@@ -13,7 +13,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use crate::capture::linux::audio::{OpusEncoder, PACKET_FRAMES};
-use crate::capture::linux::encoder::{AudioSettings, Mp4Recorder, PixelOrder, VideoSettings};
+use crate::capture::linux::encoder::{AudioSettings, EncoderChoice, Mp4Recorder, PixelOrder, VideoSettings};
 use crate::engine::cuts::{Cut, CutTrack};
 use crate::engine::layout::{CursorSample, CursorTrack, WebcamLayout};
 use crate::engine::mix::{audio_frames_due, AudioMixer, MIX_CHANNELS, MIX_SAMPLE_RATE};
@@ -27,6 +27,7 @@ pub(crate) struct Options {
   pub input: String,
   pub output: String,
   pub bitrate: u32,
+  pub encoder: EncoderChoice,
   pub start_ms: f64,
   pub end_ms: f64,
   pub effects: EffectParams,
@@ -64,6 +65,8 @@ struct Shared {
   setup_us: AtomicU64,
   error: Mutex<Option<String>>,
   stage: Mutex<&'static str>,
+  /// The video encoder in use, once it is open.
+  encoder: Mutex<Option<String>>,
 }
 
 pub(crate) struct Progress {
@@ -79,6 +82,7 @@ pub(crate) struct Progress {
   pub avg_render_ms: f64,
   pub avg_encode_ms: f64,
   pub elapsed_ms: f64,
+  pub encoder: Option<String>,
 }
 
 pub(crate) struct Exporter {
@@ -93,7 +97,7 @@ impl Exporter {
       render_us: AtomicU64::new(0), encode_us: AtomicU64::new(0),
       finished: AtomicBool::new(false), started_at: Instant::now(),
       elapsed_us: AtomicU64::new(0), setup_us: AtomicU64::new(0),
-      error: Mutex::new(None), stage: Mutex::new("init"),
+      error: Mutex::new(None), stage: Mutex::new("init"), encoder: Mutex::new(None),
     });
     let worker = Arc::clone(&shared);
     let thread = std::thread::Builder::new().name("export".into()).spawn(move || {
@@ -135,6 +139,7 @@ impl Exporter {
       } else { 0.0 },
       setup_ms, avg_decode_ms: per(&self.shared.decode_us),
       avg_render_ms: per(&self.shared.render_us), avg_encode_ms: per(&self.shared.encode_us), elapsed_ms,
+      encoder: self.shared.encoder.lock().unwrap_or_else(|e| e.into_inner()).clone(),
     }
   }
 }
@@ -299,9 +304,10 @@ fn run(shared: &Shared, options: Options) -> Result<(), String> {
   let opus = if mixer.is_some() { Some(OpusEncoder::new()?) } else { None };
   set_stage(shared, "create encoder");
   let (width, height) = chain.output_size();
-  let recorder = Mp4Recorder::create(Path::new(&options.output), VideoSettings {
+  let recorder = Mp4Recorder::create_with(Path::new(&options.output), VideoSettings {
     width, height, fps: fps.round().max(1.0) as u32, bitrate: options.bitrate,
-  }, mixer.as_ref().map(|_| AudioSettings { channels: 2 }))?;
+  }, mixer.as_ref().map(|_| AudioSettings { channels: 2 }), options.encoder)?;
+  *shared.encoder.lock().unwrap_or_else(|e| e.into_inner()) = Some(recorder.encoder_name().to_owned());
 
   let (jobs, queued) = sync_channel::<Job>(PIPELINE_DEPTH);
   let (spare_tx, spare) = channel::<Vec<u8>>();
@@ -413,7 +419,7 @@ mod tests {
   fn options(input: &str, output: &str) -> Options {
     Options {
       input: input.into(), output: output.into(), bitrate: 2_000_000,
-      start_ms: 0.0, end_ms: 0.0,
+      encoder: EncoderChoice::Software, start_ms: 0.0, end_ms: 0.0,
       effects: EffectParams { brightness: 0.0, contrast: 1.0, saturation: 1.0 },
       webcam_effects: EffectParams { brightness: 0.0, contrast: 1.0, saturation: 1.0 },
       canvas: None, layout: None, background: None, webcam_path: None,
@@ -427,7 +433,8 @@ mod tests {
   }
 
   /// Export speed on a real recording: `VELOCITY_BENCH_INPUT=<mp4> cargo test
-  /// --release --lib export_speed -- --ignored --nocapture`.
+  /// --release --lib export_speed -- --ignored --nocapture`. Set
+  /// `VELOCITY_BENCH_ENCODER=hardware` to time the GPU encoder.
   #[test]
   #[ignore = "a benchmark on a recording named by VELOCITY_BENCH_INPUT"]
   fn export_speed() {
@@ -435,6 +442,11 @@ mod tests {
     let output = std::env::temp_dir().join("velocity-export-speed.mp4");
     let mut options = options(&input, output.to_str().unwrap());
     options.bitrate = 12_000_000;
+    options.encoder = match std::env::var("VELOCITY_BENCH_ENCODER").as_deref() {
+      Ok("hardware") => EncoderChoice::Hardware,
+      Ok("auto") => EncoderChoice::Auto,
+      _ => EncoderChoice::Software,
+    };
     if std::env::var("VELOCITY_BENCH_NO_AUDIO").is_ok() { options.audio_sources.clear(); }
     options.end_ms = std::env::var("VELOCITY_BENCH_END_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(20_000.0);
     let exporter = Exporter::start(options);
@@ -442,8 +454,8 @@ mod tests {
       let progress = exporter.progress();
       if progress.finished {
         assert_eq!(progress.error, None);
-        println!("{} frames at {:.1} fps: decode {:.1} ms, render {:.1} ms, encode {:.1} ms",
-          progress.frames_done, progress.steady_fps, progress.avg_decode_ms,
+        println!("{:?}: {} frames at {:.1} fps: decode {:.1} ms, render {:.1} ms, encode {:.1} ms",
+          progress.encoder, progress.frames_done, progress.steady_fps, progress.avg_decode_ms,
           progress.avg_render_ms, progress.avg_encode_ms);
         break;
       }
@@ -542,6 +554,52 @@ mod tests {
     // Frames 31..=60 are 1033..2000 ms; the mix runs from 1010 to one frame
     // past the last, 1023 ms, which is 52 packets of 20 ms.
     assert_eq!(audio.sample_count(), 52);
+  }
+
+  /// The centre pixel of the frame nearest the middle of each second.
+  fn centre_colours(path: &str) -> Vec<[u8; 3]> {
+    let mut source = super::super::media::VideoSource::open(path).unwrap();
+    let mut colours = Vec::new();
+    while let Some(frame) = source.next_frame().unwrap() {
+      if frame.pts_ms < colours.len() as f64 * 1000.0 + 500.0 { continue; }
+      let centre = ((frame.height / 2 * frame.width + frame.width / 2) * 4) as usize;
+      colours.push([frame.rgba[centre], frame.rgba[centre + 1], frame.rgba[centre + 2]]);
+    }
+    colours
+  }
+
+  #[test]
+  #[ignore = "needs an NVIDIA GPU and driver"]
+  fn the_gpu_encoder_matches_the_software_encoder() {
+    // Mid-tones, where BT.601 and BT.709 disagree by far more than the tolerance.
+    let fixture = super::super::media::fixtures::recording_painted(true, 320, 240,
+      [[40, 120, 200, 0], [200, 60, 90, 0], [90, 200, 120, 0]]);
+    let input = fixture.0.to_str().unwrap();
+    let export = |choice| {
+      let output = Fixture(path("export-encoder"));
+      let mut options = options(input, output.0.to_str().unwrap());
+      options.encoder = choice;
+      let progress = finished(&Exporter::start(options));
+      assert!(progress.error.is_none(), "{:?}", progress.error);
+      (output, progress)
+    };
+    let (software, progress) = export(EncoderChoice::Software);
+    assert_eq!(progress.encoder.as_deref(), Some("openh264 (CPU)"));
+    let (hardware, progress) = export(EncoderChoice::Hardware);
+    let name = progress.encoder.unwrap();
+    assert!(name.starts_with("NVENC on NVIDIA"), "{name}");
+    assert!((progress.frames_done as i64 - 90).abs() <= 1);
+
+    let expected = centre_colours(software.0.to_str().unwrap());
+    let actual = centre_colours(hardware.0.to_str().unwrap());
+    assert_eq!(expected.len(), 3);
+    assert_eq!(actual.len(), 3);
+    for (second, (wanted, got)) in expected.iter().zip(&actual).enumerate() {
+      for channel in 0..3 {
+        assert!((wanted[channel] as i16 - got[channel] as i16).abs() <= 6,
+          "second {second}: NVENC {got:?}, openh264 {wanted:?}");
+      }
+    }
   }
 
   #[test]

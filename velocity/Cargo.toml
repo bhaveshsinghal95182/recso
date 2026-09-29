@@ -65,6 +65,8 @@ ashpd = { version = "0.13", default-features = false, features = [
 # Demuxes recordings for the Linux engine's decode, probe and thumbnails.
 mp4      = "0.14"
 openh264 = "0.9"
+# Loads the NVIDIA driver libraries (libcuda, libnvidia-encode) at runtime for NVENC.
+libloading = "0.8"
 # The system libopus (BSD), linked dynamically; the bundled build needs cmake.
 opusic-sys = { version = "0.7", default-features = false }
 pipewire   = "0.10"
