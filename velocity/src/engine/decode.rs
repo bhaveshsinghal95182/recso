@@ -397,12 +397,28 @@ pub fn probe(path: &str) -> Probe {
 /// this list is empty for HEVC, that package is missing -- it is not a GPU
 /// limitation.
 pub fn list_decoders(subtype: windows::core::GUID) -> Vec<String> {
-  ensure_mf();
-
   let input = MFT_REGISTER_TYPE_INFO {
     guidMajorType: MFMediaType_Video,
     guidSubtype: subtype,
   };
+  transform_names(MFT_CATEGORY_VIDEO_DECODER, Some(&input), None)
+}
+
+/// Which encoder MFTs produce `subtype`, hardware first.
+pub fn list_encoders(subtype: windows::core::GUID) -> Vec<String> {
+  let output = MFT_REGISTER_TYPE_INFO {
+    guidMajorType: MFMediaType_Video,
+    guidSubtype: subtype,
+  };
+  transform_names(MFT_CATEGORY_VIDEO_ENCODER, None, Some(&output))
+}
+
+fn transform_names(
+  category: windows::core::GUID,
+  input: Option<&MFT_REGISTER_TYPE_INFO>,
+  output: Option<&MFT_REGISTER_TYPE_INFO>,
+) -> Vec<String> {
+  ensure_mf();
 
   let mut activates: *mut Option<IMFActivate> = std::ptr::null_mut();
   let mut count = 0u32;
@@ -422,15 +438,8 @@ pub fn list_decoders(subtype: windows::core::GUID) -> Vec<String> {
   let mut out = Vec::new();
 
   unsafe {
-    if MFTEnumEx(
-      MFT_CATEGORY_VIDEO_DECODER,
-      flags,
-      Some(&input),
-      None,
-      &mut activates,
-      &mut count,
-    )
-    .is_err()
+    if MFTEnumEx(category, flags, input.map(|info| info as *const _), output.map(|info| info as *const _), &mut activates, &mut count)
+      .is_err()
     {
       return out;
     }

@@ -21,7 +21,7 @@ use super::super::stopper::Stopper;
 use super::audio::{self, AudioCapture, AudioRequest};
 use super::encoder::{AudioSettings, Mp4Recorder, PixelOrder, VideoSettings};
 use super::pipewire_stream::{self, Frame, NodeSource, NodeStream};
-use super::portal::{self, Session};
+use super::portal::{self, PortalRequest, Session};
 use crate::cursor::HardwareCursor;
 
 /// A frame copied off the PipeWire buffer, waiting for the encoder.
@@ -65,6 +65,28 @@ pub(crate) fn start_monitor_recording_with_target_fps(
   microphone_device_id: Option<String>,
   target_fps: Option<u32>,
 ) -> napi::Result<Stopper> {
+  start_monitor_recording_with_portal(
+    output_path,
+    bitrate,
+    include_system_audio,
+    include_microphone,
+    microphone_device_id,
+    target_fps,
+    PortalRequest::default(),
+  )
+}
+
+/// As `start_monitor_recording_with_target_fps`, asking the portal to
+/// remember the choice (or reuse one it remembered) when `portal` says so.
+pub(crate) fn start_monitor_recording_with_portal(
+  output_path: String,
+  bitrate: u32,
+  include_system_audio: Option<bool>,
+  include_microphone: Option<bool>,
+  microphone_device_id: Option<String>,
+  target_fps: Option<u32>,
+  portal: PortalRequest,
+) -> napi::Result<Stopper> {
   let system_audio = include_system_audio.unwrap_or(false);
   let microphone = include_microphone.unwrap_or(false);
   let audio = (system_audio || microphone).then_some(AudioRequest {
@@ -72,7 +94,7 @@ pub(crate) fn start_monitor_recording_with_target_fps(
     microphone,
     microphone_node: microphone_device_id,
   });
-  start(output_path, bitrate, target_fps, audio).map_err(napi::Error::from_reason)
+  start(output_path, bitrate, target_fps, audio, portal).map_err(napi::Error::from_reason)
 }
 
 /// There is no window list to pick from on Wayland, so the title is not
@@ -105,6 +127,7 @@ fn start(
   bitrate: u32,
   target_fps: Option<u32>,
   audio: Option<AudioRequest>,
+  portal_request: PortalRequest,
 ) -> Result<Stopper, String> {
   let fps = resolved_fps(target_fps);
 
@@ -123,13 +146,18 @@ fn start(
 
   // Before the picker, so the very first frame is already free of it.
   let cursor = HardwareCursor::acquire();
-  let (grant, session) = portal::open(true)?;
+  let (grant, session) = portal::open(true, portal_request)?;
+  let restore_token = grant.restore_token;
   let source = NodeSource {
     remote: Some(grant.remote),
     node_id: grant.node_id,
   };
   match record(source, PathBuf::from(&output_path), fps, bitrate, audio) {
-    Ok(recording) => Ok(recording.into_stopper(Some((session, cursor)))),
+    Ok(recording) => {
+      let mut stopper = recording.into_stopper(Some((session, cursor)));
+      stopper.set_portal_restore_token(restore_token);
+      Ok(stopper)
+    }
     Err(error) => {
       session.close();
       Err(error)

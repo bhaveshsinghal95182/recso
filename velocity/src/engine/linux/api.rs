@@ -140,6 +140,23 @@ pub fn probe_audio(path: String) -> AudioProbe {
 
 #[napi]
 pub fn list_decoders() -> Vec<String> { vec!["openh264 (software)".into()] }
+
+/// Video encoders an export can use here, best first.
+///
+/// "nvenc" when the NVIDIA driver can open an NVENC session (probed once:
+/// it loads libcuda), then the software "openh264", which is always there.
+/// `encoder: "auto"` on an export takes the first.
+#[napi]
+pub fn list_video_encoders() -> Vec<String> {
+  static NVENC: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+  let nvenc = *NVENC.get_or_init(|| crate::capture::linux::nvenc::NvencEncoder::probe().is_ok());
+  let mut encoders = Vec::new();
+  if nvenc {
+    encoders.push("nvenc".to_string());
+  }
+  encoders.push("openh264".to_string());
+  encoders
+}
 #[napi]
 pub fn adapter_info() -> Vec<String> { Vec::new() }
 #[napi]

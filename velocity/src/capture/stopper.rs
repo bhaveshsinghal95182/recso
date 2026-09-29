@@ -18,6 +18,8 @@ pub struct Stopper {
   /// One per capture this Stopper owns -- a v2 recording appends the webcam's
   /// to the screen's, and `stop` reports both.
   stats: Vec<Arc<RecordingStats>>,
+  /// Linux: the portal's token for reopening this source without the picker.
+  portal_restore_token: Option<String>,
 }
 
 impl Stopper {
@@ -26,6 +28,7 @@ impl Stopper {
       stop_txs: vec![stop_tx],
       done_rxs: vec![done_rx],
       stats: Vec::new(),
+      portal_restore_token: None,
     }
   }
 
@@ -38,11 +41,17 @@ impl Stopper {
       stop_txs: vec![stop_tx],
       done_rxs: vec![done_rx],
       stats: vec![stats],
+      portal_restore_token: None,
     }
   }
 
   pub(crate) fn screen_stats(&self) -> Option<Arc<RecordingStats>> {
     self.stats.first().cloned()
+  }
+
+  #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+  pub(crate) fn set_portal_restore_token(&mut self, token: Option<String>) {
+    self.portal_restore_token = token;
   }
 
   pub(crate) fn append(&mut self, mut other: Stopper) {
@@ -54,6 +63,15 @@ impl Stopper {
 
 #[napi]
 impl Stopper {
+  /// The token that reopens the same screen or window without the picker.
+  ///
+  /// Only on Linux, and only when the recording asked the portal to remember
+  /// the choice (`rememberSource`) and the portal agreed; null otherwise.
+  #[napi]
+  pub fn portal_restore_token(&self) -> Option<String> {
+    self.portal_restore_token.clone()
+  }
+
   /// Stop every capture and describe what was written.
   ///
   /// Only meaningful once the encoders have been finalised, which is what the

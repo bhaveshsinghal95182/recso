@@ -721,6 +721,7 @@ module.exports.isCursorSettingsSupported = nativeBinding.isCursorSettingsSupport
 module.exports.listAudioCaptureDevices = nativeBinding.listAudioCaptureDevices
 module.exports.listAvailableWindows = nativeBinding.listAvailableWindows
 module.exports.listDecoders = nativeBinding.listDecoders
+module.exports.listVideoEncoders = nativeBinding.listVideoEncoders
 module.exports.listWebcamDevices = nativeBinding.listWebcamDevices
 module.exports.phoneCameraStatus = nativeBinding.phoneCameraStatus
 module.exports.probeAudio = nativeBinding.probeAudio

@@ -24,6 +24,36 @@ pub(crate) struct Grant {
   /// The source's size as the portal reports it, if it does. The stream's own
   /// format is authoritative; this is only a hint for sizing the encoder.
   pub(crate) size: Option<(u32, u32)>,
+  /// Reopens the same source without the picker, when the choice was asked to
+  /// be remembered and the portal agreed.
+  pub(crate) restore_token: Option<String>,
+}
+
+/// Whether the portal should remember what the user picks.
+///
+/// The recorder's own button always asks: remembering would never let the
+/// user switch sources, since recso has no picker of its own. Only a
+/// recording started over the Automation API with `rememberSource` asks for a
+/// token, and hands back the one it got last time.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct PortalRequest {
+  pub(crate) remember: bool,
+  pub(crate) restore_token: Option<String>,
+}
+
+impl PortalRequest {
+  /// The persist mode and restore token to ask the portal with.
+  ///
+  /// A token is only offered when remembering: passing an old token while
+  /// asking not to persist would still skip the picker, which the button must
+  /// never do. A token the portal no longer accepts just brings the picker back.
+  pub(crate) fn persistence(&self) -> (PersistMode, Option<&str>) {
+    if self.remember {
+      (PersistMode::ExplicitlyRevoked, self.restore_token.as_deref().filter(|token| !token.is_empty()))
+    } else {
+      (PersistMode::DoNot, None)
+    }
+  }
 }
 
 /// A live portal session. Closed by `close`, which the recording calls once
@@ -47,13 +77,13 @@ impl Session {
 /// Blocks until the user picks or cancels -- there is no timeout, because the
 /// wait is a person deciding. `sources` chooses between screens only and
 /// screens plus windows.
-pub(crate) fn open(windows_too: bool) -> Result<(Grant, Session), String> {
+pub(crate) fn open(windows_too: bool, request: PortalRequest) -> Result<(Grant, Session), String> {
   let (grant_tx, grant_rx) = sync_channel::<Result<Grant, String>>(1);
   let (close_tx, close_rx) = sync_channel::<()>(1);
 
   let thread = thread::Builder::new()
     .name("velocity-portal".to_string())
-    .spawn(move || run(windows_too, grant_tx, close_rx))
+    .spawn(move || run(windows_too, request, grant_tx, close_rx))
     .map_err(|error| format!("could not start the portal thread: {error}"))?;
 
   match grant_rx.recv() {
@@ -75,7 +105,12 @@ pub(crate) fn open(windows_too: bool) -> Result<(Grant, Session), String> {
   }
 }
 
-fn run(windows_too: bool, grant_tx: SyncSender<Result<Grant, String>>, close_rx: Receiver<()>) {
+fn run(
+  windows_too: bool,
+  request: PortalRequest,
+  grant_tx: SyncSender<Result<Grant, String>>,
+  close_rx: Receiver<()>,
+) {
   let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
     Ok(runtime) => runtime,
     Err(error) => {
@@ -102,7 +137,7 @@ fn run(windows_too: bool, grant_tx: SyncSender<Result<Grant, String>>, close_rx:
       }
     };
 
-    let result = select_and_start(&proxy, &session, windows_too).await;
+    let result = select_and_start(&proxy, &session, windows_too, &request).await;
     let granted = result.is_ok();
     let _ = grant_tx.send(result);
 
@@ -120,7 +155,9 @@ async fn select_and_start(
   proxy: &Screencast,
   session: &ashpd::desktop::Session<Screencast>,
   windows_too: bool,
+  request: &PortalRequest,
 ) -> Result<Grant, String> {
+  let (persist_mode, restore_token) = request.persistence();
   let sources = if windows_too {
     SourceType::Monitor | SourceType::Window
   } else {
@@ -135,9 +172,8 @@ async fn select_and_start(
         .set_cursor_mode(CursorMode::Hidden)
         .set_sources(sources)
         .set_multiple(false)
-        // Asked every time. A remembered choice would never let the user
-        // switch sources, since the recorder has no picker of its own.
-        .set_persist_mode(PersistMode::DoNot),
+        .set_persist_mode(persist_mode)
+        .set_restore_token(restore_token),
     )
     .await
     .map_err(|error| format!("the portal rejected the source request: {error}"))?;
@@ -154,6 +190,7 @@ async fn select_and_start(
       other => format!("the portal did not grant a capture: {other}"),
     })?;
 
+  let granted_token = response.restore_token().map(ToOwned::to_owned);
   let stream = response
     .streams()
     .first()
@@ -171,5 +208,32 @@ async fn select_and_start(
     size: stream
       .size()
       .and_then(|(width, height)| Some((u32::try_from(width).ok()?, u32::try_from(height).ok()?))),
+    restore_token: granted_token,
   })
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn the_button_never_persists_and_never_offers_a_token() {
+    let request = PortalRequest { remember: false, restore_token: Some("old".into()) };
+    assert_eq!(request.persistence(), (PersistMode::DoNot, None));
+    assert_eq!(PortalRequest::default().persistence(), (PersistMode::DoNot, None));
+  }
+
+  #[test]
+  fn remembering_persists_and_offers_the_last_token() {
+    let first = PortalRequest { remember: true, restore_token: None };
+    assert_eq!(first.persistence(), (PersistMode::ExplicitlyRevoked, None));
+    let again = PortalRequest { remember: true, restore_token: Some("abc".into()) };
+    assert_eq!(again.persistence(), (PersistMode::ExplicitlyRevoked, Some("abc")));
+  }
+
+  #[test]
+  fn an_empty_token_is_not_offered() {
+    let request = PortalRequest { remember: true, restore_token: Some(String::new()) };
+    assert_eq!(request.persistence(), (PersistMode::ExplicitlyRevoked, None));
+  }
 }

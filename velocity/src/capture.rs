@@ -113,6 +113,12 @@ pub struct NativeRecordingOptions {
   /// "local" (the default) or "phone". A phone must already be paired and
   /// sending frames before the recording starts.
   pub webcam_source: Option<String>,
+  /// Linux: ask the portal to remember the source the user picks. Read the
+  /// token back with `Stopper.portalRestoreToken()`. Ignored elsewhere.
+  pub remember_source: Option<bool>,
+  /// Linux: a token from an earlier remembered recording, which reopens the
+  /// same source without the picker. Only used with `remember_source`.
+  pub portal_restore_token: Option<String>,
 }
 
 #[napi(object)]
@@ -140,6 +146,12 @@ pub struct NativeWindowRecordingOptions {
   /// "local" (the default) or "phone". A phone must already be paired and
   /// sending frames before the recording starts.
   pub webcam_source: Option<String>,
+  /// Linux: ask the portal to remember the source the user picks. Read the
+  /// token back with `Stopper.portalRestoreToken()`. Ignored elsewhere.
+  pub remember_source: Option<bool>,
+  /// Linux: a token from an earlier remembered recording, which reopens the
+  /// same source without the picker. Only used with `remember_source`.
+  pub portal_restore_token: Option<String>,
 }
 
 fn attach_webcam_stopper_if_requested(
@@ -182,6 +194,20 @@ fn attach_webcam_stopper_if_requested(
 #[napi]
 pub fn start_monitor_recording_v2(options: NativeRecordingOptions) -> napi::Result<Stopper> {
   let output_path = options.output_path.clone();
+  #[cfg(target_os = "linux")]
+  let mut stopper = screen_backend::start_monitor_recording_with_portal(
+    options.output_path,
+    options.bitrate,
+    options.include_system_audio,
+    options.include_microphone,
+    options.microphone_device_id,
+    options.target_fps,
+    linux::portal::PortalRequest {
+      remember: options.remember_source.unwrap_or(false),
+      restore_token: options.portal_restore_token,
+    },
+  )?;
+  #[cfg(not(target_os = "linux"))]
   let mut stopper = screen_backend::start_monitor_recording_with_target_fps(
     options.output_path,
     options.bitrate,
@@ -207,6 +233,22 @@ pub fn start_monitor_recording_v2(options: NativeRecordingOptions) -> napi::Resu
 #[napi]
 pub fn start_window_recording_v2(options: NativeWindowRecordingOptions) -> napi::Result<Stopper> {
   let output_path = options.output_path.clone();
+  // Wayland has no window list: the portal's picker offers windows too, so a
+  // window recording is a monitor recording that may remember its source.
+  #[cfg(target_os = "linux")]
+  let mut stopper = screen_backend::start_monitor_recording_with_portal(
+    options.output_path,
+    options.bitrate,
+    options.include_system_audio,
+    options.include_microphone,
+    options.microphone_device_id,
+    options.target_fps,
+    linux::portal::PortalRequest {
+      remember: options.remember_source.unwrap_or(false),
+      restore_token: options.portal_restore_token,
+    },
+  )?;
+  #[cfg(not(target_os = "linux"))]
   let mut stopper = screen_backend::start_window_recording_with_target_fps(
     options.window_title,
     options.output_path,

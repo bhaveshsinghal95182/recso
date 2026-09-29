@@ -37,6 +37,13 @@ export declare class Pipeline {
 /** What windows-capture asks for when no interval is set. */
 export declare class Stopper {
   /**
+   * The token that reopens the same screen or window without the picker.
+   *
+   * Only on Linux, and only when the recording asked the portal to remember
+   * the choice (`rememberSource`) and the portal agreed; null otherwise.
+   */
+  portalRestoreToken(): string | null
+  /**
    * Stop every capture and describe what was written.
    *
    * Only meaningful once the encoders have been finalised, which is what the
@@ -612,6 +619,13 @@ export declare function listAvailableWindows(): Array<WindowInfo>
 /** Diagnostic: which decoder MFTs exist for H.264 and HEVC on this machine? */
 export declare function listDecoders(): Array<string>
 
+/**
+ * Video encoders an export can use here: the H.264 encoder MFTs Media
+ * Foundation offers, hardware first. The exporter's sink writer enables
+ * hardware transforms and lets Media Foundation choose among them.
+ */
+export declare function listVideoEncoders(): Array<string>
+
 export declare function listWebcamDevices(): Array<WebcamDeviceInfo>
 
 export interface NativeRecordingOptions {
@@ -643,6 +657,16 @@ export interface NativeRecordingOptions {
    * sending frames before the recording starts.
    */
   webcamSource?: string
+  /**
+   * Linux: ask the portal to remember the source the user picks. Read the
+   * token back with `Stopper.portalRestoreToken()`. Ignored elsewhere.
+   */
+  rememberSource?: boolean
+  /**
+   * Linux: a token from an earlier remembered recording, which reopens the
+   * same source without the picker. Only used with `remember_source`.
+   */
+  portalRestoreToken?: string
 }
 
 export interface NativeWindowRecordingOptions {
@@ -675,6 +699,16 @@ export interface NativeWindowRecordingOptions {
    * sending frames before the recording starts.
    */
   webcamSource?: string
+  /**
+   * Linux: ask the portal to remember the source the user picks. Read the
+   * token back with `Stopper.portalRestoreToken()`. Ignored elsewhere.
+   */
+  rememberSource?: boolean
+  /**
+   * Linux: a token from an earlier remembered recording, which reopens the
+   * same source without the picker. Only used with `remember_source`.
+   */
+  portalRestoreToken?: string
 }
 
 export declare function phoneCameraStatus(): PhoneCameraStatus

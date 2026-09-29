@@ -302,6 +302,15 @@ pub fn probe_video(path: String) -> ProbeResult {
   }
 }
 
+/// Video encoders an export can use here: the H.264 encoder MFTs Media
+/// Foundation offers, hardware first. The exporter's sink writer enables
+/// hardware transforms and lets Media Foundation choose among them.
+#[cfg(windows)]
+#[napi]
+pub fn list_video_encoders() -> Vec<String> {
+  decode::list_encoders(decode::h264_subtype())
+}
+
 /// Diagnostic: which decoder MFTs exist for H.264 and HEVC on this machine?
 #[cfg(windows)]
 #[napi]
