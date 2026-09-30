@@ -11,7 +11,7 @@ if (app.isPackaged) {
 
 import path from 'path';
 
-import { initializeAutomation } from './automation/index.js';
+import { initializeAutomation, isAutomationRunning } from './automation/index.js';
 import { initializeWithWindow, registerAllIpcHandlers } from './ipc/index.js';
 import { initializeDatabase } from './services/database.service.js';
 import { checkGpuMatch } from './services/engine/gpu.service.js';
@@ -196,7 +196,11 @@ app.on('ready', () => {
   if (!headlessExportProject) {
     createTray(mainWindow);
     // Off unless the user turned it on; a headless export never serves it.
-    void initializeAutomation(mainWindow);
+    void initializeAutomation(mainWindow).then(() => {
+      // Started hidden for recso-cli --launch, but with the API off (or failing
+      // to start) nothing could ever show it.
+      if (startInBackground && !isAutomationRunning()) mainWindow.show();
+    });
   }
 
   // Fire-and-forget: reports which adapter the engine and Chromium each landed

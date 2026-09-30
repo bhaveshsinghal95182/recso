@@ -52,7 +52,7 @@ recso-cli call settings.get '{"keys":["export.outputDir"]}'
 ```
 
 - `--json` prints results (and errors) as JSON, for scripts.
-- `--launch` starts recso first if it isn't running (in the background, window hidden until something shows it) and waits up to `--timeout` ms (default 30000) for the API. The API still has to be on in recso's settings, or `RECSO_AUTOMATION=1` has to be in the environment `recso-cli` runs in. `recso-cli` finds the recso it belongs to; `RECSO_APP=/path/to/recso` points it at another one.
+- `--launch` starts recso first if it isn't running (in the background, window hidden until something shows it) and waits up to `--timeout` ms (default 30000) for the API. The API still has to be on in recso's settings, or `RECSO_AUTOMATION=1` has to be in the environment `recso-cli` runs in; if it's off, recso opens its window as usual and `recso-cli` exits 3 once the timeout passes. `recso-cli` finds the recso it belongs to; `RECSO_APP=/path/to/recso` points it at another one.
 - Exit codes: `0` success, `1` the method failed (the error says why), `2` bad command line, `3` recso isn't running, its API is off, or the connection dropped.
 
 `recso-cli help` lists every command; the full usage is in the [reference](reference.md#recso-cli).
