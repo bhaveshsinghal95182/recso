@@ -305,13 +305,16 @@ export function runMcpServer(socketPath: string, options: McpServerOptions = {})
     });
     input.once('end', () => {
       for (const line of decoder.end().lines) receive(line);
-      ending = true;
-      client?.close();
-      const timeout = setTimeout(() => resolve(0), 2000);
-      void Promise.allSettled([...active]).then(() => {
+      // Answer what was asked before input ended (for up to 2 s), then hang up:
+      // closing the connection first would fail requests still in flight.
+      const finish = () => {
         clearTimeout(timeout);
+        ending = true;
+        client?.close();
         resolve(0);
-      });
+      };
+      const timeout = setTimeout(finish, 2000);
+      void Promise.allSettled([...active]).then(finish);
     });
   });
 }

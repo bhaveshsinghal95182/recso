@@ -154,6 +154,20 @@ describe('MCP session', () => {
     expect(s.lines[1].result.content).toEqual([{ type: 'text', text: '{\n  "text": "hi"\n}' }]);
   });
 
+  it('answers requests that arrived before input ended', async () => {
+    const connect = async () => fakeClient();
+    const s = session({ connect });
+    s.send('tools/list', 1);
+    s.send('tools/call', 2, { name: 'demo_echo', arguments: { text: 'hi' } });
+    s.input.end();
+    await s.until(2);
+    const byId = new Map(s.lines.map((line) => [line.id, line]));
+    expect(byId.get(1)?.result.tools.map((tool: { name: string }) => tool.name)).toContain(
+      'demo_echo',
+    );
+    expect(byId.get(2)?.result.structuredContent).toEqual({ text: 'hi' });
+  });
+
   it('lists only launch when unreachable and launch is available', async () => {
     const s = session({
       connect: async () => {
