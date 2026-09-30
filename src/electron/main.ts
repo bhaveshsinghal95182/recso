@@ -1,3 +1,6 @@
+// First: `recso --cli …` runs recso-cli and exits before the app starts.
+import './cli-handoff.js';
+
 import { app, BrowserWindow, ipcMain, screen } from 'electron';
 
 // APPX/MSIX Store apps launch with cwd = C:\WINDOWS\system32 (read-only).

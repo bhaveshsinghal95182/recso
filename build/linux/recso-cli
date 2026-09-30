@@ -1,0 +1,6 @@
+#!/bin/sh
+# recso-cli: the client for recso's Automation API (see docs/automation/README.md).
+# The deb installs this as /usr/bin/recso-cli. It runs the CLI bundled in the
+# app with recso's own executable in Node mode, so no separate Node is needed.
+exec env ELECTRON_RUN_AS_NODE=1 /opt/recso/recso \
+  /opt/recso/resources/app.asar/dist-electron/automation/cli/recso-cli.js "$@"

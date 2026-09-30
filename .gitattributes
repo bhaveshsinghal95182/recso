@@ -6,3 +6,6 @@
 # argument.
 .husky/* text eol=lf
 *.sh text eol=lf
+
+# cmd.exe scripts keep CRLF.
+*.cmd text eol=crlf

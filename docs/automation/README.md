@@ -32,12 +32,13 @@ There is no password or token: being able to open the socket or pipe is the perm
 
 A command-line client that ships with recso.
 
-| Install           | Command                                                                                                                                                       |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Linux `.deb`      | `recso-cli` (on `PATH`, in `/usr/bin`)                                                                                                                        |
-| Linux AppImage    | `./recso-<version>.AppImage --cli <command>`; an alias helps: `alias recso-cli='~/Applications/recso.AppImage --cli'`                                         |
-| Windows installer | `recso-cli` (`recso-cli.cmd` in recso's install folder, added to `PATH` if you ticked that option; otherwise `"%LOCALAPPDATA%\Programs\recso\recso-cli.cmd"`) |
-| From source       | `pnpm recso <command>` after `pnpm transpile:electron`                                                                                                        |
+| Install           | Command                                                                                                                                                                    |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Linux `.deb`      | `recso-cli` (on `PATH`, in `/usr/bin`)                                                                                                                                     |
+| Linux AppImage    | `./recso-<version>.AppImage --cli <command>`; an alias helps: `alias recso-cli='~/Applications/recso.AppImage --cli'`                                                      |
+| Windows installer | `recso-cli` (`recso-cli.cmd` in recso's install folder; the installer offers to add that folder to your `PATH`; otherwise `"%LOCALAPPDATA%\Programs\recso\recso-cli.cmd"`) |
+| Microsoft Store   | Not included yet: install from the installer to use the API.                                                                                                               |
+| From source       | `pnpm recso <command>` after `pnpm transpile:electron`                                                                                                                     |
 
 ```sh
 recso-cli status                        # is recso running, is the API on, what is it doing
@@ -76,7 +77,21 @@ Or in a project's `.mcp.json` (see [examples/mcp.json](examples/mcp.json)):
 }
 ```
 
-On Windows without `recso-cli` on `PATH`, give the full path to `recso-cli.cmd` as `command`. With the AppImage, `command` is the AppImage and `args` is `["--cli", "mcp"]`.
+On Windows, MCP clients start servers without a shell, and a `.cmd` needs one: use `cmd` as the command.
+
+```sh
+claude mcp add recso -- cmd /c recso-cli mcp
+```
+
+```json
+{
+  "mcpServers": {
+    "recso": { "command": "cmd", "args": ["/c", "recso-cli", "mcp"] }
+  }
+}
+```
+
+Without `recso-cli` on `PATH`, put the full path to `recso-cli.cmd` in its place. With the AppImage, `command` is the AppImage and `args` is `["--cli", "mcp"]`.
 
 The [agent guide](agent-guide.md) is written for the agent itself: what to call, in what order, and what the errors mean.
 

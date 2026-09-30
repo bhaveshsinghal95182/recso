@@ -26,16 +26,24 @@
       "libgbm1",
       "libvulkan1",
       "xdg-desktop-portal"
-    ]
+    ],
+    "fpm": ["build/linux/recso-cli=/usr/bin/recso-cli"]
   },
   "win": {
     "target": ["nsis", "appx"],
-    "icon": "public/R.png"
+    "icon": "public/R.png",
+    "extraFiles": [
+      {
+        "from": "build/win/recso-cli.cmd",
+        "to": "recso-cli.cmd"
+      }
+    ]
   },
   "nsis": {
     "oneClick": false,
     "allowToChangeInstallationDirectory": true,
-    "license": "build/license.txt"
+    "license": "build/license.txt",
+    "include": "build/win/installer.nsh"
   },
   "appx": {
     "displayName": "Recso",
