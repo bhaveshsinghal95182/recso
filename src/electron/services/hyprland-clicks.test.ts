@@ -226,6 +226,38 @@ describe.skipIf(process.platform === 'win32')('Hyprland click capture', () => {
     expect(fake.requests.filter((request) => request.startsWith('eval '))).toHaveLength(2);
   });
 
+  it('sends every command through a blocking requester instead of the socket when given one', async () => {
+    const fake = await fakeHyprland();
+    const sent: string[] = [];
+    let failing = false;
+    const capture = await startHyprlandClickCapture({
+      socketPath: fake.socketPath,
+      requestSync: (command) => {
+        if (failing) throw new Error('Hyprland socket read: timed out');
+        sent.push(command);
+        if (command === 'j/binds') return '[]';
+        if (command === 'j/monitors') return '[]';
+        return command.startsWith('repl ') ? 'clicks\nleft 99 10 20' : 'ok';
+      },
+      readUptime: async () => 100,
+      now: () => 5_000,
+    });
+    expect(capture).not.toBeNull();
+    expect(await capture?.drain()).toEqual([{ button: 'left', atEpochMs: 4_000, x: 10, y: 20 }]);
+    failing = true;
+    expect(await capture?.drain()).toEqual([]);
+    failing = false;
+    await capture?.stop();
+    expect(sent.map((command) => command.split(' ')[0])).toEqual([
+      'j/binds',
+      'j/monitors',
+      'eval',
+      'repl',
+      'eval',
+    ]);
+    expect(fake.requests).toEqual([]);
+  });
+
   it('returns an empty drain after the socket server exits', async () => {
     const fake = await fakeHyprland();
     const capture = await startHyprlandClickCapture({ socketPath: fake.socketPath });

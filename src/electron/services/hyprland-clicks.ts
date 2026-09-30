@@ -187,6 +187,13 @@ async function currentUptime(): Promise<number> {
 /** Resolves null when not on Hyprland (no HYPRLAND_INSTANCE_SIGNATURE), when the socket is unreachable, or when Hyprland rejects the install (non-Lua config: the reply to `eval` is not "ok"). Never throws. */
 export async function startHyprlandClickCapture(options?: {
   socketPath?: string;
+  /**
+   * A blocking round trip (velocity's `hyprlandIpc`), used instead of the
+   * socket. Hyprland waits on its main loop, cursor and all, between accepting
+   * a connection and reading its command; node writes on a later event-loop
+   * turn, so a busy main process froze the desktop for as long as it was busy.
+   */
+  requestSync?: (command: string) => string;
   readUptime?: () => Promise<number>;
   now?: () => number;
 }): Promise<HyprlandClickCapture | null> {
@@ -206,8 +213,11 @@ export async function startHyprlandClickCapture(options?: {
       (existsSync(runtimePath)
         ? runtimePath
         : path.join('/tmp', 'hypr', signature ?? '', '.socket.sock'));
+    const requestSync = options?.requestSync;
+    const send = async (command: string): Promise<string> =>
+      requestSync ? requestSync(command) : request(socketPath, command);
 
-    const binds: unknown = JSON.parse(await request(socketPath, 'j/binds'));
+    const binds: unknown = JSON.parse(await send('j/binds'));
     if (!Array.isArray(binds)) {
       return null;
     }
@@ -226,7 +236,7 @@ export async function startHyprlandClickCapture(options?: {
     // would otherwise read as the user's own and block capture for good.
     const leftovers = BUTTONS.filter((button) => boundBy(button, true));
     if (leftovers.length > 0) {
-      await request(socketPath, `eval ${removeScript(leftovers)}`);
+      await send(`eval ${removeScript(leftovers)}`);
     }
     const buttons = BUTTONS.filter((button) => !boundBy(button, false));
     if (buttons.length === 0) {
@@ -235,11 +245,11 @@ export async function startHyprlandClickCapture(options?: {
 
     let monitors: MonitorLayout[] = [];
     try {
-      monitors = parseMonitors(JSON.parse(await request(socketPath, 'j/monitors')));
+      monitors = parseMonitors(JSON.parse(await send('j/monitors')));
     } catch {
       // Cursor positions still work at scale 1 when monitor information is unavailable.
     }
-    if ((await request(socketPath, `eval ${installScript(buttons)}`)).trim() !== 'ok') {
+    if ((await send(`eval ${installScript(buttons)}`)).trim() !== 'ok') {
       return null;
     }
 
@@ -249,7 +259,7 @@ export async function startHyprlandClickCapture(options?: {
     return {
       async drain(): Promise<HyprlandClick[]> {
         try {
-          const reply = await request(socketPath, `repl ${DRAIN_SCRIPT}`);
+          const reply = await send(`repl ${DRAIN_SCRIPT}`);
           const uptimeNow = await readUptime();
           if (!Number.isFinite(uptimeNow)) {
             return [];
@@ -275,7 +285,7 @@ export async function startHyprlandClickCapture(options?: {
         }
         stopped = true;
         try {
-          await request(socketPath, `eval ${removeScript(buttons)}`);
+          await send(`eval ${removeScript(buttons)}`);
         } catch {
           // Cleanup is best effort, including when Hyprland has already exited.
         }

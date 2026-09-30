@@ -22,6 +22,8 @@ const require = createRequire(import.meta.url);
 
 interface VelocityCursorBindings {
   captureCursorSnapshotJson?: () => string;
+  /** Linux only: one round trip on Hyprland's control socket. */
+  hyprlandIpc?: (command: string) => string;
 }
 
 let velocityCursorBindingsCache: VelocityCursorBindings | null | undefined;
@@ -167,7 +169,9 @@ class MouseTrackerService {
       this.pollTimer = setInterval(() => this.pollCursorPosition(), this.moveThrottleMs);
       // Nor any clicks, which auto zoom is built from. Hyprland can report
       // them through binds that let every click through.
-      void startHyprlandClickCapture().then((capture) => {
+      void startHyprlandClickCapture({
+        requestSync: getVelocityCursorBindings()?.hyprlandIpc,
+      }).then((capture) => {
         if (this.isTracking && this.recordingId === recordingId && !this.clickCapture) {
           this.clickCapture = capture;
         } else {
@@ -302,6 +306,11 @@ class MouseTrackerService {
     MouseEvent,
     'cursorDataUrl' | 'cursorHotspotX' | 'cursorHotspotY' | 'cursorHandleHex'
   > {
+    // velocity's Linux snapshot has no cursor image or handle, and each one
+    // costs Hyprland two more round trips on its main loop.
+    if (process.platform === 'linux') {
+      return {};
+    }
     const velocity = getVelocityCursorBindings();
     if (!velocity?.captureCursorSnapshotJson) {
       return {};

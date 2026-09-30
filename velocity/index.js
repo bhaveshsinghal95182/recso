@@ -717,6 +717,7 @@ module.exports.generateSelfSignedCertificate = nativeBinding.generateSelfSignedC
 module.exports.generateSpritesheet = nativeBinding.generateSpritesheet
 module.exports.gpuDecoderProfiles = nativeBinding.gpuDecoderProfiles
 module.exports.gpuMemory = nativeBinding.gpuMemory
+module.exports.hyprlandIpc = nativeBinding.hyprlandIpc
 module.exports.isCursorSettingsSupported = nativeBinding.isCursorSettingsSupported
 module.exports.listAudioCaptureDevices = nativeBinding.listAudioCaptureDevices
 module.exports.listAvailableWindows = nativeBinding.listAvailableWindows

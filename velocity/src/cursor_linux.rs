@@ -12,6 +12,7 @@
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -67,6 +68,12 @@ fn hyprland_request(command: &str) -> Result<Value, String> {
 }
 
 /// A command whose reply is plain text ("ok" or an error), not JSON.
+///
+/// Hyprland serves its control socket on the compositor's main loop and, once
+/// it accepts a connection, blocks in `poll()` until the command arrives. A
+/// client that connects and writes later -- an async socket in a busy event
+/// loop -- freezes the whole desktop for that gap, so connect and write here
+/// happen back to back.
 fn hyprland_command(command: &str) -> Result<String, String> {
   let mut stream =
     UnixStream::connect(hyprland_socket()?).map_err(|error| format!("Hyprland socket: {error}"))?;
@@ -208,6 +215,31 @@ fn to_physical(x: f64, y: f64, monitors: &[MonitorLayout]) -> (f64, f64) {
   (x * scale, y * scale)
 }
 
+/// How long a fetched monitor layout is reused. Every request stalls
+/// Hyprland's main loop for its round trip, and the layout almost never
+/// changes during a recording, so the sampler asks for it about once a second
+/// instead of with every position.
+const MONITORS_TTL: Duration = Duration::from_secs(1);
+
+struct MonitorCache {
+  fetched: Option<(Instant, Vec<MonitorLayout>)>,
+}
+
+impl MonitorCache {
+  fn get(&mut self, now: Instant, fetch: impl FnOnce() -> Vec<MonitorLayout>) -> Vec<MonitorLayout> {
+    if let Some((at, monitors)) = &self.fetched {
+      if now.duration_since(*at) < MONITORS_TTL {
+        return monitors.clone();
+      }
+    }
+    let monitors = fetch();
+    self.fetched = Some((now, monitors.clone()));
+    monitors
+  }
+}
+
+static MONITORS: Mutex<MonitorCache> = Mutex::new(MonitorCache { fetched: None });
+
 fn cursor_position() -> Result<(i64, i64), String> {
   let position = hyprland_request("j/cursorpos")?;
   let x = position
@@ -218,9 +250,14 @@ fn cursor_position() -> Result<(i64, i64), String> {
     .get("y")
     .and_then(Value::as_f64)
     .ok_or("Hyprland cursorpos had no y")?;
-  let monitors = hyprland_request("j/monitors")
-    .map(|value| parse_monitors(&value))
-    .unwrap_or_default();
+  let monitors = MONITORS
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner())
+    .get(Instant::now(), || {
+      hyprland_request("j/monitors")
+        .map(|value| parse_monitors(&value))
+        .unwrap_or_default()
+    });
   let (x, y) = to_physical(x, y, &monitors);
   Ok((x.round() as i64, y.round() as i64))
 }
@@ -249,6 +286,15 @@ fn snapshot_value() -> Value {
       "windowUnderCursor": null,
     }),
   }
+}
+
+/// Linux only: one command on Hyprland's control socket, and its reply as text.
+///
+/// For the app's Hyprland IPC (click capture): a blocking round trip that
+/// never leaves the compositor waiting on the caller's event loop.
+#[napi]
+pub fn hyprland_ipc(command: String) -> napi::Result<String> {
+  hyprland_command(&command).map_err(napi::Error::from_reason)
 }
 
 #[napi]
@@ -327,6 +373,21 @@ mod tests {
     }
     drop(guard);
     assert_eq!(no_hardware_cursors(), Some(before));
+  }
+
+  #[test]
+  fn the_monitor_layout_is_fetched_once_a_second() {
+    let mut cache = MonitorCache { fetched: None };
+    let start = Instant::now();
+    let mut fetches = 0;
+    let mut fetch = || {
+      fetches += 1;
+      vec![monitor(0.0, 0.0, 1536.0, 864.0, 1.25)]
+    };
+    assert_eq!(cache.get(start, &mut fetch).len(), 1);
+    assert_eq!(cache.get(start + Duration::from_millis(999), &mut fetch).len(), 1);
+    assert_eq!(cache.get(start + MONITORS_TTL, &mut fetch).len(), 1);
+    assert_eq!(fetches, 2);
   }
 
   #[test]

@@ -602,6 +602,14 @@ export interface GpuMemory {
   budget: number
 }
 
+/**
+ * Linux only: one command on Hyprland's control socket, and its reply as text.
+ *
+ * For the app's Hyprland IPC (click capture): a blocking round trip that
+ * never leaves the compositor waiting on the caller's event loop.
+ */
+export declare function hyprlandIpc(command: string): string
+
 export declare function isCursorSettingsSupported(): boolean
 
 /**
