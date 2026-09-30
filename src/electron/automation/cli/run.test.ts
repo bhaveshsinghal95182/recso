@@ -71,6 +71,20 @@ async function server(socketPath = scratchSocketPath()) {
     }),
   });
   registry.register({
+    name: 'recording.stop',
+    description: 'stop',
+    params: { type: 'object' },
+    result: {},
+    handler: () => ({ projectDir: '/v/demo', videoPath: '/v/demo/demo.mp4', durationMs: 1200 }),
+  });
+  registry.register({
+    name: 'export.start',
+    description: 'export',
+    params: { type: 'object' },
+    result: {},
+    handler: () => ({ exportId: 'x1', state: 'finished', output: '/v/Footage/demo.mp4' }),
+  });
+  registry.register({
     name: 'events.subscribe',
     description: 'subscribe',
     params: { type: 'object' },
@@ -179,13 +193,26 @@ describe('runCli', () => {
   });
 });
 
+describe('printed results', () => {
+  it('prints the paths scripts need from record stop and export --wait', async () => {
+    const { transport } = await server();
+    const { io: target, out } = io(transport.path);
+    expect(await runCli(['record', 'stop', '--socket', transport.path], target)).toBe(0);
+    expect(out.pop()).toBe('/v/demo\n');
+    expect(await runCli(['export', '/v/demo', '--wait', '--socket', transport.path], target)).toBe(
+      0,
+    );
+    expect(out.pop()).toBe('/v/Footage/demo.mp4\n');
+    expect(await runCli(['--json', 'record', 'stop', '--socket', transport.path], target)).toBe(0);
+    expect(JSON.parse(out.pop()!)).toMatchObject({ projectDir: '/v/demo', durationMs: 1200 });
+  });
+});
+
 describe('formatHuman', () => {
   it('formats known results and falls back for incomplete shapes', () => {
     expect(formatHuman('start', { videoPath: '/x' })).toBe('Recording → /x');
-    expect(formatHuman('stop', { videoPath: '/x', durationMs: 1200, projectDir: '/p' })).toBe(
-      'Saved /x (1.2 s)\nProject: /p',
-    );
-    expect(formatHuman('export', { output: '/x', state: 'finished' })).toBe('Exported /x');
+    expect(formatHuman('stop', { videoPath: '/x', durationMs: 1200, projectDir: '/p' })).toBe('/p');
+    expect(formatHuman('export', { output: '/x', state: 'finished' })).toBe('/x');
     expect(
       formatHuman('describe', {
         methods: [{ name: 'a', description: 'First. Second' }],

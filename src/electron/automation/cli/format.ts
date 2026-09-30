@@ -88,9 +88,9 @@ export function formatHuman(name: string, result: unknown): string {
       typeof data.durationMs === 'number' &&
       typeof data.projectDir === 'string'
     )
-      return `Saved ${data.videoPath} (${(data.durationMs / 1000).toFixed(1)} s)\nProject: ${data.projectDir}`;
+      return data.projectDir;
     if (name === 'export' && typeof data.output === 'string') {
-      if (data.state === 'finished') return `Exported ${data.output}`;
+      if (data.state === 'finished') return data.output;
       if (typeof data.exportId === 'string')
         return `Exporting → ${data.output} (id ${data.exportId})`;
     }

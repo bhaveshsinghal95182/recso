@@ -20,6 +20,7 @@ export type Command =
 export interface ParsedCli {
   global: GlobalOptions;
   command: Command;
+  /** How to print the result: the command's name, or its subcommand's (`record stop` → `stop`). */
   name: string;
 }
 
@@ -94,14 +95,6 @@ function splitFlag(token: string): [string, string | undefined] {
   return index < 0 ? [token, undefined] : [token.slice(0, index), token.slice(index + 1)];
 }
 
-function call(
-  name: string,
-  method: string,
-  params: Record<string, unknown> = {},
-): ParsedCli['command'] {
-  return { kind: 'call', method, params };
-}
-
 export function parseCliArgs(argv: string[]): ParsedCli {
   const global: GlobalOptions = {
     json: false,
@@ -133,6 +126,16 @@ export function parseCliArgs(argv: string[]): ParsedCli {
     } else tokens.push(argv[i]);
   }
   const [name = 'help', ...rest] = tokens;
+  // The command's name, or for a subcommand the name its result is printed by.
+  let format = name;
+  const call = (
+    formatName: string,
+    method: string,
+    params: Record<string, unknown> = {},
+  ): Command => {
+    format = formatName;
+    return { kind: 'call', method, params };
+  };
   let command: Command;
   if (name === 'help') {
     requireCount(rest, Math.min(rest.length, 1), 'help [topic]');
@@ -277,5 +280,5 @@ export function parseCliArgs(argv: string[]): ParsedCli {
     requireCount(rest, 0, 'mcp');
     command = { kind: 'mcp' };
   } else throw new UsageError(`Unknown command: ${name}`);
-  return { global, command, name };
+  return { global, command, name: format };
 }
