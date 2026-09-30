@@ -84,6 +84,14 @@ describe('parseHooksConfig', () => {
     expect(result.errors[0]).toMatch(/^automation\.json is not valid JSON: /);
   });
 
+  it('reads a file saved with a UTF-8 byte-order mark', () => {
+    const result = parseHooksConfig(
+      `\uFEFF${JSON.stringify({ hooks: { 'export.finished': [['echo', 'done']] } })}`,
+      knownEvents,
+    );
+    expect(result).toEqual({ hooks: { 'export.finished': [['echo', 'done']] }, errors: [] });
+  });
+
   it('drops unknown events while keeping known siblings', () => {
     const result = parseHooksConfig(
       JSON.stringify({ hooks: { unknown: 'bad', 'export.finished': [['echo', 'done']] } }),

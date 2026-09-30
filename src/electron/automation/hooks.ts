@@ -37,7 +37,8 @@ export function parseHooksConfig(text: string, knownEvents: readonly string[]): 
   const errors: string[] = [];
   let parsed: unknown;
   try {
-    parsed = JSON.parse(text) as unknown;
+    // Windows PowerShell 5.1 and some editors save UTF-8 with a byte-order mark.
+    parsed = JSON.parse(text.replace(/^\uFEFF/, '')) as unknown;
   } catch (error) {
     return { hooks, errors: [`${HOOKS_FILE} is not valid JSON: ${errorMessage(error)}`] };
   }
