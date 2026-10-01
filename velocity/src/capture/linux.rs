@@ -9,6 +9,7 @@ pub(crate) mod encoder;
 pub(crate) mod mp4_writer;
 pub(crate) mod nvenc;
 mod nvenc_sys;
+pub(crate) mod picked;
 pub(crate) mod pipewire_stream;
 pub(crate) mod portal;
 pub(crate) mod screen;

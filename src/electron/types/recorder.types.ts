@@ -81,6 +81,11 @@ export interface DesktopSource {
   height?: number;
   /** Whether this is the primary monitor */
   isPrimary?: boolean;
+  /**
+   * Linux: the source comes from the system's picker. `choose` until the user
+   * picks; `picked` while a pick is held for the next recording.
+   */
+  portal?: 'choose' | 'picked';
 }
 
 /** Status of a recording in the database */

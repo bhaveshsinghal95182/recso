@@ -90,6 +90,10 @@ export function registerRecorderHandlers(): void {
     return RecorderService.getSources();
   });
 
+  // Linux: the system picker, opened from the source tile.
+  ipcMain.handle('recorder:pick-portal-source', () => RecorderService.pickPortalSource());
+  ipcMain.handle('recorder:release-portal-source', () => RecorderService.releasePortalSource());
+
   // Start a new recording
   ipcMain.handle('recorder:start', async (_event, config: RecordingConfig) =>
     startRecordingSession(config),

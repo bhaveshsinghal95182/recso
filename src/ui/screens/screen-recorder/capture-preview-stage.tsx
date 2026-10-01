@@ -1,4 +1,4 @@
-import { AppWindow, Monitor, RefreshCw } from 'lucide-react';
+import { AppWindow, Monitor, MousePointerClick, RefreshCw } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -19,6 +19,10 @@ interface CapturePreviewStageProps {
   cameraSource?: 'local' | 'phone';
   cameraPreviewError?: string | null;
   onRefresh: () => void;
+  /** Linux: the system's screen picker is open. */
+  isPickingSource?: boolean;
+  /** Linux: open the system's screen picker for a `portal` source. */
+  onPickPortalSource?: () => void;
 }
 
 export function CapturePreviewStage({
@@ -33,6 +37,8 @@ export function CapturePreviewStage({
   cameraSource = 'local',
   cameraPreviewError,
   onRefresh,
+  isPickingSource = false,
+  onPickPortalSource,
 }: CapturePreviewStageProps) {
   const isActive = isRecording || isPaused || isStopping;
   const cornerBase =
@@ -81,10 +87,45 @@ export function CapturePreviewStage({
                   alt={selectedSource.name}
                   className="block max-h-full max-w-full rounded-[15px] object-contain"
                 />
+              ) : selectedSource.portal === 'choose' && onPickPortalSource ? (
+                <div className="grid h-full w-full place-items-center content-center gap-4 text-white/30">
+                  <Monitor size={72} />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={onPickPortalSource}
+                    disabled={isPickingSource || isActive}
+                    className="border border-white/15 bg-white/10 text-white/85 backdrop-blur-[14px]"
+                  >
+                    {isPickingSource ? (
+                      <RefreshCw className="size-4 animate-spin" />
+                    ) : (
+                      <MousePointerClick className="size-4" />
+                    )}
+                    {isPickingSource ? 'Waiting for your choice' : 'Choose screen or window'}
+                  </Button>
+                </div>
               ) : (
                 <div className="grid h-full w-full place-items-center text-white/30">
                   {selectedSource.isScreen ? <Monitor size={72} /> : <AppWindow size={72} />}
                 </div>
+              )}
+              {selectedSource.portal === 'picked' && onPickPortalSource && !isActive && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={onPickPortalSource}
+                  disabled={isPickingSource}
+                  className="absolute left-[clamp(14px,2.2vw,28px)] top-[clamp(14px,2.2vw,28px)] z-[3] border border-white/15 bg-[rgba(10,12,12,0.72)] text-white/80 backdrop-blur-[14px]"
+                >
+                  {isPickingSource ? (
+                    <RefreshCw className="size-4 animate-spin" />
+                  ) : (
+                    <MousePointerClick className="size-4" />
+                  )}
+                  Change
+                </Button>
               )}
               <span
                 className={cn(
@@ -148,7 +189,7 @@ export function CapturePreviewStage({
           <strong className="min-w-0 truncate font-[650] text-white/90">
             {selectedSource.name}
           </strong>
-          {selectedSource.width && selectedSource.height && (
+          {selectedSource.portal !== 'choose' && selectedSource.width && selectedSource.height && (
             <span>
               {selectedSource.width} x {selectedSource.height}
             </span>

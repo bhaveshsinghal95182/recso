@@ -227,6 +227,15 @@ electron.contextBridge.exposeInMainWorld('electron', {
   recorder: {
     getSources: (): Promise<DesktopSource[]> => electron.ipcRenderer.invoke('recorder:get-sources'),
 
+    /** Linux: open the system picker now and hold the choice for the next recording. */
+    pickPortalSource: (): Promise<
+      | { ok: true; source: DesktopSource }
+      | { ok: false; cancelled: boolean; error?: string }
+    > => electron.ipcRenderer.invoke('recorder:pick-portal-source'),
+    /** Linux: let go of a picked source. */
+    releasePortalSource: (): Promise<void> =>
+      electron.ipcRenderer.invoke('recorder:release-portal-source'),
+
     /** Microphones as the native recorder sees them, for when it is capturing. */
     listAudioCaptureDevices: (): Promise<
       Array<{ id: string; label: string; isDefault: boolean }>

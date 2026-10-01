@@ -16,10 +16,24 @@ use std::thread::{self, JoinHandle};
 use ashpd::desktop::screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType};
 use ashpd::desktop::PersistMode;
 
+/// Whether the user picked a whole screen or one window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SourceKind {
+  Screen,
+  Window,
+  /// The portal did not say (version 1 portals omit the source type).
+  Unknown,
+}
+
 /// What the user picked.
 pub(crate) struct Grant {
   /// The private PipeWire remote the node must be reached through.
   pub(crate) remote: OwnedFd,
+  /// A second remote to the same session, asked for by `open`'s `preview`.
+  /// One PipeWire client per remote: a stream that has disconnected cannot
+  /// hand its socket on, so a thumbnail and the recording each need their own.
+  pub(crate) preview_remote: Option<OwnedFd>,
+  pub(crate) kind: SourceKind,
   pub(crate) node_id: u32,
   /// The source's size as the portal reports it, if it does. The stream's own
   /// format is authoritative; this is only a hint for sizing the encoder.
@@ -77,13 +91,17 @@ impl Session {
 /// Blocks until the user picks or cancels -- there is no timeout, because the
 /// wait is a person deciding. `sources` chooses between screens only and
 /// screens plus windows.
-pub(crate) fn open(windows_too: bool, request: PortalRequest) -> Result<(Grant, Session), String> {
+pub(crate) fn open(
+  windows_too: bool,
+  request: PortalRequest,
+  preview: bool,
+) -> Result<(Grant, Session), String> {
   let (grant_tx, grant_rx) = sync_channel::<Result<Grant, String>>(1);
   let (close_tx, close_rx) = sync_channel::<()>(1);
 
   let thread = thread::Builder::new()
     .name("velocity-portal".to_string())
-    .spawn(move || run(windows_too, request, grant_tx, close_rx))
+    .spawn(move || run(windows_too, request, preview, grant_tx, close_rx))
     .map_err(|error| format!("could not start the portal thread: {error}"))?;
 
   match grant_rx.recv() {
@@ -108,6 +126,7 @@ pub(crate) fn open(windows_too: bool, request: PortalRequest) -> Result<(Grant, 
 fn run(
   windows_too: bool,
   request: PortalRequest,
+  preview: bool,
   grant_tx: SyncSender<Result<Grant, String>>,
   close_rx: Receiver<()>,
 ) {
@@ -137,7 +156,7 @@ fn run(
       }
     };
 
-    let result = select_and_start(&proxy, &session, windows_too, &request).await;
+    let result = select_and_start(&proxy, &session, windows_too, &request, preview).await;
     let granted = result.is_ok();
     let _ = grant_tx.send(result);
 
@@ -156,6 +175,7 @@ async fn select_and_start(
   session: &ashpd::desktop::Session<Screencast>,
   windows_too: bool,
   request: &PortalRequest,
+  preview: bool,
 ) -> Result<Grant, String> {
   let (persist_mode, restore_token) = request.persistence();
   let sources = if windows_too {
@@ -201,9 +221,21 @@ async fn select_and_start(
     .open_pipe_wire_remote(session, Default::default())
     .await
     .map_err(|error| format!("the portal would not open a PipeWire remote: {error}"))?;
+  // A thumbnail is a nicety: without a second remote the pick still stands.
+  let preview_remote = if preview {
+    proxy.open_pipe_wire_remote(session, Default::default()).await.ok()
+  } else {
+    None
+  };
 
   Ok(Grant {
     remote,
+    preview_remote,
+    kind: match stream.source_type() {
+      Some(SourceType::Monitor) => SourceKind::Screen,
+      Some(SourceType::Window) => SourceKind::Window,
+      _ => SourceKind::Unknown,
+    },
     node_id: stream.pipe_wire_node_id(),
     size: stream
       .size()

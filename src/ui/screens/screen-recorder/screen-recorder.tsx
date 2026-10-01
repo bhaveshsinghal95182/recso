@@ -37,6 +37,9 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
   const [format] = useState<string>(formats[0].value);
   const [isStarting, setIsStarting] = useState(false);
   const [isLoading, setIsLoading] = useState(sources.length === 0);
+  /** Linux: the system's screen picker is open. */
+  const [isPickingSource, setIsPickingSource] = useState(false);
+  const [pickError, setPickError] = useState<string | null>(null);
 
   const [recordMic, setRecordMic] = useState(false);
   const [recordCamera, setRecordCamera] = useState(false);
@@ -183,6 +186,42 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
     setSelectedSourceId(defaultSource.id);
   }, [selectedSourceId, sources]);
 
+  // Linux: a source picked but not recorded holds a screen-share session open;
+  // end it when the recorder goes away.
+  useEffect(() => {
+    return () => {
+      void window.electron.recorder.releasePortalSource?.().catch(console.warn);
+    };
+  }, []);
+
+  /**
+   * Linux: open the system's screen and window picker now, so the stage shows
+   * what will be recorded. Closing the picker keeps whatever was there.
+   */
+  const pickPortalSource = async () => {
+    if (isPickingSource) return;
+    setIsPickingSource(true);
+    setPickError(null);
+    try {
+      const result = await window.electron.recorder.pickPortalSource();
+      if (result.ok) {
+        await refreshSources();
+        setSelectedSourceId(result.source.id);
+      } else if (!result.cancelled) {
+        setPickError(result.error ?? 'The screen picker could not open.');
+      }
+    } catch (err) {
+      setPickError(err instanceof Error ? err.message : 'The screen picker could not open.');
+    } finally {
+      setIsPickingSource(false);
+    }
+  };
+
+  const handleSourceSelect = (id: string) => {
+    setSelectedSourceId(id);
+    if (sources.find((source) => source.id === id)?.portal) void pickPortalSource();
+  };
+
   const handleRefreshSources = async () => {
     setIsLoading(true);
     await refreshSources();
@@ -234,7 +273,7 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
 
   return (
     <div className="recorder-screen animate-in fade-in duration-300">
-      {error && <div className="recorder-error-banner">{error}</div>}
+      {(error || pickError) && <div className="recorder-error-banner">{error ?? pickError}</div>}
 
       <CapturePreviewStage
         selectedSource={selectedSource}
@@ -250,6 +289,8 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
         cameraSource={cameraSource}
         cameraPreviewError={cameraPreviewError}
         onRefresh={handleRefreshSources}
+        isPickingSource={isPickingSource}
+        onPickPortalSource={() => void pickPortalSource()}
       />
 
       <FloatingRecorderToolbar
@@ -274,7 +315,7 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
         nativeMicDeviceId={nativeMicDeviceId}
         onNativeMicDeviceChange={changeNativeMicDeviceId}
         cameras={cameras}
-        onSourceSelect={setSelectedSourceId}
+        onSourceSelect={handleSourceSelect}
         onRefreshSources={refreshSources}
         setIsLoading={setIsLoading}
         onOutputDirChange={changeOutputDir}

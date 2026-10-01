@@ -21,6 +21,7 @@ use super::super::stopper::Stopper;
 use super::audio::{self, AudioCapture, AudioRequest};
 use super::encoder::{AudioSettings, Mp4Recorder, PixelOrder, VideoSettings};
 use super::pipewire_stream::{self, Frame, NodeSource, NodeStream};
+use super::picked;
 use super::portal::{self, PortalRequest, Session};
 use crate::cursor::HardwareCursor;
 
@@ -146,7 +147,22 @@ fn start(
 
   // Before the picker, so the very first frame is already free of it.
   let cursor = HardwareCursor::acquire();
-  let (grant, session) = portal::open(true, portal_request)?;
+  // A source picked ahead of time in the recorder, unless the Automation API
+  // asked for a remembered one, which needs the portal's restore token. Either
+  // way the recorder's pick is used up: its tile goes back to "choose".
+  let held = picked::take();
+  let held = if portal_request.remember {
+    if let Some((_, session)) = held {
+      session.close();
+    }
+    None
+  } else {
+    held
+  };
+  let (grant, session) = match held {
+    Some(held) => held,
+    None => portal::open(true, portal_request, false)?,
+  };
   let restore_token = grant.restore_token;
   let source = NodeSource {
     remote: Some(grant.remote),

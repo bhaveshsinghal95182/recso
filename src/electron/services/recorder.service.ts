@@ -91,6 +91,15 @@ interface VelocityBindings {
     rememberSource?: boolean;
     portalRestoreToken?: string;
   }) => VelocityStopper;
+  /** Linux only; see velocity's `pickScreenSource`. */
+  pickScreenSource?: () => Promise<{
+    kind: string;
+    width?: number;
+    height?: number;
+    thumbnailJpeg?: Buffer;
+  }>;
+  /** Linux only; see velocity's `releaseScreenSource`. */
+  releaseScreenSource?: () => void;
   startWindowRecordingV2: (options: {
     windowTitle: string;
     outputPath: string;
@@ -595,26 +604,83 @@ export async function getSources(): Promise<DesktopSource[]> {
  * On Wayland an app cannot list or look at other windows. Screen capture goes
  * through the xdg-desktop-portal, whose own dialog is the picker -- and
  * `desktopCapturer.getSources` would open that dialog just to fill this list.
- * So the list holds a single entry, and velocity opens the portal when the
- * recording starts, where the user picks a screen or a window.
+ * So the list holds a single entry. Clicking it opens the picker
+ * (`pickPortalSource`), and the entry then shows what was picked; a recording
+ * started without a pick opens the picker itself.
  */
 function getPortalSources(): DesktopSource[] {
   const primaryDisplay = screen.getPrimaryDisplay();
   const bounds = scaleDisplayBounds(primaryDisplay.bounds, primaryDisplay.scaleFactor);
-  const source: DesktopSource = {
+  const source: DesktopSource = pickedPortalSource ?? {
     id: 'screen:portal',
-    name: 'Screen or window (chosen when recording starts)',
+    name: 'Choose a screen or window',
     thumbnailDataUrl: '',
     isScreen: true,
     isPrimary: true,
     ...bounds,
+    portal: 'choose',
   };
 
+  // Recorded as a screen whatever was picked: on Linux both go through the
+  // portal, and the window path would want a title the portal never gives.
   sourceMetaById = new Map([
     [source.id, { name: source.name, isScreen: true, isPrimary: true, bounds }],
   ]);
 
   return [source];
+}
+
+/** Linux: the source picked ahead of the recording, while velocity holds it. */
+let pickedPortalSource: DesktopSource | null = null;
+
+export type PortalPickResult =
+  | { ok: true; source: DesktopSource }
+  | { ok: false; cancelled: boolean; error?: string };
+
+/** Linux: open the system picker now and hold the choice for the next recording. */
+export async function pickPortalSource(): Promise<PortalPickResult> {
+  const velocity = getVelocityBindings();
+  if (typeof velocity.pickScreenSource !== 'function') {
+    return {
+      ok: false,
+      cancelled: false,
+      error: 'This build opens the picker when recording starts.',
+    };
+  }
+  try {
+    const picked = await velocity.pickScreenSource();
+    const isWindow = picked.kind === 'window';
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const bounds = scaleDisplayBounds(primaryDisplay.bounds, primaryDisplay.scaleFactor);
+    pickedPortalSource = {
+      id: 'screen:portal-picked',
+      name: isWindow ? 'Picked window' : 'Picked screen',
+      thumbnailDataUrl: picked.thumbnailJpeg
+        ? `data:image/jpeg;base64,${Buffer.from(picked.thumbnailJpeg).toString('base64')}`
+        : '',
+      isScreen: !isWindow,
+      isPrimary: true,
+      ...bounds,
+      // Shown as the source's size; the recording keeps the display's bounds.
+      width: picked.width ?? bounds.width,
+      height: picked.height ?? bounds.height,
+      portal: 'picked',
+    };
+    return { ok: true, source: pickedPortalSource };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, cancelled: /cancelled/i.test(message), error: message };
+  }
+}
+
+/** Linux: let go of a picked source, as when the recorder closes. */
+export function releasePortalSource(): void {
+  pickedPortalSource = null;
+  try {
+    getVelocityBindings().releaseScreenSource?.();
+  } catch {
+    // Nothing is held without the engine.
+  }
 }
 
 export function resolveMouseTrackingBounds(sourceId: string): SourceCaptureBounds | undefined {
@@ -947,6 +1013,9 @@ export function startRecording(config: RecordingConfig): StartRecordingResult {
         return { success: false, error: webcamProblem };
       }
     }
+
+    // velocity took the picked source, if one was held.
+    pickedPortalSource = null;
 
     createRecording({
       id: recordingId,

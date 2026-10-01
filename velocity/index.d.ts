@@ -722,6 +722,23 @@ export interface NativeWindowRecordingOptions {
 export declare function phoneCameraStatus(): PhoneCameraStatus
 
 /** What the phone link is doing, for the UI to report. */
+/**
+ * Linux only: show the portal's screen and window picker now, and hold the
+ * choice for the next recording. Rejects with "screen selection was
+ * cancelled" when the user closes the picker.
+ */
+export declare function pickScreenSource(): Promise<PickedScreenSource>
+
+/** Linux only: what the user picked in the portal, for the recorder's source tile. */
+export interface PickedScreenSource {
+  /** "screen", "window", or "unknown" when the portal does not say. */
+  kind: string
+  width?: number
+  height?: number
+  /** A JPEG of the source's first frame, when one arrived in time. */
+  thumbnailJpeg?: Buffer
+}
+
 export interface PhoneCameraStatus {
   /** Frames accepted since the process started. */
   framesReceived: number
@@ -878,6 +895,9 @@ export interface RecordingMediaInfo {
    */
   usable: boolean
 }
+
+/** Linux only: let go of a picked source that no recording took. */
+export declare function releaseScreenSource(): void
 
 /**
  * Forget any frame still sitting in the slot.

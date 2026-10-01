@@ -649,6 +649,17 @@ interface ElectronAPI {
     getSources: () => Promise<DesktopSource[]>;
 
     /**
+     * Linux: open the system's screen and window picker now, and hold the
+     * choice for the next recording. On Wayland only that picker may show
+     * what is on screen, so the source list has one entry that opens it.
+     */
+    pickPortalSource: () => Promise<
+      { ok: true; source: DesktopSource } | { ok: false; cancelled: boolean; error?: string }
+    >;
+    /** Linux: let go of a picked source that no recording took. */
+    releasePortalSource: () => Promise<void>;
+
+    /**
      * Microphones as the native recorder sees them.
      *
      * Its ids go to `nativeMicDeviceId`. The browser's `enumerateDevices` ids
