@@ -3,13 +3,20 @@
   "files": ["dist-electron/**/*", "dist-react/**/*", "package.json"],
   "extraResources": ["public/**/*", "velocity/index.js", "velocity/*.node"],
   "icon": "./public/R.png",
+  "publish": {
+    "provider": "github",
+    "owner": "bhaveshsinghal95182",
+    "repo": "recso-releases",
+    "releaseType": "draft"
+  },
   "mac": {
     "target": "dmg"
   },
   "linux": {
     "target": ["AppImage", "deb"],
     "icon": "build/linux/icons",
-    "category": "Utility"
+    "category": "Utility",
+    "maintainer": "Bhavesh Singhal <work.bhavesh22@gmail.com>"
   },
   "deb": {
     "depends": [
@@ -51,6 +58,7 @@
     "publisherDisplayName": "Descentkatil",
     "publisher": "CN=ADBBA92C-68FC-4614-8695-A08D2C192895",
     "identityName": "Descentkatil.Recso",
-    "applicationId": "Recso"
+    "applicationId": "Recso",
+    "publish": null
   }
 }
