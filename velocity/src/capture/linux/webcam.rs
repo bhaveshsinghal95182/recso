@@ -7,17 +7,20 @@
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender, TryRecvError};
+use std::sync::mpsc::{
+  channel, sync_channel, Receiver, RecvTimeoutError, Sender, SyncSender, TryRecvError,
+  TrySendError,
+};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use image::codecs::jpeg::JpegEncoder;
-use image::imageops::FilterType;
-use image::{ExtendedColorType, RgbImage};
+use image::ExtendedColorType;
 use napi_derive::napi;
 use v4l::buffer::Type;
 use v4l::capability::Flags;
+use v4l::control::{Control, Value};
 use v4l::format::{Format, FourCC};
 use v4l::fraction::Fraction;
 use v4l::frameinterval::FrameIntervalEnum;
@@ -89,10 +92,42 @@ pub fn list_webcam_devices() -> Vec<WebcamDeviceInfo> {
     .collect()
 }
 
+/// `V4L2_CID_EXPOSURE_AUTO_PRIORITY`, which v4l2-ctl calls
+/// `exposure_dynamic_framerate`: when on, auto exposure may lengthen the frame
+/// interval, and in a dim room a 30 fps camera delivers about 17.
+const EXPOSURE_DYNAMIC_FRAMERATE: u32 = 0x009a_0903;
+
 struct Camera {
   dev: Device,
   format: Format,
   fps: u32,
+  /// Dynamic frame rate was on when the camera was opened; switch it back on
+  /// at close, since the setting outlives the process.
+  restore_dynamic_framerate: bool,
+}
+impl Drop for Camera {
+  fn drop(&mut self) {
+    if self.restore_dynamic_framerate {
+      let _ = self.dev.set_control(Control {
+        id: EXPOSURE_DYNAMIC_FRAMERATE,
+        value: Value::Boolean(true),
+      });
+    }
+  }
+}
+
+/// Hold the negotiated frame rate. Returns whether the setting was changed.
+fn hold_frame_rate(dev: &Device) -> bool {
+  let Ok(Control { value: Value::Boolean(true), .. }) = dev.control(EXPOSURE_DYNAMIC_FRAMERATE)
+  else {
+    return false;
+  };
+  dev
+    .set_control(Control {
+      id: EXPOSURE_DYNAMIC_FRAMERATE,
+      value: Value::Boolean(false),
+    })
+    .is_ok()
 }
 
 /// Negotiate once and keep the driver's returned geometry and cadence.
@@ -167,7 +202,8 @@ fn open_camera(id: Option<&str>, target_fps: u32) -> Result<Camera, String> {
   } else {
     target_fps.max(1)
   };
-  Ok(Camera { dev, format, fps })
+  let restore_dynamic_framerate = hold_frame_rate(&dev);
+  Ok(Camera { dev, format, fps, restore_dynamic_framerate })
 }
 
 struct Frame {
@@ -177,6 +213,28 @@ struct Frame {
   pts: i64,
 }
 
+/// When the camera captured a frame, from the buffer's `CLOCK_MONOTONIC`
+/// timestamp (the clock `Instant` reads on Linux). Stamping a frame after
+/// decoding it instead adds the decode time, which varies by a few
+/// milliseconds per frame and shows as jitter. Falls back to now for a
+/// timestamp that is missing or implausibly old.
+fn capture_instant(sec: i64, usec: i64) -> Instant {
+  let now = Instant::now();
+  let mut clock = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+  // SAFETY: `clock` is a valid, writable timespec.
+  if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut clock) } != 0 {
+    return now;
+  }
+  let now_us = clock.tv_sec as i64 * 1_000_000 + clock.tv_nsec as i64 / 1_000;
+  let age_us = now_us - (sec * 1_000_000 + usec);
+  if (sec, usec) == (0, 0) || !(0..1_000_000).contains(&age_us) {
+    return now;
+  }
+  now
+    .checked_sub(Duration::from_micros(age_us as u64))
+    .unwrap_or(now)
+}
+
 /// Decode only complete frames; a corrupt first JPEG is common on UVC devices.
 fn next_local_frame(stream: &mut Stream<'_>, format: Format) -> Result<Option<Frame>, String> {
   let (bytes, meta) = match stream.next() {
@@ -184,6 +242,10 @@ fn next_local_frame(stream: &mut Stream<'_>, format: Format) -> Result<Option<Fr
     Err(e) if e.kind() == ErrorKind::WouldBlock => return Ok(None),
     Err(e) => return Err(format!("capture failed: {e}")),
   };
+  let pts = super::screen::now_100ns(capture_instant(
+    meta.timestamp.sec as i64,
+    meta.timestamp.usec as i64,
+  ));
   let bytes = &bytes[..bytes.len().min(meta.bytesused as usize)];
   let width = format.width as usize;
   let height = format.height as usize;
@@ -195,7 +257,7 @@ fn next_local_frame(stream: &mut Stream<'_>, format: Format) -> Result<Option<Fr
           width: rgb.width() as usize,
           height: rgb.height() as usize,
           rgb: rgb.into_raw(),
-          pts: super::screen::now_100ns(Instant::now()),
+          pts,
         }));
       }
       Err(_) => return Ok(None),
@@ -215,7 +277,7 @@ fn next_local_frame(stream: &mut Stream<'_>, format: Format) -> Result<Option<Fr
     rgb,
     width,
     height,
-    pts: super::screen::now_100ns(Instant::now()),
+    pts,
   }))
 }
 
@@ -278,18 +340,19 @@ fn preview_size(width: u32, height: u32) -> (u32, u32) {
 fn publish_preview(rgb: &[u8], width: usize, height: usize) -> Result<(), String> {
   let width = u32::try_from(width).map_err(|e| e.to_string())?;
   let height = u32::try_from(height).map_err(|e| e.to_string())?;
-  let source =
-    RgbImage::from_raw(width, height, rgb.to_vec()).ok_or("invalid webcam preview pixels")?;
+  let source = image::ImageBuffer::<image::Rgb<u8>, &[u8]>::from_raw(width, height, rgb)
+    .ok_or("invalid webcam preview pixels")?;
   let (w, h) = preview_size(width, height);
-  let image = if (w, h) == (width, height) {
-    source
-  } else {
-    image::imageops::resize(&source, w, h, FilterType::Triangle)
-  };
   let mut jpeg = Vec::new();
-  JpegEncoder::new_with_quality(&mut jpeg, 76)
-    .encode(image.as_raw(), w, h, ExtendedColorType::Rgb8)
-    .map_err(|e| format!("encode webcam preview: {e}"))?;
+  let mut encoder = JpegEncoder::new_with_quality(&mut jpeg, 76);
+  // `thumbnail` averages areas, about a third of the cost of a triangle
+  // filter at 720p; this runs on the capture thread.
+  if (w, h) == (width, height) {
+    encoder.encode(rgb, w, h, ExtendedColorType::Rgb8)
+  } else {
+    encoder.encode(image::imageops::thumbnail(&source, w, h).as_raw(), w, h, ExtendedColorType::Rgb8)
+  }
+  .map_err(|e| format!("encode webcam preview: {e}"))?;
   let sequence = WEBCAM_PREVIEW_SEQUENCE
     .fetch_add(1, Ordering::Relaxed)
     .wrapping_add(1);
@@ -447,6 +510,98 @@ struct EncodedFrame {
   pts: i64,
 }
 
+/// Frames waiting between capture and the encoder: a quarter second at 30
+/// fps, enough to ride out a slow keyframe without holding up capture.
+const ENCODE_QUEUE: usize = 8;
+
+struct EncodeJob {
+  pixels: Vec<u8>,
+  width: usize,
+  height: usize,
+  order: PixelOrder,
+  /// Where the frame lands; the first frame can land twice (see
+  /// `place_camera_frame`).
+  points: Vec<i64>,
+}
+
+/// The camera's H.264 encoder on its own thread.
+///
+/// On one thread, decoding a 720p MJPEG frame (about 11 ms) plus encoding it
+/// with openh264 (about 20 ms) plus a preview JPEG came to more than the 33 ms
+/// a 30 fps camera allows. The driver's buffers backed up, every frame was
+/// about 100 ms old when read, and some were dropped. Apart, each stage fits.
+struct EncoderThread {
+  jobs: SyncSender<EncodeJob>,
+  thread: thread::JoinHandle<()>,
+}
+impl EncoderThread {
+  fn start(path: &Path, settings: VideoSettings) -> Result<Self, String> {
+    let path = path.to_owned();
+    let (init_tx, init_rx) = channel();
+    let (jobs, queued) = sync_channel::<EncodeJob>(ENCODE_QUEUE);
+    let thread = thread::Builder::new()
+      .name("webcam-encode".into())
+      .spawn(move || {
+        let mut recorder = match Mp4Recorder::create(&path, settings, None) {
+          Ok(recorder) => {
+            let _ = init_tx.send(Ok(()));
+            recorder
+          }
+          Err(e) => {
+            let _ = init_tx.send(Err(e));
+            return;
+          }
+        };
+        for job in queued {
+          for pts in job.points {
+            if let Err(e) = recorder.push_frame(
+              &job.pixels,
+              job.width as u32,
+              job.height as u32,
+              job.width * 4,
+              job.order,
+              pts,
+            ) {
+              eprintln!("[velocity] webcam encoding failed: {e}");
+              break;
+            }
+          }
+        }
+        if let Err(e) = recorder.finish() {
+          eprintln!("[velocity] webcam finalization failed: {e}");
+        }
+      })
+      .map_err(|e| format!("spawn the webcam encoder: {e}"))?;
+    match init_rx.recv() {
+      Ok(Ok(())) => Ok(Self { jobs, thread }),
+      Ok(Err(e)) => {
+        let _ = thread.join();
+        Err(e)
+      }
+      Err(_) => {
+        let _ = thread.join();
+        Err("the webcam encoder exited during startup".into())
+      }
+    }
+  }
+
+  /// Queue a frame, or drop it when the encoder is a full queue behind: a
+  /// gap at its timestamp is better than stalling capture. Returns whether
+  /// the frame was queued.
+  fn submit(&self, job: EncodeJob) -> bool {
+    match self.jobs.try_send(job) {
+      Ok(()) => true,
+      Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => false,
+    }
+  }
+
+  /// Encode what is queued and finalize the file.
+  fn finish(self) {
+    drop(self.jobs);
+    let _ = self.thread.join();
+  }
+}
+
 fn run_recording(
   path: String,
   source: WebcamSource,
@@ -480,9 +635,10 @@ fn run_recording(
     None => None,
   };
   let mut first = true;
-  let mut recorder: Option<Mp4Recorder> = None;
+  let mut encoder: Option<EncoderThread> = None;
   let mut publisher = PreviewPublisher::new();
   let mut ready = Some(ready);
+  let mut dropped = 0u64;
   loop {
     let stopping = stopped(&stop);
     let frame = if let (Some(camera), Some(stream)) = (local.as_ref(), stream.as_mut()) {
@@ -523,8 +679,8 @@ fn run_recording(
     };
     if let Some(frame) = frame {
       let _ = publisher.publish(&frame.rgb, frame.width, frame.height);
-      if recorder.is_none() {
-        match Mp4Recorder::create(
+      if encoder.is_none() {
+        match EncoderThread::start(
           Path::new(&path),
           VideoSettings {
             width: frame.width as u32,
@@ -532,9 +688,8 @@ fn run_recording(
             fps: fps.max(1),
             bitrate: 3_000_000,
           },
-          None,
         ) {
-          Ok(created) => recorder = Some(created),
+          Ok(started) => encoder = Some(started),
           Err(e) => {
             if let Some(tx) = ready.take() {
               let _ = tx.send(Err(format!("failed to initialize webcam encoder: {e}")));
@@ -547,20 +702,18 @@ fn run_recording(
         let _ = tx.send(Ok(()));
       }
       let points = place_camera_frame(stats.first_timestamp_100ns(), frame.pts, !first);
-      for pts in points {
-        if let Some(active) = recorder.as_mut() {
-          if let Err(e) = active.push_frame(
-            &frame.pixels,
-            frame.width as u32,
-            frame.height as u32,
-            frame.width * 4,
-            frame.order,
-            pts,
-          ) {
-            eprintln!("[velocity] webcam encoding failed: {e}");
-            break;
-          }
+      if let (false, Some(active)) = (points.is_empty(), encoder.as_ref()) {
+        let queued = active.submit(EncodeJob {
+          pixels: frame.pixels,
+          width: frame.width,
+          height: frame.height,
+          order: frame.order,
+          points,
+        });
+        if queued {
           first = false;
+        } else {
+          dropped += 1;
         }
       }
     } else if !stopping {
@@ -582,10 +735,11 @@ fn run_recording(
   }
   drop(stream);
   local.take();
-  if let Some(recorder) = recorder {
-    if let Err(e) = recorder.finish() {
-      eprintln!("[velocity] webcam finalization failed: {e}");
-    }
+  if dropped > 0 {
+    eprintln!("[velocity] webcam encoder fell behind; dropped {dropped} frames");
+  }
+  if let Some(encoder) = encoder {
+    encoder.finish();
   }
 }
 
@@ -775,6 +929,54 @@ mod hardware_scenarios {
         .expect("first sample")
         .start_time,
       0
+    );
+  }
+
+  #[test]
+  #[ignore = "needs a reachable /dev/video0 whose frame rate is set to 30 fps"]
+  fn records_at_the_camera_rate_with_even_spacing() {
+    let _camera = camera();
+    let stats = RecordingStats::new(
+      "/tmp/velocity-webcam-cadence.mp4".into(),
+      "webcam",
+      30,
+      3_000_000,
+      "h264",
+    );
+    stats.note_frame(super::super::screen::now_100ns(Instant::now()));
+    let sidecar = Path::new("/tmp/velocity-webcam-cadence_camera.mp4");
+    let _ = std::fs::remove_file(sidecar);
+    let mut stopper = start_webcam_sidecar_recording(
+      "/tmp/velocity-webcam-cadence.mp4",
+      WebcamSource::Local(None),
+      None,
+      Arc::new(stats),
+    )
+    .expect("recording starts");
+    thread::sleep(Duration::from_secs(4));
+    stopper.stop();
+    let mut reader =
+      mp4::read_mp4(std::fs::File::open(sidecar).expect("sidecar exists")).expect("valid MP4");
+    let (&id, track) = reader.tracks().iter().next().expect("video track");
+    let (count, timescale) = (track.sample_count(), f64::from(track.timescale()));
+    let times: Vec<f64> = (1..=count)
+      .map(|n| reader.read_sample(id, n).unwrap().unwrap().start_time as f64 * 1000.0 / timescale)
+      .collect();
+    // Skip the origin frame and the first second, while auto exposure settles.
+    let gaps: Vec<f64> = times
+      .windows(2)
+      .skip(30)
+      .map(|pair| pair[1] - pair[0])
+      .collect();
+    let mean = gaps.iter().sum::<f64>() / gaps.len() as f64;
+    let wobbly = gaps.iter().filter(|gap| (**gap - mean).abs() > 5.0).count();
+    // A camera that lowers its rate in dim light recorded ~17 fps; frames
+    // stamped after decoding wobbled by ±10 ms around the camera's period.
+    assert!(mean < 36.0, "mean gap {mean:.1} ms ({:.1} fps)", 1000.0 / mean);
+    assert!(
+      wobbly * 20 <= gaps.len(),
+      "{wobbly} of {} gaps are more than 5 ms from the {mean:.1} ms mean",
+      gaps.len()
     );
   }
 }
