@@ -18,6 +18,7 @@ import { initializeDatabase } from './services/database.service.js';
 import { checkGpuMatch } from './services/engine/gpu.service.js';
 import { initializeTelemetry } from './services/telemetry/telemetry.service.js';
 import { createTray } from './services/tray.service.js';
+import { startAutoUpdates } from './services/updater.service.js';
 import { initializeLogging } from './utils/logger.js';
 import { getAppIconPath, getPreloadPath } from './path-resolver.js';
 import { isDevelopment } from './util.js';
@@ -221,6 +222,7 @@ app.on('ready', () => {
         console.error('[Main] Could not add the AppImage to the app menu:', error);
       }
     }
+    startAutoUpdates();
     // Off unless the user turned it on; a headless export never serves it.
     void initializeAutomation(mainWindow).then(() => {
       // Started hidden for recso-cli --launch, but with the API off (or failing

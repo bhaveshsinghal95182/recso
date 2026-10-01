@@ -7,6 +7,7 @@
  *   createTray(mainWindow)    → Initialize tray with icon and context menu
  *   hideToTray(mainWindow)    → Hide window to tray
  *   getTray()                 → Get current Tray instance
+ *   setTrayUpdateReady(v, fn) → Offer "Restart to update" in the menu
  */
 
 import { app, type BrowserWindow, Menu, nativeImage, Tray } from 'electron';
@@ -14,6 +15,34 @@ import { app, type BrowserWindow, Menu, nativeImage, Tray } from 'electron';
 import { getAppIconPath } from '../path-resolver.js';
 
 let tray: Tray | null = null;
+let trayWindow: BrowserWindow | null = null;
+/** A downloaded update waiting for a restart. */
+let updateReady: { version: string; restart: () => void } | null = null;
+
+function buildMenu(mainWindow: BrowserWindow): Menu {
+  return Menu.buildFromTemplate([
+    ...(updateReady
+      ? [
+          { label: `Restart to update to ${updateReady.version}`, click: updateReady.restart },
+          { type: 'separator' as const },
+        ]
+      : []),
+    {
+      label: 'Show App',
+      click: () => {
+        mainWindow.show();
+        mainWindow.focus();
+      },
+    },
+    { type: 'separator' },
+    {
+      label: 'Quit',
+      click: () => {
+        app.quit();
+      },
+    },
+  ]);
+}
 
 export function createTray(mainWindow: BrowserWindow) {
   const iconPath = getAppIconPath();
@@ -34,24 +63,8 @@ export function createTray(mainWindow: BrowserWindow) {
   tray = new Tray(icon);
   tray.setToolTip('Recso - Screen Recorder');
 
-  const contextMenu = Menu.buildFromTemplate([
-    {
-      label: 'Show App',
-      click: () => {
-        mainWindow.show();
-        mainWindow.focus();
-      },
-    },
-    { type: 'separator' },
-    {
-      label: 'Quit',
-      click: () => {
-        app.quit();
-      },
-    },
-  ]);
-
-  tray.setContextMenu(contextMenu);
+  trayWindow = mainWindow;
+  tray.setContextMenu(buildMenu(mainWindow));
 
   // Click on tray icon to show window
   tray.on('click', () => {
@@ -74,4 +87,10 @@ export function hideToTray(mainWindow: BrowserWindow) {
 
 export function getTray() {
   return tray;
+}
+
+/** Offer a downloaded update in the tray menu. */
+export function setTrayUpdateReady(version: string, restart: () => void) {
+  updateReady = { version, restart };
+  if (tray && trayWindow) tray.setContextMenu(buildMenu(trayWindow));
 }
