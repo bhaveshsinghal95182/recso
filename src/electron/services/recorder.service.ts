@@ -25,6 +25,7 @@ import type {
 } from '../types/recorder.types.js';
 import { moveFileSync } from '../utils/move-file.js';
 import { completeRecording, createRecording, getRecording } from './database.service.js';
+import { clickAccessHint, linuxClickSource } from './linux-clicks.js';
 import { phoneCameraState } from './phone-camera.service.js';
 import { initProjectFolder } from './project-storage.service.js';
 import {
@@ -100,6 +101,8 @@ interface VelocityBindings {
   }>;
   /** Linux only; see velocity's `releaseScreenSource`. */
   releaseScreenSource?: () => void;
+  /** Linux only; see velocity's `inputClickAccess`. */
+  inputClickAccess?: () => { devices: number; readable: number };
   startWindowRecordingV2: (options: {
     windowTitle: string;
     outputPath: string;
@@ -671,6 +674,23 @@ export async function pickPortalSource(): Promise<PortalPickResult> {
     const message = error instanceof Error ? error.message : String(error);
     return { ok: false, cancelled: /cancelled/i.test(message), error: message };
   }
+}
+
+/**
+ * What to tell the user when auto zoom can't see their clicks: on GNOME and
+ * KDE that means joining the `input` group. Null everywhere else.
+ */
+export function getClickAccessHint(): string | null {
+  if (process.platform !== 'linux') return null;
+  const source = linuxClickSource(process.env);
+  if (source !== 'evdev') return null;
+  let access: { devices: number; readable: number } | null = null;
+  try {
+    access = getVelocityBindings().inputClickAccess?.() ?? null;
+  } catch {
+    // Without the engine there is nothing to read clicks with anyway.
+  }
+  return clickAccessHint(source, access);
 }
 
 /** Linux: let go of a picked source, as when the recorder closes. */

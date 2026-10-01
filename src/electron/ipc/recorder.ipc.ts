@@ -93,6 +93,8 @@ export function registerRecorderHandlers(): void {
   // Linux: the system picker, opened from the source tile.
   ipcMain.handle('recorder:pick-portal-source', () => RecorderService.pickPortalSource());
   ipcMain.handle('recorder:release-portal-source', () => RecorderService.releasePortalSource());
+  // Linux, GNOME and KDE: how to let auto zoom see clicks, if it can't.
+  ipcMain.handle('recorder:click-access-hint', () => RecorderService.getClickAccessHint());
 
   // Start a new recording
   ipcMain.handle('recorder:start', async (_event, config: RecordingConfig) =>

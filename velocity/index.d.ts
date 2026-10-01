@@ -439,6 +439,9 @@ export interface CutRegion {
   endMs: number
 }
 
+/** Linux only: take clicks seen since the last call, oldest first. */
+export declare function drainInputClicks(): Array<InputClick>
+
 /** Sanity check that the addon loaded at all. */
 export declare function engineVersion(): string
 
@@ -604,6 +607,35 @@ export interface GpuMemory {
  * never leaves the compositor waiting on the caller's event loop.
  */
 export declare function hyprlandIpc(command: string): string
+
+/** Linux only: a button press seen by `startInputClickCapture`. */
+export interface InputClick {
+  /** "left", "right" or "middle". */
+  button: string
+  /** Wall-clock time, ms since the Unix epoch. */
+  atEpochMs: number
+  /** The pointer as a fraction of the recorded frame, when available. */
+  x?: number
+  /** The pointer as a fraction of the recorded frame, when available. */
+  y?: number
+}
+
+/**
+ * Linux only: check how many mouse and touchpad devices recso can read now.
+ * Each opened device is closed again; this does not start capture.
+ */
+export declare function inputClickAccess(): InputClickAccess
+
+/** Linux only: whether recso can see mouse and touchpad clicks. */
+export interface InputClickAccess {
+  /** Mice and touchpads found. */
+  devices: number
+  /**
+   * How many of them recso may read. Zero with devices found means the user
+   * is not in the `input` group, or joined it without logging in again.
+   */
+  readable: number
+}
 
 export declare function isCursorSettingsSupported(): boolean
 
@@ -1046,6 +1078,12 @@ export interface SpritesheetOptions {
   maxColumns?: number
 }
 
+/**
+ * Linux only: stop any running capture, then read clicks from accessible
+ * mouse and touchpad devices on a background thread.
+ */
+export declare function startInputClickCapture(): InputClickAccess
+
 export declare function startMonitorRecordingV2(options: NativeRecordingOptions): Stopper
 
 /** * Open one local webcam for the recorder setup preview.
@@ -1057,6 +1095,9 @@ export declare function startMonitorRecordingV2(options: NativeRecordingOptions)
 export declare function startWebcamPreview(deviceId?: string | undefined | null): Stopper
 
 export declare function startWindowRecordingV2(options: NativeWindowRecordingOptions): Stopper
+
+/** Linux only: stop reading clicks, close devices, and clear pending clicks. */
+export declare function stopInputClickCapture(): void
 
 export interface VideoInfo {
   width: number

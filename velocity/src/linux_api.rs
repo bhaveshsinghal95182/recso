@@ -12,7 +12,7 @@ use napi::{Env, Task};
 use napi_derive::napi;
 
 #[cfg(target_os = "linux")]
-use crate::capture::linux::{cursor_meta, picked};
+use crate::capture::linux::{cursor_meta, input_clicks, picked};
 
 #[cfg(not(target_os = "linux"))]
 fn linux_only<T>(what: &str) -> napi::Result<T> {
@@ -104,4 +104,76 @@ pub fn screen_cursor_position() -> Option<ScreenCursorPosition> {
   return cursor_meta::active_position().map(|point| ScreenCursorPosition { x: point.x, y: point.y });
   #[cfg(not(target_os = "linux"))]
   None
+}
+
+/// Linux only: whether recso can see mouse and touchpad clicks.
+#[napi(object)]
+pub struct InputClickAccess {
+  /// Mice and touchpads found.
+  pub devices: u32,
+  /// How many of them recso may read. Zero with devices found means the user
+  /// is not in the `input` group, or joined it without logging in again.
+  pub readable: u32,
+}
+
+/// Linux only: a button press seen by `startInputClickCapture`.
+#[napi(object)]
+pub struct InputClick {
+  /// "left", "right" or "middle".
+  pub button: String,
+  /// Wall-clock time, ms since the Unix epoch.
+  pub at_epoch_ms: f64,
+  /// The pointer as a fraction of the recorded frame, when available.
+  pub x: Option<f64>,
+  /// The pointer as a fraction of the recorded frame, when available.
+  pub y: Option<f64>,
+}
+
+#[cfg(target_os = "linux")]
+fn to_access((devices, readable): (u32, u32)) -> InputClickAccess {
+  InputClickAccess { devices, readable }
+}
+
+/// Linux only: check how many mouse and touchpad devices recso can read now.
+/// Each opened device is closed again; this does not start capture.
+#[napi]
+pub fn input_click_access() -> InputClickAccess {
+  #[cfg(target_os = "linux")]
+  return to_access(input_clicks::access());
+  #[cfg(not(target_os = "linux"))]
+  InputClickAccess { devices: 0, readable: 0 }
+}
+
+/// Linux only: stop any running capture, then read clicks from accessible
+/// mouse and touchpad devices on a background thread.
+#[napi]
+pub fn start_input_click_capture() -> InputClickAccess {
+  #[cfg(target_os = "linux")]
+  return to_access(input_clicks::start());
+  #[cfg(not(target_os = "linux"))]
+  InputClickAccess { devices: 0, readable: 0 }
+}
+
+/// Linux only: take clicks seen since the last call, oldest first.
+#[napi]
+pub fn drain_input_clicks() -> Vec<InputClick> {
+  #[cfg(target_os = "linux")]
+  return input_clicks::drain()
+    .into_iter()
+    .map(|click| InputClick {
+      button: click.button.to_string(),
+      at_epoch_ms: click.at_epoch_ms,
+      x: click.position.map(|point| point.x),
+      y: click.position.map(|point| point.y),
+    })
+    .collect();
+  #[cfg(not(target_os = "linux"))]
+  Vec::new()
+}
+
+/// Linux only: stop reading clicks, close devices, and clear pending clicks.
+#[napi]
+pub fn stop_input_click_capture() {
+  #[cfg(target_os = "linux")]
+  input_clicks::stop();
 }

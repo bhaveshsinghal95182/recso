@@ -658,6 +658,12 @@ interface ElectronAPI {
     >;
     /** Linux: let go of a picked source that no recording took. */
     releasePortalSource: () => Promise<void>;
+    /**
+     * Linux, GNOME and KDE: what to tell the user when auto zoom can't see
+     * their clicks (they need to join the `input` group). Null when it can,
+     * and on every other platform.
+     */
+    getClickAccessHint: () => Promise<string | null>;
 
     /**
      * Microphones as the native recorder sees them.

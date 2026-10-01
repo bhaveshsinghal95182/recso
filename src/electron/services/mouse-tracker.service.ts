@@ -17,6 +17,7 @@ import { uIOhook, type UiohookMouseEvent } from 'uiohook-napi';
 
 import { getDatabase } from './database.service.js';
 import { type HyprlandClickCapture, startHyprlandClickCapture } from './hyprland-clicks.js';
+import { linuxClickSource } from './linux-clicks.js';
 
 const require = createRequire(import.meta.url);
 
@@ -26,6 +27,16 @@ interface VelocityCursorBindings {
   hyprlandIpc?: (command: string) => string;
   /** Linux only: the pointer as a fraction of the frame being recorded. */
   screenCursorPosition?: () => { x: number; y: number } | null;
+  /** Linux only: start reading clicks from the mice and touchpads (evdev). */
+  startInputClickCapture?: () => { devices: number; readable: number };
+  /** Linux only: clicks read since the last drain, oldest first. */
+  drainInputClicks?: () => Array<{
+    button: string;
+    atEpochMs: number;
+    x?: number | null;
+    y?: number | null;
+  }>;
+  stopInputClickCapture?: () => void;
 }
 
 let velocityCursorBindingsCache: VelocityCursorBindings | null | undefined;
@@ -143,6 +154,8 @@ class MouseTrackerService {
   private pollTimer: NodeJS.Timeout | null = null;
   private lastPolledPosition: { x: number; y: number } | null = null;
   private clickCapture: HyprlandClickCapture | null = null;
+  /** Clicks come from velocity reading the mice and touchpads (GNOME, KDE). */
+  private readingInputClicks = false;
   private drainingClicks = false;
   private isTracking: boolean = false;
   private monitorBounds: MonitorBounds | null = null;
@@ -192,7 +205,11 @@ class MouseTrackerService {
       this.lastPolledPosition = null;
       this.pollTimer = setInterval(() => this.pollCursorPosition(), this.moveThrottleMs);
       // Nor any clicks, which auto zoom is built from. Hyprland can report
-      // them through binds that let every click through.
+      // them through binds that let every click through; other Wayland
+      // desktops only through the input devices themselves.
+      if (linuxClickSource(process.env) === 'evdev') {
+        this.startInputClicks();
+      }
       void startHyprlandClickCapture({
         requestSync: getVelocityCursorBindings()?.hyprlandIpc,
       }).then((capture) => {
@@ -213,13 +230,56 @@ class MouseTrackerService {
     }
   }
 
+  /** GNOME and KDE: have velocity read clicks from the mice and touchpads. */
+  private startInputClicks(): void {
+    const velocity = getVelocityCursorBindings();
+    if (typeof velocity?.startInputClickCapture !== 'function') return;
+    try {
+      const access = velocity.startInputClickCapture();
+      this.readingInputClicks = access.readable > 0;
+      console.log('[MouseTrackerService] Input devices for clicks:', access);
+    } catch (error) {
+      console.warn('[MouseTrackerService] Could not read input devices for clicks:', error);
+    }
+  }
+
+  /**
+   * Clicks velocity read since the last poll. Each carries the pointer's
+   * place in the frame when the click happened, if the recording gets cursor
+   * metadata; otherwise the last polled position stands in.
+   */
+  private drainInputClicks(): void {
+    if (!this.readingInputClicks) return;
+    const velocity = getVelocityCursorBindings();
+    let clicks: ReturnType<NonNullable<VelocityCursorBindings['drainInputClicks']>> = [];
+    try {
+      clicks = velocity?.drainInputClicks?.() ?? [];
+    } catch {
+      return;
+    }
+    const bounds = this.monitorBounds;
+    for (const click of clicks) {
+      const position =
+        bounds && typeof click.x === 'number' && typeof click.y === 'number'
+          ? {
+              x: Math.round(bounds.x + click.x * bounds.width),
+              y: Math.round(bounds.y + click.y * bounds.height),
+            }
+          : this.lastPolledPosition;
+      if (!position) continue;
+      const button =
+        click.button === 'right' ? 'right' : click.button === 'middle' ? 'middle' : 'left';
+      this.recordClick(position.x, position.y, button, click.atEpochMs);
+    }
+  }
+
   /**
    * Handle mouse down events from uiohook
    */
   private onMouseDown(event: UiohookMouseEvent): void {
-    // Hyprland reports every click, including the XWayland ones this hook
-    // also sees; taking both would record those twice.
-    if (this.clickCapture) return;
+    // Hyprland and the input devices report every click, including the
+    // XWayland ones this hook also sees; taking both would record those twice.
+    if (this.clickCapture || this.readingInputClicks) return;
 
     // Map button number to string
     let button: 'left' | 'right' | 'middle' = 'left';
@@ -295,6 +355,7 @@ class MouseTrackerService {
    */
   private pollCursorPosition(): void {
     this.drainClicks();
+    this.drainInputClicks();
     const position = readStreamCursorPosition(this.monitorBounds) ?? readVelocityCursorPosition();
     if (!position) {
       return;
@@ -462,6 +523,16 @@ class MouseTrackerService {
     }
     void this.clickCapture?.stop();
     this.clickCapture = null;
+    if (this.readingInputClicks) {
+      // Take the clicks still pending before the flush below.
+      this.drainInputClicks();
+      this.readingInputClicks = false;
+      try {
+        getVelocityCursorBindings()?.stopInputClickCapture?.();
+      } catch {
+        // Nothing to stop without the engine.
+      }
+    }
     if (this.flushTimer) {
       clearInterval(this.flushTimer);
       this.flushTimer = null;

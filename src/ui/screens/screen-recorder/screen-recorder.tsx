@@ -40,6 +40,8 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
   /** Linux: the system's screen picker is open. */
   const [isPickingSource, setIsPickingSource] = useState(false);
   const [pickError, setPickError] = useState<string | null>(null);
+  /** Linux, GNOME and KDE: how to let auto zoom see clicks, when it can't. */
+  const [clickAccessHint, setClickAccessHint] = useState<string | null>(null);
 
   const [recordMic, setRecordMic] = useState(false);
   const [recordCamera, setRecordCamera] = useState(false);
@@ -186,6 +188,19 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
     setSelectedSourceId(defaultSource.id);
   }, [selectedSourceId, sources]);
 
+  useEffect(() => {
+    let cancelled = false;
+    void window.electron.recorder
+      .getClickAccessHint?.()
+      .then((hint) => {
+        if (!cancelled) setClickAccessHint(hint);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Linux: a source picked but not recorded holds a screen-share session open;
   // end it when the recorder goes away.
   useEffect(() => {
@@ -274,6 +289,9 @@ export function ScreenRecorderBody({ onOpenEditor }: ScreenRecorderBodyProps) {
   return (
     <div className="recorder-screen animate-in fade-in duration-300">
       {(error || pickError) && <div className="recorder-error-banner">{error ?? pickError}</div>}
+      {!error && !pickError && clickAccessHint && !isRecording && (
+        <div className="recorder-error-banner">{clickAccessHint}</div>
+      )}
 
       <CapturePreviewStage
         selectedSource={selectedSource}

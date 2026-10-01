@@ -235,6 +235,9 @@ electron.contextBridge.exposeInMainWorld('electron', {
     /** Linux: let go of a picked source. */
     releasePortalSource: (): Promise<void> =>
       electron.ipcRenderer.invoke('recorder:release-portal-source'),
+    /** Linux, GNOME and KDE: how to let auto zoom see clicks, or null when it can. */
+    getClickAccessHint: (): Promise<string | null> =>
+      electron.ipcRenderer.invoke('recorder:click-access-hint'),
 
     /** Microphones as the native recorder sees them, for when it is capturing. */
     listAudioCaptureDevices: (): Promise<
