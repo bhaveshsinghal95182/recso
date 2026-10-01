@@ -38,7 +38,7 @@
     "fpm": ["build/linux/recso-cli=/usr/bin/recso-cli"]
   },
   "win": {
-    "target": ["nsis", "appx"],
+    "target": ["nsis"],
     "icon": "public/R.png",
     "extraFiles": [
       {
@@ -48,6 +48,7 @@
     ]
   },
   "nsis": {
+    "artifactName": "Recso-Setup-${version}.${ext}",
     "oneClick": false,
     "allowToChangeInstallationDirectory": true,
     "license": "build/license.txt",

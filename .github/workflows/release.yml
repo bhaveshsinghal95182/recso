@@ -90,28 +90,22 @@ jobs:
         shell: bash
         run: git diff --exit-code velocity/index.js velocity/index.d.ts
 
-      # Unsigned for now. Code signing goes here: set CSC_LINK (the .pfx as
-      # base64) and CSC_KEY_PASSWORD from secrets, and electron-builder signs
-      # the NSIS installer.
-      - name: Package (NSIS and AppX)
+      # Unsigned, so SmartScreen warns on first run (docs/install.md says what
+      # to click). Signing would go here: CSC_LINK and CSC_KEY_PASSWORD from
+      # secrets, with a certificate from a trusted CA. The self-signed AppX
+      # certificate wouldn't help and is never uploaded.
+      - name: Package (NSIS installer)
         run: pnpm dist:win --publish ${{ env.PUBLISH }}
         env:
           GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
 
-      # The AppX goes to the Microsoft Store by hand, never to the release.
-      - uses: actions/upload-artifact@v4
-        with:
-          name: recso-windows-appx
-          path: dist/*.appx
-          if-no-files-found: error
-          retention-days: 30
       - uses: actions/upload-artifact@v4
         if: github.event_name == 'workflow_dispatch'
         with:
           name: recso-windows
           path: |
-            dist/*.exe
-            dist/*.exe.blockmap
+            dist/Recso-Setup-*.exe
+            dist/Recso-Setup-*.exe.blockmap
             dist/latest.yml
           if-no-files-found: error
           retention-days: 7

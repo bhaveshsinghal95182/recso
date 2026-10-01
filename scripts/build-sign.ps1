@@ -1,5 +1,9 @@
 Write-Host "📦 Building the application..." -ForegroundColor Cyan
-pnpm dist:win
+# Releases ship only the NSIS installer, so the Store package is built here.
+pnpm build:engine
+pnpm run transpile:electron
+pnpm run build
+npx electron-builder --win appx --x64
 
 # Pick the appx matching the version we just built, not whatever sorts first --
 # electron-builder leaves older artifacts in dist/, so a bare wildcard would
