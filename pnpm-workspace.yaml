@@ -2,13 +2,14 @@ packages:
   - velocity
 
 # pnpm 11 replaced onlyBuiltDependencies/ignoredBuiltDependencies with allowBuilds.
-# These values preserve the previous policy: better-sqlite3 (and ffmpeg-static, when
-# present) may run install scripts; everything else is ignored and relies on the
-# prebuilt binaries it ships.
+# better-sqlite3 (and ffmpeg-static, when present) may run install scripts, and so
+# may electron, whose script downloads the Electron binary that `electron .` and
+# the export checks run. Everything else is ignored and relies on the prebuilt
+# binaries it ships.
 allowBuilds:
   better-sqlite3: true
   ffmpeg-static: true
-  electron: false
+  electron: true
   electron-winstaller: false
   esbuild: false
   sharp: false
