@@ -11,15 +11,18 @@
 
 use std::os::fd::OwnedFd;
 use std::sync::mpsc::{sync_channel, SyncSender};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use pipewire as pw;
 use pw::properties::properties;
 use pw::spa;
+use spa::buffer::meta::MetaCursor;
 use spa::param::video::{VideoFormat, VideoInfoRaw};
 use spa::pod::Pod;
 
+use super::cursor_meta::{self, StreamCursor};
 use super::encoder::PixelOrder;
 
 /// Where the stream comes from.
@@ -72,7 +75,16 @@ const NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(10);
 /// Returns once the stream has negotiated a format, so a caller that gets
 /// `Ok` knows frames are coming, and one whose node cannot produce anything
 /// usable gets an error instead of a recording with no picture.
-pub(crate) fn start<F>(source: NodeSource, fps: u32, on_frame: F) -> Result<NodeStream, String>
+///
+/// With `cursor`, the stream also asks for cursor metadata and keeps the
+/// latest pointer position there. Only a portal session started in the
+/// metadata cursor mode sends any.
+pub(crate) fn start<F>(
+  source: NodeSource,
+  fps: u32,
+  cursor: Option<Arc<StreamCursor>>,
+  on_frame: F,
+) -> Result<NodeStream, String>
 where
   F: FnMut(Frame<'_>) + Send + 'static,
 {
@@ -81,7 +93,7 @@ where
 
   let thread = thread::Builder::new()
     .name("velocity-pipewire".to_string())
-    .spawn(move || run_loop(source, fps, on_frame, ready_tx, quit_rx))
+    .spawn(move || run_loop(source, fps, cursor, on_frame, ready_tx, quit_rx))
     .map_err(|error| format!("could not start the PipeWire thread: {error}"))?;
 
   match ready_rx.recv_timeout(NEGOTIATION_TIMEOUT) {
@@ -115,6 +127,9 @@ struct State<F> {
   on_frame: F,
   info: VideoInfoRaw,
   order: Option<PixelOrder>,
+  /// Where cursor metadata goes, and the request for it, sent once a format
+  /// is agreed.
+  cursor: Option<(Arc<StreamCursor>, Vec<u8>)>,
   ready: Option<SyncSender<Result<(), String>>>,
 }
 
@@ -129,6 +144,7 @@ impl<F> State<F> {
 fn run_loop<F>(
   source: NodeSource,
   fps: u32,
+  cursor: Option<Arc<StreamCursor>>,
   on_frame: F,
   ready: SyncSender<Result<(), String>>,
   quit: pw::channel::Receiver<()>,
@@ -172,10 +188,16 @@ where
     Err(error) => return fail(&ready, format!("PipeWire stream: {error}")),
   };
 
+  let cursor = match cursor.map(|cursor| cursor_meta::meta_param().map(|param| (cursor, param))) {
+    Some(Ok(cursor)) => Some(cursor),
+    Some(Err(error)) => return fail(&ready, error),
+    None => None,
+  };
   let state = State {
     on_frame,
     info: VideoInfoRaw::default(),
     order: None,
+    cursor,
     ready: Some(ready.clone()),
   };
 
@@ -196,7 +218,7 @@ where
         }
       }
     })
-    .param_changed(|_, state, id, param| {
+    .param_changed(|stream, state, id, param| {
       let Some(param) = param else { return };
       if id != spa::param::ParamType::Format.as_raw() {
         return;
@@ -206,6 +228,17 @@ where
         return;
       }
       state.order = pixel_order(state.info.format());
+      if let Some((_, request)) = &state.cursor {
+        // Without it the frames still come, just with no pointer position.
+        match Pod::from_bytes(request) {
+          Some(pod) => {
+            if let Err(error) = stream.update_params(&mut [pod]) {
+              eprintln!("[velocity] PipeWire refused the cursor metadata request: {error}");
+            }
+          }
+          None => eprintln!("[velocity] the cursor metadata request did not parse"),
+        }
+      }
       match state.order {
         Some(_) => state.report(Ok(())),
         None => state.report(Err(format!(
@@ -218,6 +251,15 @@ where
       let Some(order) = state.order else { return };
       let Some(mut buffer) = stream.dequeue_buffer() else { return };
       let received = Instant::now();
+      let size_info = state.info.size();
+      // Read before the picture: a pointer that moved over a still screen
+      // arrives in a buffer with no picture in it.
+      if let Some((cursor, _)) = &state.cursor {
+        if let Some(meta) = buffer.find_meta::<MetaCursor>().filter(|meta| meta.is_valid()) {
+          let position = meta.position();
+          cursor.set(position.x, position.y, size_info.width, size_info.height);
+        }
+      }
       let datas = buffer.datas_mut();
       let Some(data) = datas.first_mut() else { return };
 
@@ -225,7 +267,6 @@ where
       let offset = chunk.offset() as usize;
       let size = chunk.size() as usize;
       let stride = chunk.stride();
-      let size_info = state.info.size();
       // A zero-size chunk is how a compositor says "nothing changed" (or a
       // cursor-only update); there is no picture in it to record.
       if size == 0 || stride <= 0 {
@@ -322,4 +363,232 @@ fn format_params(fps: u32) -> Result<Vec<u8>, String> {
   )
   .map(|(cursor, _)| cursor.into_inner())
   .map_err(|error| format!("could not encode the PipeWire format request: {error:?}"))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use std::sync::Mutex;
+
+  const SIZE: u32 = 64;
+
+  /// A PipeWire video source that sends a pointer position with every frame,
+  /// as GNOME's and KDE's portals do in the metadata cursor mode.
+  struct CursorSource {
+    quit: pw::channel::Sender<()>,
+    thread: Option<JoinHandle<()>>,
+  }
+
+  impl Drop for CursorSource {
+    fn drop(&mut self) {
+      let _ = self.quit.send(());
+      if let Some(thread) = self.thread.take() {
+        let _ = thread.join();
+      }
+    }
+  }
+
+  fn object_bytes(object: spa::pod::Object) -> Vec<u8> {
+    spa::pod::serialize::PodSerializer::serialize(
+      std::io::Cursor::new(Vec::new()),
+      &spa::pod::Value::Object(object),
+    )
+    .unwrap()
+    .0
+    .into_inner()
+  }
+
+  fn cursor_source(position: (i32, i32)) -> (CursorSource, u32) {
+    use spa::pod::{ChoiceValue, Object, Property, PropertyFlags, Value};
+    use spa::utils::{Choice, ChoiceEnum, ChoiceFlags};
+
+    let (id_tx, id_rx) = sync_channel::<u32>(1);
+    let (quit_tx, quit_rx) = pw::channel::channel::<()>();
+    let thread = thread::spawn(move || {
+      pw::init();
+      let mainloop = pw::main_loop::MainLoopRc::new(None).unwrap();
+      let context = pw::context::ContextRc::new(&mainloop, None).unwrap();
+      let core = context.connect_rc(None).unwrap();
+      let stream = pw::stream::StreamRc::new(
+        core,
+        "velocity-cursor-test",
+        properties! {
+          *pw::keys::MEDIA_TYPE => "Video",
+          *pw::keys::MEDIA_CLASS => "Video/Source",
+          *pw::keys::MEDIA_ROLE => "Screen",
+        },
+      )
+      .unwrap();
+      let _quit = quit_rx.attach(mainloop.loop_(), {
+        let mainloop = mainloop.clone();
+        move |()| mainloop.quit()
+      });
+
+      let int = |value: i32| Value::Int(value);
+      let buffers = object_bytes(Object {
+        type_: spa::utils::SpaTypes::ObjectParamBuffers.as_raw(),
+        id: spa::param::ParamType::Buffers.as_raw(),
+        properties: vec![
+          Property {
+            key: spa::sys::SPA_PARAM_BUFFERS_buffers,
+            flags: PropertyFlags::empty(),
+            value: Value::Choice(ChoiceValue::Int(Choice(
+              ChoiceFlags::empty(),
+              ChoiceEnum::Range { default: 4, min: 2, max: 8 },
+            ))),
+          },
+          Property::new(spa::sys::SPA_PARAM_BUFFERS_blocks, int(1)),
+          Property::new(spa::sys::SPA_PARAM_BUFFERS_size, int((SIZE * SIZE * 4) as i32)),
+          Property::new(spa::sys::SPA_PARAM_BUFFERS_stride, int((SIZE * 4) as i32)),
+          Property::new(
+            spa::sys::SPA_PARAM_BUFFERS_dataType,
+            int(1 << spa::sys::SPA_DATA_MemFd),
+          ),
+        ],
+      });
+      let meta = cursor_meta::meta_param().unwrap();
+
+      let reported = Mutex::new(Some(id_tx));
+      let _listener = stream
+        .add_local_listener_with_user_data(())
+        .state_changed(move |stream, _, _, new| {
+          if matches!(new, pw::stream::StreamState::Paused | pw::stream::StreamState::Streaming) {
+            if let Some(id_tx) = reported.lock().unwrap().take() {
+              let _ = id_tx.send(stream.node_id());
+            }
+          }
+        })
+        .param_changed(move |stream, _, id, param| {
+          if param.is_none() || id != spa::param::ParamType::Format.as_raw() {
+            return;
+          }
+          let mut params = [Pod::from_bytes(&buffers).unwrap(), Pod::from_bytes(&meta).unwrap()];
+          stream.update_params(&mut params).unwrap();
+        })
+        .process(move |stream, _| unsafe {
+          let raw = stream.dequeue_raw_buffer();
+          if raw.is_null() {
+            return;
+          }
+          let buffer = (*raw).buffer;
+          let cursor = spa::sys::spa_buffer_find_meta_data(
+            buffer,
+            spa::sys::SPA_META_Cursor,
+            std::mem::size_of::<spa::sys::spa_meta_cursor>(),
+          ) as *mut spa::sys::spa_meta_cursor;
+          if !cursor.is_null() {
+            (*cursor).id = 1;
+            (*cursor).position.x = position.0;
+            (*cursor).position.y = position.1;
+            (*cursor).bitmap_offset = 0;
+          }
+          let data = &mut *(*buffer).datas;
+          let frame = SIZE * SIZE * 4;
+          if data.data.is_null() || data.maxsize < frame {
+            stream.queue_raw_buffer(raw);
+            return;
+          }
+          std::ptr::write_bytes(data.data as *mut u8, 0x80, frame as usize);
+          let chunk = &mut *data.chunk;
+          chunk.offset = 0;
+          chunk.size = frame;
+          chunk.stride = (SIZE * 4) as i32;
+          stream.queue_raw_buffer(raw);
+        })
+        .register()
+        .unwrap();
+
+      let format = object_bytes(spa::pod::object!(
+        spa::utils::SpaTypes::ObjectParamFormat,
+        spa::param::ParamType::EnumFormat,
+        spa::pod::property!(
+          spa::param::format::FormatProperties::MediaType,
+          Id,
+          spa::param::format::MediaType::Video
+        ),
+        spa::pod::property!(
+          spa::param::format::FormatProperties::MediaSubtype,
+          Id,
+          spa::param::format::MediaSubtype::Raw
+        ),
+        spa::pod::property!(
+          spa::param::format::FormatProperties::VideoFormat,
+          Id,
+          VideoFormat::BGRx
+        ),
+        spa::pod::property!(
+          spa::param::format::FormatProperties::VideoSize,
+          Rectangle,
+          spa::utils::Rectangle { width: SIZE, height: SIZE }
+        ),
+        spa::pod::property!(
+          spa::param::format::FormatProperties::VideoFramerate,
+          Fraction,
+          spa::utils::Fraction { num: 30, denom: 1 }
+        ),
+      ));
+      stream
+        .connect(
+          spa::utils::Direction::Output,
+          None,
+          pw::stream::StreamFlags::DRIVER | pw::stream::StreamFlags::MAP_BUFFERS,
+          &mut [Pod::from_bytes(&format).unwrap()],
+        )
+        .unwrap();
+
+      // A driver paces itself: one frame every 33 ms, as a compositor would.
+      let timer = mainloop.loop_().add_timer({
+        let stream = stream.clone();
+        move |_| {
+          // `trigger_process` sits behind a feature flag the crate is built without.
+          unsafe { pw::sys::pw_stream_trigger_process(stream.as_raw_ptr()) };
+        }
+      });
+      let _ = timer.update_timer(
+        Some(Duration::from_millis(33)),
+        Some(Duration::from_millis(33)),
+      );
+      mainloop.run();
+      let _ = stream.disconnect();
+    });
+
+    let node_id = id_rx.recv_timeout(Duration::from_secs(5)).expect("the test source starts");
+    (CursorSource { quit: quit_tx, thread: Some(thread) }, node_id)
+  }
+
+  #[test]
+  #[ignore = "needs a running PipeWire; run with --ignored"]
+  fn the_pointer_position_arrives_with_the_frames() {
+    let (_source, node_id) = cursor_source((48, 16));
+    let cursor = Arc::new(StreamCursor::default());
+    let (frame_tx, frame_rx) = sync_channel::<(u32, u32)>(8);
+    let stream = start(NodeSource { remote: None, node_id }, 30, Some(cursor.clone()), move |frame| {
+      let _ = frame_tx.try_send((frame.width, frame.height));
+    })
+    .expect("the stream starts");
+
+    let size = frame_rx.recv_timeout(Duration::from_secs(5)).expect("a frame arrives");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while cursor.latest().is_none() && Instant::now() < deadline {
+      thread::sleep(Duration::from_millis(20));
+    }
+    stream.stop().expect("the stream stops cleanly");
+
+    assert_eq!(size, (SIZE, SIZE));
+    let point = cursor.latest().expect("the cursor metadata was negotiated and read");
+    assert_eq!((point.x, point.y), (0.75, 0.25));
+  }
+
+  #[test]
+  #[ignore = "needs a running PipeWire; run with --ignored"]
+  fn a_stream_that_did_not_ask_gets_frames_and_no_position() {
+    let (_source, node_id) = cursor_source((48, 16));
+    let (frame_tx, frame_rx) = sync_channel::<()>(8);
+    let stream = start(NodeSource { remote: None, node_id }, 30, None, move |_| {
+      let _ = frame_tx.try_send(());
+    })
+    .expect("the stream starts");
+    frame_rx.recv_timeout(Duration::from_secs(5)).expect("a frame arrives");
+    stream.stop().expect("the stream stops cleanly");
+  }
 }

@@ -24,6 +24,8 @@ interface VelocityCursorBindings {
   captureCursorSnapshotJson?: () => string;
   /** Linux only: one round trip on Hyprland's control socket. */
   hyprlandIpc?: (command: string) => string;
+  /** Linux only: the pointer as a fraction of the frame being recorded. */
+  screenCursorPosition?: () => { x: number; y: number } | null;
 }
 
 let velocityCursorBindingsCache: VelocityCursorBindings | null | undefined;
@@ -70,6 +72,28 @@ function readVelocityCursorPosition(): { x: number; y: number } | null {
     const x = toFiniteOrUndefined(screenPos?.x);
     const y = toFiniteOrUndefined(screenPos?.y);
     return x === undefined || y === undefined ? null : { x, y };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Linux off Hyprland: the pointer position GNOME and KDE send alongside the
+ * recorded frames, placed on the recorded bounds. Null under Hyprland, whose
+ * position comes from its socket instead.
+ */
+function readStreamCursorPosition(bounds: MonitorBounds | null): { x: number; y: number } | null {
+  const velocity = getVelocityCursorBindings();
+  if (!bounds || typeof velocity?.screenCursorPosition !== 'function') {
+    return null;
+  }
+  try {
+    const position = velocity.screenCursorPosition();
+    if (!position) return null;
+    return {
+      x: Math.round(bounds.x + position.x * bounds.width),
+      y: Math.round(bounds.y + position.y * bounds.height),
+    };
   } catch {
     return null;
   }
@@ -271,7 +295,7 @@ class MouseTrackerService {
    */
   private pollCursorPosition(): void {
     this.drainClicks();
-    const position = readVelocityCursorPosition();
+    const position = readStreamCursorPosition(this.monitorBounds) ?? readVelocityCursorPosition();
     if (!position) {
       return;
     }

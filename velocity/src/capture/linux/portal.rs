@@ -34,6 +34,8 @@ pub(crate) struct Grant {
   /// hand its socket on, so a thumbnail and the recording each need their own.
   pub(crate) preview_remote: Option<OwnedFd>,
   pub(crate) kind: SourceKind,
+  /// How the pointer comes with the stream; see `cursor_mode`.
+  pub(crate) cursor_mode: CursorMode,
   pub(crate) node_id: u32,
   /// The source's size as the portal reports it, if it does. The stream's own
   /// format is authoritative; this is only a hint for sizing the encoder.
@@ -67,6 +69,26 @@ impl PortalRequest {
     } else {
       (PersistMode::DoNot, None)
     }
+  }
+}
+
+/// How to ask for the pointer, given the modes the portal offers.
+///
+/// recso draws its own cursor in the editor, from a track of positions, so it
+/// wants the pointer kept out of the picture. Hyprland reports the position
+/// on its own socket, so there the stream leaves the pointer out. GNOME and
+/// KDE report it only alongside the frames, as metadata. A desktop that can
+/// do neither gets the pointer drawn into the frames, so recordings still
+/// show it.
+pub(crate) fn cursor_mode(hyprland: bool, metadata: bool, embedded: bool) -> CursorMode {
+  if hyprland {
+    CursorMode::Hidden
+  } else if metadata {
+    CursorMode::Metadata
+  } else if embedded {
+    CursorMode::Embedded
+  } else {
+    CursorMode::Hidden
   }
 }
 
@@ -178,6 +200,13 @@ async fn select_and_start(
   preview: bool,
 ) -> Result<Grant, String> {
   let (persist_mode, restore_token) = request.persistence();
+  // A version 1 portal has no cursor modes to ask about, nor to ask for.
+  let available = proxy.available_cursor_modes().await.unwrap_or_default();
+  let cursor_mode = cursor_mode(
+    std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some(),
+    available.contains(CursorMode::Metadata),
+    available.contains(CursorMode::Embedded),
+  );
   let sources = if windows_too {
     SourceType::Monitor | SourceType::Window
   } else {
@@ -188,8 +217,7 @@ async fn select_and_start(
     .select_sources(
       session,
       SelectSourcesOptions::default()
-        // recso draws its own cursor from the tracked samples, as on Windows.
-        .set_cursor_mode(CursorMode::Hidden)
+        .set_cursor_mode(cursor_mode)
         .set_sources(sources)
         .set_multiple(false)
         .set_persist_mode(persist_mode)
@@ -236,6 +264,7 @@ async fn select_and_start(
       Some(SourceType::Window) => SourceKind::Window,
       _ => SourceKind::Unknown,
     },
+    cursor_mode,
     node_id: stream.pipe_wire_node_id(),
     size: stream
       .size()
@@ -261,6 +290,17 @@ mod tests {
     assert_eq!(first.persistence(), (PersistMode::ExplicitlyRevoked, None));
     let again = PortalRequest { remember: true, restore_token: Some("abc".into()) };
     assert_eq!(again.persistence(), (PersistMode::ExplicitlyRevoked, Some("abc")));
+  }
+
+  #[test]
+  fn the_pointer_stays_out_of_the_picture_wherever_its_position_is_known() {
+    // Hyprland: the position comes from its socket, whatever the portal offers.
+    assert_eq!(cursor_mode(true, true, true), CursorMode::Hidden);
+    // GNOME and KDE: the position comes with the frames.
+    assert_eq!(cursor_mode(false, true, true), CursorMode::Metadata);
+    // Nowhere to read it from: drawn into the frames instead.
+    assert_eq!(cursor_mode(false, false, true), CursorMode::Embedded);
+    assert_eq!(cursor_mode(false, false, false), CursorMode::Hidden);
   }
 
   #[test]

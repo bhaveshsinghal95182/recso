@@ -124,7 +124,7 @@ pub fn release_screen_source() {
 /// The first frame from the node, as a small JPEG.
 fn thumbnail(source: NodeSource) -> Result<Vec<u8>, String> {
   let (tx, rx) = sync_channel::<RgbImage>(1);
-  let stream = pipewire_stream::start(source, 5, move |frame: Frame<'_>| {
+  let stream = pipewire_stream::start(source, 5, None, move |frame: Frame<'_>| {
     if let Some(image) = to_rgb(&frame) {
       let _ = tx.try_send(image);
     }

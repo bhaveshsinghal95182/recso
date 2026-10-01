@@ -20,6 +20,9 @@ use super::super::recording_info::RecordingStats;
 use super::super::stopper::Stopper;
 use super::audio::{self, AudioCapture, AudioRequest};
 use super::encoder::{AudioSettings, Mp4Recorder, PixelOrder, VideoSettings};
+use ashpd::desktop::screencast::CursorMode;
+
+use super::cursor_meta::{ActiveCursor, StreamCursor};
 use super::pipewire_stream::{self, Frame, NodeSource, NodeStream};
 use super::picked;
 use super::portal::{self, PortalRequest, Session};
@@ -141,7 +144,7 @@ fn start(
       remote: None,
       node_id,
     };
-    return record(source, PathBuf::from(&output_path), fps, bitrate, audio)
+    return record(source, PathBuf::from(&output_path), fps, bitrate, audio, None)
       .map(|recording| recording.into_stopper(None));
   }
 
@@ -164,11 +167,12 @@ fn start(
     None => portal::open(true, portal_request, false)?,
   };
   let restore_token = grant.restore_token;
+  let stream_cursor = (grant.cursor_mode == CursorMode::Metadata).then(Default::default);
   let source = NodeSource {
     remote: Some(grant.remote),
     node_id: grant.node_id,
   };
-  match record(source, PathBuf::from(&output_path), fps, bitrate, audio) {
+  match record(source, PathBuf::from(&output_path), fps, bitrate, audio, stream_cursor) {
     Ok(recording) => {
       let mut stopper = recording.into_stopper(Some((session, cursor)));
       stopper.set_portal_restore_token(restore_token);
@@ -192,6 +196,8 @@ struct Recording {
   path: PathBuf,
   fps: u32,
   bitrate: u32,
+  /// Reports the stream's pointer position for as long as the recording runs.
+  cursor: Option<ActiveCursor>,
 }
 
 /// Start the stream. Split from `start` so tests can record from a node that
@@ -202,6 +208,7 @@ fn record(
   fps: u32,
   bitrate: u32,
   audio: Option<AudioRequest>,
+  cursor: Option<Arc<StreamCursor>>,
 ) -> Result<Recording, String> {
   let stats = Arc::new(RecordingStats::new(
     path.to_string_lossy().into_owned(),
@@ -212,7 +219,8 @@ fn record(
   ));
   let (frame_tx, frame_rx) = sync_channel::<OwnedFrame>(FRAME_QUEUE);
 
-  let stream = pipewire_stream::start(source, fps, move |frame: Frame<'_>| {
+  let active_cursor = cursor.clone().map(ActiveCursor::publish);
+  let stream = pipewire_stream::start(source, fps, cursor, move |frame: Frame<'_>| {
     let owned = OwnedFrame {
       pixels: frame.pixels.to_vec(),
       width: frame.width,
@@ -250,6 +258,7 @@ fn record(
     path,
     fps,
     bitrate,
+    cursor: active_cursor,
   })
 }
 
@@ -291,6 +300,7 @@ impl Recording {
       path,
       fps,
       bitrate,
+      cursor: _cursor,
     } = self;
     let mut recorder: Option<Mp4Recorder> = None;
 
@@ -460,6 +470,7 @@ mod tests {
       30,
       4_000_000,
       None,
+      None,
     )
     .expect("stream starts");
     let mut stopper = recording.into_stopper(None);
@@ -500,6 +511,7 @@ mod tests {
         microphone: false,
         microphone_node: None,
       }),
+      None,
     )
     .expect("stream and audio start");
     let mut stopper = recording.into_stopper(None);

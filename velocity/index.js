@@ -731,6 +731,7 @@ module.exports.probeVideo = nativeBinding.probeVideo
 module.exports.pushPhoneFrame = nativeBinding.pushPhoneFrame
 module.exports.releaseScreenSource = nativeBinding.releaseScreenSource
 module.exports.resetPhoneCamera = nativeBinding.resetPhoneCamera
+module.exports.screenCursorPosition = nativeBinding.screenCursorPosition
 module.exports.startMonitorRecordingV2 = nativeBinding.startMonitorRecordingV2
 module.exports.startWebcamPreview = nativeBinding.startWebcamPreview
 module.exports.startWindowRecordingV2 = nativeBinding.startWindowRecordingV2

@@ -907,6 +907,22 @@ export declare function releaseScreenSource(): void
  */
 export declare function resetPhoneCamera(): void
 
+/**
+ * Linux only: the pointer's position in the screen recording that is
+ * running, as the desktop reported it alongside the frames. `null` when no
+ * recording gets cursor metadata (as under Hyprland, whose position comes
+ * from its own socket) or no position has arrived yet.
+ */
+export declare function screenCursorPosition(): ScreenCursorPosition | null
+
+/** Linux only: where the pointer is in the frame being recorded. */
+export interface ScreenCursorPosition {
+  /** 0 at the frame's left edge, 1 at its right; outside that when off it. */
+  x: number
+  /** 0 at the frame's top edge, 1 at its bottom; outside that when off it. */
+  y: number
+}
+
 /** A certificate and its private key, both PEM encoded. */
 export interface SelfSignedCertificate {
   certPem: string

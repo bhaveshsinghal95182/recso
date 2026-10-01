@@ -5,6 +5,7 @@
 //! MP4. Every piece is permissively licensed, as the product requires.
 
 pub(crate) mod audio;
+pub(crate) mod cursor_meta;
 pub(crate) mod encoder;
 pub(crate) mod mp4_writer;
 pub(crate) mod nvenc;
