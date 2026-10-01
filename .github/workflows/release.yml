@@ -1,0 +1,184 @@
+# Builds recso for Windows and Linux and publishes the installers and their
+# update feeds.
+#
+# Pushing a tag `vX.Y.Z` (matching package.json's version) builds both
+# platforms into a draft release in the public releases repo, then publishes
+# that release once both have finished, so the updater never sees half a
+# release. Running the workflow by hand (workflow_dispatch) builds the same
+# way with `--publish never` and keeps the outputs as workflow artifacts.
+#
+# Secrets: RELEASES_TOKEN, a fine-grained token with "Contents: read and
+# write" on the releases repo only. Manual runs don't need it.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Where releases go; electron-builder.json's `publish` names the same repo,
+  # and the installed app's updater reads it from there.
+  RELEASES_REPO: bhaveshsinghal95182/recso-releases
+  PNPM_VERSION: 12.6.0
+  # Only a tag push publishes; a manual run never does, even on a tag.
+  PUBLISH: ${{ github.event_name == 'push' && 'always' || 'never' }}
+
+jobs:
+  # Both build jobs upload to the same draft. Creating it first stops them
+  # racing to create two.
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            package.json
+            scripts/release
+      - name: Tag matches package.json
+        if: github.event_name == 'push'
+        run: node scripts/release/check-tag.mjs "$GITHUB_REF_NAME"
+      - name: Create the draft release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$RELEASES_REPO" >/dev/null 2>&1; then
+            echo "$GITHUB_REF_NAME already exists in $RELEASES_REPO"
+          else
+            gh release create "$GITHUB_REF_NAME" --repo "$RELEASES_REPO" --draft \
+              --title "Recso ${GITHUB_REF_NAME#v}" --notes "Recso ${GITHUB_REF_NAME#v}."
+          fi
+
+  windows:
+    needs: prepare
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24 # as in mise.toml
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: velocity
+      # mozjpeg (through nokhwa) assembles its SIMD code with NASM.
+      - uses: ilammy/setup-nasm@v1
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build velocity
+        run: pnpm build:engine
+      # index.js and index.d.ts are committed, and Linux builds read them
+      # without regenerating them. A Windows build that changes them means
+      # the committed copies are stale: run `pnpm --dir velocity bindings`.
+      - name: Committed bindings are current
+        shell: bash
+        run: git diff --exit-code velocity/index.js velocity/index.d.ts
+
+      # Unsigned for now. Code signing goes here: set CSC_LINK (the .pfx as
+      # base64) and CSC_KEY_PASSWORD from secrets, and electron-builder signs
+      # the NSIS installer.
+      - name: Package (NSIS and AppX)
+        run: pnpm dist:win --publish ${{ env.PUBLISH }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+
+      # The AppX goes to the Microsoft Store by hand, never to the release.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recso-windows-appx
+          path: dist/*.appx
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          name: recso-windows
+          path: |
+            dist/*.exe
+            dist/*.exe.blockmap
+            dist/latest.yml
+          if-no-files-found: error
+          retention-days: 7
+
+  linux:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    # Debian 12 sets the oldest glibc the app loads on, as in
+    # velocity/scripts/build-linux-portable.sh. Ubuntu 22.04 would reach
+    # further, but its PipeWire 0.3.48 headers are too old for libspa.
+    container: debian:12
+    timeout-minutes: 60
+    env:
+      GLIBC_FLOOR: '2.36'
+    steps:
+      - name: Build tools and headers
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git xz-utils binutils build-essential python3 \
+            pkg-config clang libclang-dev \
+            libpipewire-0.3-dev libspa-0.2-dev libopus-dev libgbm-dev
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24 # as in mise.toml
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: velocity
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build velocity
+        run: pnpm build:engine:linux
+      - name: velocity loads on glibc ${{ env.GLIBC_FLOOR }}
+        run: scripts/release/check-glibc.sh "$GLIBC_FLOOR" velocity/velocity.linux-x64-gnu.node
+
+      - name: Package (AppImage and deb)
+        run: pnpm dist:linux --publish ${{ env.PUBLISH }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+      - name: Every packaged addon loads on glibc ${{ env.GLIBC_FLOOR }}
+        run: find dist/linux-unpacked -name '*.node' -exec scripts/release/check-glibc.sh "$GLIBC_FLOOR" {} +
+
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          name: recso-linux
+          path: |
+            dist/*.AppImage
+            dist/*.deb
+            dist/latest-linux.yml
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [windows, linux]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Publish the draft release
+        run: gh release edit "$GITHUB_REF_NAME" --repo "$RELEASES_REPO" --draft=false --latest
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
