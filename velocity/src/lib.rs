@@ -14,6 +14,7 @@ pub mod cursor;
 #[path = "cursor_unsupported.rs"]
 pub mod cursor;
 pub mod engine;
+pub mod linux_api;
 pub mod singular_clock;
 pub mod tls;
 #[cfg(windows)]

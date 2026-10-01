@@ -74,7 +74,7 @@ fn hyprland_request(command: &str) -> Result<Value, String> {
 /// client that connects and writes later -- an async socket in a busy event
 /// loop -- freezes the whole desktop for that gap, so connect and write here
 /// happen back to back.
-fn hyprland_command(command: &str) -> Result<String, String> {
+pub(crate) fn hyprland_command(command: &str) -> Result<String, String> {
   let mut stream =
     UnixStream::connect(hyprland_socket()?).map_err(|error| format!("Hyprland socket: {error}"))?;
   stream
@@ -286,15 +286,6 @@ fn snapshot_value() -> Value {
       "windowUnderCursor": null,
     }),
   }
-}
-
-/// Linux only: one command on Hyprland's control socket, and its reply as text.
-///
-/// For the app's Hyprland IPC (click capture): a blocking round trip that
-/// never leaves the compositor waiting on the caller's event loop.
-#[napi]
-pub fn hyprland_ipc(command: String) -> napi::Result<String> {
-  hyprland_command(&command).map_err(napi::Error::from_reason)
 }
 
 #[napi]

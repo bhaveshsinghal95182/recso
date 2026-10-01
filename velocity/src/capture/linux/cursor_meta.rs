@@ -5,11 +5,10 @@
 //! pointer position at all, but their portals can send it alongside every
 //! frame as PipeWire cursor metadata (`SPA_META_Cursor`). A recording that
 //! asked for that mode publishes the latest position here, and the app's
-//! mouse tracker polls it through `screenCursorPosition`.
+//! mouse tracker polls it through `screenCursorPosition` (`linux_api`).
 
 use std::sync::{Arc, Mutex};
 
-use napi_derive::napi;
 use pipewire::spa;
 use spa::pod::{ChoiceValue, Object, Property, PropertyFlags, Value};
 use spa::utils::{Choice, ChoiceEnum, ChoiceFlags, Id};
@@ -75,25 +74,10 @@ impl Drop for ActiveCursor {
   }
 }
 
-/** Linux only: where the pointer is in the frame being recorded. */
-#[napi(object)]
-pub struct ScreenCursorPosition {
-  /** 0 at the frame's left edge, 1 at its right; outside that when off it. */
-  pub x: f64,
-  /** 0 at the frame's top edge, 1 at its bottom; outside that when off it. */
-  pub y: f64,
-}
-
-/// Linux only: the pointer's position in the screen recording that is
-/// running, as the desktop reported it alongside the frames. `null` when no
-/// recording gets cursor metadata (as under Hyprland, whose position comes
-/// from its own socket) or no position has arrived yet.
-#[napi]
-pub fn screen_cursor_position() -> Option<ScreenCursorPosition> {
+/// The running recording's latest pointer position, for stamping a click.
+pub(crate) fn active_position() -> Option<CursorPoint> {
   let active = ACTIVE.lock().unwrap_or_else(|e| e.into_inner()).clone();
-  active
-    .and_then(|cursor| cursor.latest())
-    .map(|point| ScreenCursorPosition { x: point.x, y: point.y })
+  active.and_then(|cursor| cursor.latest())
 }
 
 /// Bytes of cursor metadata with room for a `size`-square bitmap: the
@@ -156,12 +140,12 @@ mod tests {
     let cursor = Arc::new(StreamCursor::default());
     {
       let _active = ActiveCursor::publish(cursor.clone());
-      assert!(screen_cursor_position().is_none(), "nothing has arrived yet");
+      assert!(active_position().is_none(), "nothing has arrived yet");
       cursor.set(480, 540, 1920, 1080);
-      let position = screen_cursor_position().unwrap();
+      let position = active_position().unwrap();
       assert_eq!((position.x, position.y), (0.25, 0.5));
     }
-    assert!(screen_cursor_position().is_none());
+    assert!(active_position().is_none());
   }
 
   #[test]

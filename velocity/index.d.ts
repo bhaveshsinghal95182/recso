@@ -34,7 +34,6 @@ export declare class Pipeline {
   finishExport(): number
 }
 
-/** What windows-capture asks for when no interval is set. */
 export declare class Stopper {
   /**
    * The token that reopens the same screen or window without the picker.
@@ -583,11 +582,7 @@ export declare function generateSelfSignedCertificate(hosts: Array<string>): Sel
  * Rejects rather than throws synchronously if the input is missing, is in a
  * codec Media Foundation cannot open, or if the PNG cannot be written.
  */
-export declare function generateSpritesheet(
-  input: string,
-  output: string,
-  options?: SpritesheetOptions | undefined | null,
-): Promise<SpritesheetInfo>
+export declare function generateSpritesheet(input: string, output: string, options?: SpritesheetOptions | undefined | null): Promise<SpritesheetInfo>
 
 /** Diagnostic: what can the GPU itself decode, independent of Media Foundation? */
 export declare function gpuDecoderProfiles(): Array<string>
@@ -722,23 +717,6 @@ export interface NativeWindowRecordingOptions {
 export declare function phoneCameraStatus(): PhoneCameraStatus
 
 /** What the phone link is doing, for the UI to report. */
-/**
- * Linux only: show the portal's screen and window picker now, and hold the
- * choice for the next recording. Rejects with "screen selection was
- * cancelled" when the user closes the picker.
- */
-export declare function pickScreenSource(): Promise<PickedScreenSource>
-
-/** Linux only: what the user picked in the portal, for the recorder's source tile. */
-export interface PickedScreenSource {
-  /** "screen", "window", or "unknown" when the portal does not say. */
-  kind: string
-  width?: number
-  height?: number
-  /** A JPEG of the source's first frame, when one arrived in time. */
-  thumbnailJpeg?: Buffer
-}
-
 export interface PhoneCameraStatus {
   /** Frames accepted since the process started. */
   framesReceived: number
@@ -759,6 +737,23 @@ export interface PhoneFrameAccepted {
   width: number
   height: number
 }
+
+/** Linux only: what the user picked in the portal, for the recorder's source tile. */
+export interface PickedScreenSource {
+  /** "screen", "window", or "unknown" when the portal does not say. */
+  kind: string
+  width?: number
+  height?: number
+  /** A JPEG of the source's first frame, when one arrived in time. */
+  thumbnailJpeg?: Buffer
+}
+
+/**
+ * Linux only: show the portal's screen and window picker now, and hold the
+ * choice for the next recording. Rejects with "screen selection was
+ * cancelled" when the user closes the picker.
+ */
+export declare function pickScreenSource(): Promise<PickedScreenSource>
 
 export interface PipelineStep {
   endOfStream: boolean

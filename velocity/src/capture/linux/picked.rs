@@ -13,9 +13,6 @@ use std::time::Duration;
 
 use image::codecs::jpeg::JpegEncoder;
 use image::{ExtendedColorType, RgbImage};
-use napi::bindgen_prelude::{AsyncTask, Buffer};
-use napi::{Env, Task};
-use napi_derive::napi;
 
 use super::encoder::PixelOrder;
 use super::pipewire_stream::{self, Frame, NodeSource};
@@ -46,76 +43,45 @@ fn hold(grant: Grant, session: Session) {
   }
 }
 
-/** Linux only: what the user picked in the portal, for the recorder's source tile. */
-#[napi(object)]
-pub struct PickedScreenSource {
-  /** "screen", "window", or "unknown" when the portal does not say. */
-  pub kind: String,
-  pub width: Option<u32>,
-  pub height: Option<u32>,
-  /** A JPEG of the source's first frame, when one arrived in time. */
-  pub thumbnail_jpeg: Option<Buffer>,
+/// What the user picked, for the recorder's source tile.
+pub(crate) struct Picked {
+  /// "screen", "window", or "unknown" when the portal does not say.
+  pub(crate) kind: &'static str,
+  pub(crate) size: Option<(u32, u32)>,
+  /// A JPEG of the source's first frame, when one arrived in time.
+  pub(crate) thumbnail: Option<Vec<u8>>,
 }
 
-pub struct PickScreenSource;
-
-pub struct Picked {
-  kind: SourceKind,
-  size: Option<(u32, u32)>,
-  thumbnail: Option<Vec<u8>>,
-}
-
-impl Task for PickScreenSource {
-  type Output = Picked;
-  type JsValue = PickedScreenSource;
-
-  fn compute(&mut self) -> napi::Result<Picked> {
-    if PICKING.swap(true, Ordering::AcqRel) {
-      return Err(napi::Error::from_reason("the screen picker is already open"));
-    }
-    let result = pick();
-    PICKING.store(false, Ordering::Release);
-    result.map_err(napi::Error::from_reason)
+/// Show the portal's picker now and hold the choice for the next recording
+/// (`linux_api::pick_screen_source`). One picker at a time.
+pub(crate) fn pick() -> Result<Picked, String> {
+  if PICKING.swap(true, Ordering::AcqRel) {
+    return Err("the screen picker is already open".to_string());
   }
-
-  fn resolve(&mut self, _env: Env, picked: Picked) -> napi::Result<PickedScreenSource> {
-    Ok(PickedScreenSource {
-      kind: match picked.kind {
-        SourceKind::Screen => "screen",
-        SourceKind::Window => "window",
-        SourceKind::Unknown => "unknown",
-      }
-      .to_string(),
-      width: picked.size.map(|(width, _)| width),
-      height: picked.size.map(|(_, height)| height),
-      thumbnail_jpeg: picked.thumbnail.map(Buffer::from),
-    })
-  }
+  let result = open_and_hold();
+  PICKING.store(false, Ordering::Release);
+  result
 }
 
-fn pick() -> Result<Picked, String> {
+fn open_and_hold() -> Result<Picked, String> {
   let (mut grant, session) = portal::open(true, PortalRequest::default(), true)?;
   let thumbnail = grant.preview_remote.take().and_then(|remote| {
     thumbnail(NodeSource { remote: Some(remote), node_id: grant.node_id })
       .map_err(|error| eprintln!("[velocity] no thumbnail for the picked source: {error}"))
       .ok()
   });
-  let picked = Picked { kind: grant.kind, size: grant.size, thumbnail };
+  let kind = match grant.kind {
+    SourceKind::Screen => "screen",
+    SourceKind::Window => "window",
+    SourceKind::Unknown => "unknown",
+  };
+  let picked = Picked { kind, size: grant.size, thumbnail };
   hold(grant, session);
   Ok(picked)
 }
 
-/// Linux only: show the portal's screen and window picker now, and hold the
-/// choice for the next recording. Rejects with "screen selection was
-/// cancelled" when the user closes the picker.
-#[napi]
-pub fn pick_screen_source() -> AsyncTask<PickScreenSource> {
-  AsyncTask::new(PickScreenSource)
-}
-
-/// Linux only: let go of a picked source that no recording took.
-#[napi]
-pub fn release_screen_source() {
+/// Let go of a picked source that no recording took.
+pub(crate) fn release() {
   if let Some((_, session)) = take() {
     session.close();
   }

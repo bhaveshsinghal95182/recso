@@ -42,8 +42,8 @@ const AUDIO_BYTES_PER_SECOND: usize = AUDIO_SAMPLE_RATE * AUDIO_BLOCK_ALIGN;
 const AUDIO_CHUNK_MS: usize = 10;
 const AUDIO_CHUNK_BYTES: usize =
   (AUDIO_BYTES_PER_SECOND * AUDIO_CHUNK_MS / 1000 / AUDIO_BLOCK_ALIGN) * AUDIO_BLOCK_ALIGN;
-const DEFAULT_FRAME_DURATION_100NS: i64 = 166_667;
 /// What windows-capture asks for when no interval is set.
+const DEFAULT_FRAME_DURATION_100NS: i64 = 166_667;
 
 /// How far a source's queue may run ahead before the oldest audio is dropped.
 ///
