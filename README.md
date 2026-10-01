@@ -136,8 +136,10 @@ Releases are built by [.github/workflows/release.yml](.github/workflows/release.
    git push origin v2.0.1
    ```
 
-3. The workflow checks that the tag matches `package.json`, builds the Windows NSIS installer and the Linux AppImage and deb, uploads them with their update feeds (`latest.yml`, `latest-linux.yml`) to a draft release, and publishes it once both builds pass. Installed copies (the NSIS install and the AppImage) pick it up within six hours and offer a restart.
-4. The AppX is never published there. Download it from the run's `recso-windows-appx` artifact and submit it to the Store by hand.
+3. The workflow checks that the tag matches `package.json`, builds the Windows installer (`Recso-Setup-X.Y.Z.exe`) and the Linux `Recso-x86_64.AppImage` and deb, uploads them with their update feeds (`latest.yml`, `latest-linux.yml`) to a draft release, and publishes it once both builds pass. Installed copies (the Windows install and the AppImage) pick it up within six hours and offer a restart.
+4. The release notes are [docs/install.md](docs/install.md), the install guide for every platform (including getting past Windows' warnings about an unsigned installer), with the version filled in. Edit that file to change what users see.
+
+Releases carry no AppX. `scripts/build-sign.ps1` still builds and signs one locally for the Store, with the certificate kept outside git.
 
 To try a build without releasing anything, run the workflow by hand (Actions → Release → Run workflow). It builds the same way with `--publish never` and keeps the installers as workflow artifacts.
 

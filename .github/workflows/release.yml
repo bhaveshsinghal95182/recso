@@ -7,6 +7,9 @@
 # release. Running the workflow by hand (workflow_dispatch) builds the same
 # way with `--publish never` and keeps the outputs as workflow artifacts.
 #
+# Windows ships the NSIS installer only (no AppX); Linux ships the AppImage
+# and a deb. docs/install.md becomes each release's notes.
+#
 # Secrets: RELEASES_TOKEN, a fine-grained token with "Contents: read and
 # write" on the releases repo only. Manual runs don't need it.
 
@@ -44,6 +47,7 @@ jobs:
           sparse-checkout: |
             package.json
             scripts/release
+            docs/install.md
       - name: Tag matches package.json
         if: github.event_name == 'push'
         run: node scripts/release/check-tag.mjs "$GITHUB_REF_NAME"
@@ -55,8 +59,10 @@ jobs:
           if gh release view "$GITHUB_REF_NAME" --repo "$RELEASES_REPO" >/dev/null 2>&1; then
             echo "$GITHUB_REF_NAME already exists in $RELEASES_REPO"
           else
+            # The install guide, with this version in its file names.
+            sed "s/{{version}}/${GITHUB_REF_NAME#v}/g" docs/install.md > "$RUNNER_TEMP/notes.md"
             gh release create "$GITHUB_REF_NAME" --repo "$RELEASES_REPO" --draft \
-              --title "Recso ${GITHUB_REF_NAME#v}" --notes "Recso ${GITHUB_REF_NAME#v}."
+              --title "Recso ${GITHUB_REF_NAME#v}" --notes-file "$RUNNER_TEMP/notes.md"
           fi
 
   windows:
