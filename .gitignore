@@ -27,6 +27,9 @@ resources/chrome
 *.sw?
 
 *.appx
+# Signing keys stay on the machine that signs; never commit or upload them.
+*.pfx
+*.p12
 */tests/*
 */target/*
 */*.lock

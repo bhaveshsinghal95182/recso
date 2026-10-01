@@ -8,6 +8,8 @@ First of all we need to create a self signed certificate for code signing, the p
 pnpx electron-builder create-self-signed-cert -p "ADBBA92C-68FC-4614-8695-A08D2C192895"
 ```
 
+The `.pfx` stays in this folder on your machine only: git ignores it, and it must never be committed or uploaded (CI included). Anyone holding it can sign packages as this publisher.
+
 Now we can just copy paste the compiled appx from dist into code-signing folder and rename it to package and run the following command in Developer Command Prompt for VS 2022
 
 ```bash
