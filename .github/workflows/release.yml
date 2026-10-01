@@ -164,7 +164,7 @@ jobs:
         with:
           name: recso-linux
           path: |
-            dist/*.AppImage
+            dist/Recso-*.AppImage
             dist/*.deb
             dist/latest-linux.yml
           if-no-files-found: error

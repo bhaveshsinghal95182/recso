@@ -18,6 +18,9 @@
     "category": "Utility",
     "maintainer": "Bhavesh Singhal <work.bhavesh22@gmail.com>"
   },
+  "appImage": {
+    "artifactName": "Recso-${arch}.AppImage"
+  },
   "deb": {
     "depends": [
       "libgtk-3-0",
