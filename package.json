@@ -5,6 +5,8 @@
   "name": "recso",
   "private": true,
   "version": "2.0.0",
+  "description": "Record your screen and edit the video",
+  "homepage": "https://github.com/bhaveshsinghal95182/recso-releases",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
