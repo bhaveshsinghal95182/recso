@@ -158,8 +158,12 @@ jobs:
         run: pnpm dist:linux --publish ${{ env.PUBLISH }}
         env:
           GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+      # uiohook-napi ships prebuilds for every platform; only linux-x64 runs.
       - name: Every packaged addon loads on glibc ${{ env.GLIBC_FLOOR }}
-        run: find dist/linux-unpacked -name '*.node' -exec scripts/release/check-glibc.sh "$GLIBC_FLOOR" {} +
+        run: >-
+          find dist/linux-unpacked -name '*.node'
+          \( ! -path '*/prebuilds/*' -o -path '*/prebuilds/linux-x64/*' \)
+          -exec scripts/release/check-glibc.sh "$GLIBC_FLOOR" {} +
 
       - uses: actions/upload-artifact@v4
         if: github.event_name == 'workflow_dispatch'
