@@ -124,6 +124,30 @@ pnpm dist:linux   # Linux (AppImage + deb)
 
 Build configuration lives in [electron-builder.json](electron-builder.json).
 
+## Cutting a Release
+
+Releases are built by [.github/workflows/release.yml](.github/workflows/release.yml) and published to the public [recso-releases](https://github.com/bhaveshsinghal95182/recso-releases) repo, which is also where installed copies look for updates.
+
+1. Bump `version` in `package.json` (e.g. `2.0.1`) and commit it.
+2. Tag that commit with the same version and push the tag:
+
+   ```bash
+   git tag v2.0.1
+   git push origin v2.0.1
+   ```
+
+3. The workflow checks that the tag matches `package.json`, builds the Windows NSIS installer and the Linux AppImage and deb, uploads them with their update feeds (`latest.yml`, `latest-linux.yml`) to a draft release, and publishes it once both builds pass. Installed copies (the NSIS install and the AppImage) pick it up within six hours and offer a restart.
+4. The AppX is never published there. Download it from the run's `recso-windows-appx` artifact and submit it to the Store by hand.
+
+To try a build without releasing anything, run the workflow by hand (Actions → Release → Run workflow). It builds the same way with `--publish never` and keeps the installers as workflow artifacts.
+
+The workflow fails early when:
+
+- `velocity/index.js` or `index.d.ts` are stale. Regenerate them with `pnpm --dir velocity bindings` (from Linux or macOS; needs `rustup target add x86_64-pc-windows-msvc`) and commit them.
+- A Linux addon needs a newer glibc than Debian 12's (2.36). The Linux build runs in `debian:12` for this; `velocity/scripts/build-linux-portable.sh` builds the same addon locally.
+
+It needs one repository secret, `RELEASES_TOKEN`: a fine-grained token with **Contents: read and write** on `recso-releases` only.
+
 ## Other Scripts
 
 | Script                      | Description                                                       |
