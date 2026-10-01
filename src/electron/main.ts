@@ -13,14 +13,23 @@ import path from 'path';
 
 import { initializeAutomation, isAutomationRunning } from './automation/index.js';
 import { initializeWithWindow, registerAllIpcHandlers } from './ipc/index.js';
+import { integrateAppImage } from './services/appimage-integration.js';
 import { initializeDatabase } from './services/database.service.js';
 import { checkGpuMatch } from './services/engine/gpu.service.js';
 import { initializeTelemetry } from './services/telemetry/telemetry.service.js';
 import { createTray } from './services/tray.service.js';
 import { initializeLogging } from './utils/logger.js';
-import { getPreloadPath } from './path-resolver.js';
+import { getAppIconPath, getPreloadPath } from './path-resolver.js';
 import { isDevelopment } from './util.js';
 import { createMainWindowWebPreferences } from './window-security.js';
+
+// One app per user: a second launch hands over to the first (which shows its
+// window, see 'second-instance' below) and exits. A headless export is the
+// exception; the Automation API runs its export jobs as separate processes.
+const isHeadlessExport = process.argv.includes('--export-project');
+if (!isHeadlessExport && !app.requestSingleInstanceLock()) {
+  app.exit(0);
+}
 
 // Shared textures cannot cross adapters. The engine builds its D3D11 device on
 // the high-performance GPU, so Chromium's GPU process has to be there too, or
@@ -133,6 +142,8 @@ app.on('ready', () => {
       backgroundThrottling: !headlessExportProject,
     },
     frame: false,
+    // Windows and macOS take the icon from the executable or bundle.
+    icon: process.platform === 'linux' ? getAppIconPath() : undefined,
     show: !headlessExportProject && !startInBackground,
   });
 
@@ -194,7 +205,22 @@ app.on('ready', () => {
 
   // Create system tray
   if (!headlessExportProject) {
+    app.on('second-instance', (_event, argv) => {
+      // recso-cli --launch only needs the API, which is already up.
+      if (argv.includes('--background')) return;
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    });
     createTray(mainWindow);
+    if (process.platform === 'linux') {
+      try {
+        const result = integrateAppImage({ env: process.env, home: app.getPath('home') });
+        if (result !== 'not-an-appimage') console.log(`[Main] AppImage menu entry: ${result}`);
+      } catch (error) {
+        console.error('[Main] Could not add the AppImage to the app menu:', error);
+      }
+    }
     // Off unless the user turned it on; a headless export never serves it.
     void initializeAutomation(mainWindow).then(() => {
       // Started hidden for recso-cli --launch, but with the API off (or failing

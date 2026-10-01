@@ -11,24 +11,12 @@
 
 import { app, type BrowserWindow, Menu, nativeImage, Tray } from 'electron';
 
-import path from 'path';
-
-import { isDevelopment } from '../util.js';
+import { getAppIconPath } from '../path-resolver.js';
 
 let tray: Tray | null = null;
 
-function getIconPath(): string {
-  if (isDevelopment()) {
-    // In dev, the working directory is the project root
-    return path.join(process.cwd(), 'public', 'R.png');
-  } else {
-    // In production, public is in extraResources
-    return path.join(process.resourcesPath, 'public', 'R.png');
-  }
-}
-
 export function createTray(mainWindow: BrowserWindow) {
-  const iconPath = getIconPath();
+  const iconPath = getAppIconPath();
   console.log('Loading tray icon from:', iconPath);
 
   // Create icon - use a fallback if the image doesn't load

@@ -8,6 +8,7 @@
   },
   "linux": {
     "target": ["AppImage", "deb"],
+    "icon": "build/linux/icons",
     "category": "Utility"
   },
   "deb": {
